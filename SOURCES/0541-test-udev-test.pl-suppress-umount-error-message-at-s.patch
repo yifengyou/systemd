@@ -1,0 +1,29 @@
+From 453df9eb2bbfa34f3e4b78e917812f0ac6958010 Mon Sep 17 00:00:00 2001
+From: Martin Wilck <mwilck@suse.com>
+Date: Thu, 26 Apr 2018 13:25:11 +0200
+Subject: [PATCH] test/udev-test.pl: suppress umount error message at startup
+
+umount emits an error message "no mount point specified" if the
+tmpfs isn't mounted yet, which is the normal case.
+Suppress that by redirecting stderr.
+
+(cherry picked from commit f1cb0860549e775be5f91237b5a3b97698dd14dd)
+
+Related: #1642728
+---
+ test/udev-test.pl | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 2866fdb77a..33a76ad292 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -2405,7 +2405,7 @@ sub major_minor_test {
+ }
+ 
+ sub udev_setup {
+-        system("umount", $udev_tmpfs);
++        system("umount \"$udev_tmpfs\" 2>/dev/null");
+         rmdir($udev_tmpfs);
+         mkdir($udev_tmpfs) || die "unable to create udev_tmpfs: $udev_tmpfs\n";
+ 

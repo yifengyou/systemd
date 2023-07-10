@@ -1,0 +1,126 @@
+From daa0243fda679c8af723648b8b1e501fc55b0ada Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Wed, 22 May 2019 13:55:49 +0200
+Subject: [PATCH] shared/cpu-set-util: make transfer of cpu_set_t over bus
+ endian safe
+
+(cherry picked from commit c367f996f5f091a63f812f0140b304c649be77fc)
+
+Related: #1734787
+---
+ src/basic/cpu-set-util.c   | 38 ++++++++++++++++++++++++++++++++++++++
+ src/basic/cpu-set-util.h   |  3 +++
+ src/core/dbus-execute.c    |  6 +++++-
+ src/shared/bus-unit-util.c |  8 +++++++-
+ 4 files changed, 53 insertions(+), 2 deletions(-)
+
+diff --git a/src/basic/cpu-set-util.c b/src/basic/cpu-set-util.c
+index c297eab032..74e35e57dd 100644
+--- a/src/basic/cpu-set-util.c
++++ b/src/basic/cpu-set-util.c
+@@ -209,3 +209,41 @@ int cpus_in_affinity_mask(void) {
+                 n *= 2;
+         }
+ }
++
++int cpu_set_to_dbus(const CPUSet *set, uint8_t **ret, size_t *allocated) {
++        uint8_t *out;
++
++        assert(set);
++        assert(ret);
++
++        out = new0(uint8_t, set->allocated);
++        if (!out)
++                return -ENOMEM;
++
++        for (unsigned cpu = 0; cpu < set->allocated * 8; cpu++)
++                if (CPU_ISSET_S(cpu, set->allocated, set->set))
++                        out[cpu / 8] |= 1u << (cpu % 8);
++
++        *ret = out;
++        *allocated = set->allocated;
++        return 0;
++}
++
++int cpu_set_from_dbus(const uint8_t *bits, size_t size, CPUSet *set) {
++        _cleanup_(cpu_set_reset) CPUSet s = {};
++        int r;
++
++        assert(bits);
++        assert(set);
++
++        for (unsigned cpu = size * 8; cpu > 0; cpu--)
++                if (bits[(cpu - 1) / 8] & (1u << ((cpu - 1) % 8))) {
++                        r = cpu_set_add(&s, cpu - 1);
++                        if (r < 0)
++                                return r;
++                }
++
++        *set = s;
++        s = (CPUSet) {};
++        return 0;
++}
+diff --git a/src/basic/cpu-set-util.h b/src/basic/cpu-set-util.h
+index 68a73bf9f7..415c6ca295 100644
+--- a/src/basic/cpu-set-util.h
++++ b/src/basic/cpu-set-util.h
+@@ -46,4 +46,7 @@ static inline int parse_cpu_set(const char *rvalue, CPUSet *cpu_set){
+         return parse_cpu_set_full(rvalue, cpu_set, false, NULL, NULL, 0, NULL);
+ }
+ 
++int cpu_set_to_dbus(const CPUSet *set, uint8_t **ret, size_t *allocated);
++int cpu_set_from_dbus(const uint8_t *bits, size_t size, CPUSet *set);
++
+ int cpus_in_affinity_mask(void);
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index 08946627e3..50ea71a281 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -1553,18 +1553,22 @@ int bus_exec_context_set_transient_property(
+         if (streq(name, "CPUAffinity")) {
+                 const void *a;
+                 size_t n;
++                _cleanup_(cpu_set_reset) CPUSet set = {};
+ 
+                 r = sd_bus_message_read_array(message, 'y', &a, &n);
+                 if (r < 0)
+                         return r;
+ 
++                r = cpu_set_from_dbus(a, n, &set);
++                if (r < 0)
++                        return r;
++
+                 if (!UNIT_WRITE_FLAGS_NOOP(flags)) {
+                         if (n == 0) {
+                                 cpu_set_reset(&c->cpu_set);
+                                 unit_write_settingf(u, flags, name, "%s=", name);
+                         } else {
+                                 _cleanup_free_ char *str = NULL;
+-                                const CPUSet set = {(cpu_set_t*) a, n};
+ 
+                                 str = cpu_set_to_string(&set);
+                                 if (!str)
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index 75b4aace84..ec8732c226 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -933,12 +933,18 @@ static int bus_append_execute_property(sd_bus_message *m, const char *field, con
+ 
+         if (streq(field, "CPUAffinity")) {
+                 _cleanup_(cpu_set_reset) CPUSet cpuset = {};
++                _cleanup_free_ uint8_t *array = NULL;
++                size_t allocated;
+ 
+                 r = parse_cpu_set(eq, &cpuset);
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to parse %s value: %s", field, eq);
+ 
+-                return bus_append_byte_array(m, field, cpuset.set, cpuset.allocated);
++                r = cpu_set_to_dbus(&cpuset, &array, &allocated);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to serialize CPUAffinity: %m");
++
++                return bus_append_byte_array(m, field, array, allocated);
+         }
+ 
+         if (STR_IN_SET(field, "RestrictAddressFamilies", "SystemCallFilter")) {

@@ -1,0 +1,37 @@
+From 5cdb2b0b2a0f8f89f97053b0633b8419506d4e28 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Thu, 1 Aug 2019 08:15:43 +0200
+Subject: [PATCH] cryptsetup: don't assert on variable which is optional
+
+https://github.com/systemd/systemd/commit/50d2eba27b9bfc77ef6b40e5721713846815418b#commitcomment-34519739
+
+In add_crypttab_devices() split_keyspec is called on the keyfile argument,
+which may be NULL.
+
+(cherry picked from commit fef716b28be6e866b8afe995805d5ebe2af6bbfa)
+
+Related: #1763155
+---
+ src/cryptsetup/cryptsetup-generator.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/cryptsetup/cryptsetup-generator.c b/src/cryptsetup/cryptsetup-generator.c
+index 7b234e37be..a09983b576 100644
+--- a/src/cryptsetup/cryptsetup-generator.c
++++ b/src/cryptsetup/cryptsetup-generator.c
+@@ -44,10 +44,14 @@ static int split_keyspec(const char *keyspec, char **ret_keyfile, char **ret_key
+         _cleanup_free_ char *keyfile = NULL, *keydev = NULL;
+         const char *c;
+ 
+-        assert(keyspec);
+         assert(ret_keyfile);
+         assert(ret_keydev);
+ 
++        if (!keyspec) {
++                *ret_keyfile = *ret_keydev = NULL;
++                return 0;
++        }
++
+         c = strrchr(keyspec, ':');
+         if (c) {
+                 keyfile = strndup(keyspec, c-keyspec);

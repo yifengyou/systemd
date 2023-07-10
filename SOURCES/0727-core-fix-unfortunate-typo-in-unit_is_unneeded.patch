@@ -1,0 +1,27 @@
+From 7b9b641a7721f013fb12ab4e2a03423b5ede08c6 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 9 Oct 2018 22:23:14 +0200
+Subject: [PATCH] core: fix unfortunate typo in unit_is_unneeded()
+
+Follow-up for a3c1168ac293f16d9343d248795bb4c246aaff4a.
+
+(cherry picked from commit 93d4cb09d56e670b0c203dd6ec6939e391a0df59)
+
+Resolves: #2040147
+---
+ src/core/unit.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/unit.c b/src/core/unit.c
+index 4de218feac..e2c61ce866 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -1956,7 +1956,7 @@ bool unit_is_unneeded(Unit *u) {
+                  * restart, then don't clean this one up. */
+ 
+                 HASHMAP_FOREACH_KEY(v, other, u->dependencies[deps[j]], i) {
+-                        if (u->job)
++                        if (other->job)
+                                 return false;
+ 
+                         if (!UNIT_IS_INACTIVE_OR_FAILED(unit_active_state(other)))

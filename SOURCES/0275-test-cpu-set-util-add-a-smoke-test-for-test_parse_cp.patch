@@ -1,0 +1,63 @@
+From 69541e93c45efb7ee15d7584c3aa70c3ff0b2200 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Fri, 24 May 2019 08:50:41 +0200
+Subject: [PATCH] test-cpu-set-util: add a smoke test for
+ test_parse_cpu_set_extend()
+
+(cherry picked from commit b54d7241f25b859c6c008e516c2131c39902e6e4)
+
+Related: #1734787
+---
+ src/test/test-cpu-set-util.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/src/test/test-cpu-set-util.c b/src/test/test-cpu-set-util.c
+index e87e0ca6e6..81f67647e8 100644
+--- a/src/test/test-cpu-set-util.c
++++ b/src/test/test-cpu-set-util.c
+@@ -11,6 +11,8 @@ static void test_parse_cpu_set(void) {
+         _cleanup_free_ char *str = NULL;
+         int cpu;
+ 
++        log_info("/* %s */", __func__);
++
+         /* Simple range (from CPUAffinity example) */
+         assert_se(parse_cpu_set_full("1 2", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
+         assert_se(c.set);
+@@ -157,6 +159,28 @@ static void test_parse_cpu_set(void) {
+         cpu_set_reset(&c);
+ }
+ 
++static void test_parse_cpu_set_extend(void) {
++        CPUSet c = {};
++        _cleanup_free_ char *s1 = NULL, *s2 = NULL;
++
++        log_info("/* %s */", __func__);
++
++        assert_se(parse_cpu_set_extend("1 3", &c, true, NULL, "fake", 1, "CPUAffinity") == 0);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 2);
++        assert_se(s1 = cpu_set_to_string(&c));
++        log_info("cpu_set_to_string: %s", s1);
++
++        assert_se(parse_cpu_set_extend("4", &c, true, NULL, "fake", 1, "CPUAffinity") == 0);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 3);
++        assert_se(s2 = cpu_set_to_string(&c));
++        log_info("cpu_set_to_string: %s", s2);
++
++        assert_se(parse_cpu_set_extend("", &c, true, NULL, "fake", 1, "CPUAffinity") == 0);
++        assert_se(!c.set);
++        assert_se(c.allocated == 0);
++        log_info("cpu_set_to_string: (null)");
++}
++
+ static void test_cpus_in_affinity_mask(void) {
+         int r;
+ 
+@@ -175,6 +199,7 @@ int main(int argc, char *argv[]) {
+         log_info("CPU_ALLOC_SIZE(8191) = %zu", CPU_ALLOC_SIZE(8191));
+ 
+         test_parse_cpu_set();
++        test_parse_cpu_set_extend();
+         test_cpus_in_affinity_mask();
+ 
+         return 0;

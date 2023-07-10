@@ -1,0 +1,157 @@
+From b0573f1a6f8022aed4954d5ca19cc037d25cd5e7 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 20 Mar 2019 19:52:20 +0100
+Subject: [PATCH] units: turn on RestrictSUIDSGID= in most of our long-running
+ daemons
+
+(cherry picked from commit 62aa29247c3d74bcec0607c347f2be23cd90675d)
+Related: #1687512
+---
+ units/systemd-coredump@.service.in      | 1 +
+ units/systemd-hostnamed.service.in      | 1 +
+ units/systemd-journal-remote.service.in | 1 +
+ units/systemd-journald.service.in       | 1 +
+ units/systemd-localed.service.in        | 1 +
+ units/systemd-logind.service.in         | 1 +
+ units/systemd-networkd.service.in       | 1 +
+ units/systemd-resolved.service.in       | 1 +
+ units/systemd-timedated.service.in      | 1 +
+ units/systemd-timesyncd.service.in      | 1 +
+ units/systemd-udevd.service.in          | 3 ++-
+ 11 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/units/systemd-coredump@.service.in b/units/systemd-coredump@.service.in
+index 68a68a5055..d69ebd8b24 100644
+--- a/units/systemd-coredump@.service.in
++++ b/units/systemd-coredump@.service.in
+@@ -33,6 +33,7 @@ MemoryDenyWriteExecute=yes
+ RestrictRealtime=yes
+ RestrictNamespaces=yes
+ RestrictAddressFamilies=AF_UNIX
++RestrictSUIDSGID=yes
+ SystemCallFilter=@system-service
+ SystemCallErrorNumber=EPERM
+ SystemCallArchitectures=native
+diff --git a/units/systemd-hostnamed.service.in b/units/systemd-hostnamed.service.in
+index 4e5470dd29..97d4e142bc 100644
+--- a/units/systemd-hostnamed.service.in
++++ b/units/systemd-hostnamed.service.in
+@@ -29,6 +29,7 @@ MemoryDenyWriteExecute=yes
+ RestrictRealtime=yes
+ RestrictNamespaces=yes
+ RestrictAddressFamilies=AF_UNIX
++RestrictSUIDSGID=yes
+ SystemCallFilter=@system-service sethostname
+ SystemCallErrorNumber=EPERM
+ SystemCallArchitectures=native
+diff --git a/units/systemd-journal-remote.service.in b/units/systemd-journal-remote.service.in
+index a94265f215..3c914f5a40 100644
+--- a/units/systemd-journal-remote.service.in
++++ b/units/systemd-journal-remote.service.in
+@@ -28,6 +28,7 @@ MemoryDenyWriteExecute=yes
+ RestrictRealtime=yes
+ RestrictNamespaces=yes
+ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
++RestrictSUIDSGID=yes
+ SystemCallArchitectures=native
+ LockPersonality=yes
+ LogsDirectory=journal/remote
+diff --git a/units/systemd-journald.service.in b/units/systemd-journald.service.in
+index e109b25792..ab9ec35ff8 100644
+--- a/units/systemd-journald.service.in
++++ b/units/systemd-journald.service.in
+@@ -21,6 +21,7 @@ Sockets=systemd-journald.socket systemd-journald-dev-log.socket
+ ExecStart=@rootlibexecdir@/systemd-journald
+ Restart=always
+ RestartSec=0
++RestrictSUIDSGID=yes
+ StandardOutput=null
+ WatchdogSec=3min
+ FileDescriptorStoreMax=4224
+diff --git a/units/systemd-localed.service.in b/units/systemd-localed.service.in
+index ce043db154..b87d60e9eb 100644
+--- a/units/systemd-localed.service.in
++++ b/units/systemd-localed.service.in
+@@ -29,6 +29,7 @@ MemoryDenyWriteExecute=yes
+ RestrictRealtime=yes
+ RestrictNamespaces=yes
+ RestrictAddressFamilies=AF_UNIX
++RestrictSUIDSGID=yes
+ SystemCallFilter=@system-service
+ SystemCallErrorNumber=EPERM
+ SystemCallArchitectures=native
+diff --git a/units/systemd-logind.service.in b/units/systemd-logind.service.in
+index 6953fac55b..086338e03b 100644
+--- a/units/systemd-logind.service.in
++++ b/units/systemd-logind.service.in
+@@ -30,6 +30,7 @@ MemoryDenyWriteExecute=yes
+ RestrictRealtime=yes
+ RestrictNamespaces=yes
+ RestrictAddressFamilies=AF_UNIX AF_NETLINK
++RestrictSUIDSGID=yes
+ SystemCallFilter=@system-service
+ SystemCallErrorNumber=EPERM
+ SystemCallArchitectures=native
+diff --git a/units/systemd-networkd.service.in b/units/systemd-networkd.service.in
+index 371ab3a9cf..a0f34ac738 100644
+--- a/units/systemd-networkd.service.in
++++ b/units/systemd-networkd.service.in
+@@ -39,6 +39,7 @@ SystemCallFilter=@system-service
+ SystemCallErrorNumber=EPERM
+ SystemCallArchitectures=native
+ LockPersonality=yes
++RestrictSUIDSGID=yes
+ RuntimeDirectory=systemd/netif
+ RuntimeDirectoryPreserve=yes
+ 
+diff --git a/units/systemd-resolved.service.in b/units/systemd-resolved.service.in
+index aaed406ab2..6c2ad5ca86 100644
+--- a/units/systemd-resolved.service.in
++++ b/units/systemd-resolved.service.in
+@@ -41,6 +41,7 @@ SystemCallFilter=@system-service
+ SystemCallErrorNumber=EPERM
+ SystemCallArchitectures=native
+ LockPersonality=yes
++RestrictSUIDSGID=yes
+ RuntimeDirectory=systemd/resolve
+ RuntimeDirectoryPreserve=yes
+ 
+diff --git a/units/systemd-timedated.service.in b/units/systemd-timedated.service.in
+index 662b39557a..1da2bc4bb0 100644
+--- a/units/systemd-timedated.service.in
++++ b/units/systemd-timedated.service.in
+@@ -27,6 +27,7 @@ MemoryDenyWriteExecute=yes
+ RestrictRealtime=yes
+ RestrictNamespaces=yes
+ RestrictAddressFamilies=AF_UNIX
++RestrictSUIDSGID=yes
+ SystemCallFilter=@system-service @clock
+ SystemCallErrorNumber=EPERM
+ SystemCallArchitectures=native
+diff --git a/units/systemd-timesyncd.service.in b/units/systemd-timesyncd.service.in
+index 4a490b6e16..c2b9551726 100644
+--- a/units/systemd-timesyncd.service.in
++++ b/units/systemd-timesyncd.service.in
+@@ -37,6 +37,7 @@ MemoryDenyWriteExecute=yes
+ RestrictRealtime=yes
+ RestrictNamespaces=yes
+ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
++RestrictSUIDSGID=yes
+ RuntimeDirectory=systemd/timesync
+ SystemCallFilter=@system-service @clock
+ SystemCallErrorNumber=EPERM
+diff --git a/units/systemd-udevd.service.in b/units/systemd-udevd.service.in
+index fd9ead3bb8..970cf0f290 100644
+--- a/units/systemd-udevd.service.in
++++ b/units/systemd-udevd.service.in
+@@ -27,8 +27,9 @@ WatchdogSec=3min
+ TasksMax=infinity
+ PrivateMounts=yes
+ MemoryDenyWriteExecute=yes
+-RestrictRealtime=yes
+ RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
++RestrictRealtime=yes
++RestrictSUIDSGID=yes
+ SystemCallFilter=@system-service @module @raw-io
+ SystemCallErrorNumber=EPERM
+ SystemCallArchitectures=native

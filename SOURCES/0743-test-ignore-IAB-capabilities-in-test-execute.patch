@@ -1,0 +1,129 @@
+From 68c487956659bb0bc3e04be4c8f0687d46d23248 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Mon, 9 Mar 2020 11:00:58 +0100
+Subject: [PATCH] test: ignore IAB capabilities in `test-execute`
+
+libcap v2.33 introduces a new capability set called IAB[0] which is shown
+in the output of `capsh --print` and interferes with the test checks. Let's
+drop the IAB set from the output, for now, to mitigate this.
+
+This could be (and probably should be) replaced in the future by the
+newly introduced testing options[1][2] in libcap v2.32, namely:
+    --has-p=xxx
+    --has-i=xxx
+    --has-a=xxx
+
+but this needs to wait until the respective libcap version gets a wider
+adoption. Until then, let's stick with the relatively ugly sed.
+
+Fixes: #15046
+
+[0] https://git.kernel.org/pub/scm/libs/libcap/libcap.git/commit/?id=943b011b5e53624eb9cab4e96c1985326e077cdd
+[1] https://git.kernel.org/pub/scm/libs/libcap/libcap.git/commit/?id=588d0439cb6495b03f0ab9f213f0b6b339e7d4b7
+[2] https://git.kernel.org/pub/scm/libs/libcap/libcap.git/commit/?id=e7709bbc1c4712f2ddfc6e6f42892928a8a03782
+
+(cherry picked from commit e9cdcbed77971da3cb0b98b3eb91081142c91eb7)
+
+Related: #2017033
+---
+ test/test-execute/exec-capabilityboundingset-invert.service   | 4 ++--
+ .../exec-privatedevices-no-capability-mknod.service           | 4 ++--
+ .../exec-privatedevices-no-capability-sys-rawio.service       | 4 ++--
+ .../exec-privatedevices-yes-capability-mknod.service          | 4 ++--
+ .../exec-privatedevices-yes-capability-sys-rawio.service      | 4 ++--
+ .../exec-protectkernelmodules-no-capabilities.service         | 4 ++--
+ .../exec-protectkernelmodules-yes-capabilities.service        | 4 ++--
+ 7 files changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/test/test-execute/exec-capabilityboundingset-invert.service b/test/test-execute/exec-capabilityboundingset-invert.service
+index 5f37427603..4486f6c25d 100644
+--- a/test/test-execute/exec-capabilityboundingset-invert.service
++++ b/test/test-execute/exec-capabilityboundingset-invert.service
+@@ -2,7 +2,7 @@
+ Description=Test for CapabilityBoundingSet
+ 
+ [Service]
+-# sed: remove dropped capabilities (cap_xxx-[epi]) from the output
+-ExecStart=/bin/sh -x -c '! capsh --print | sed -r "s/[^ ]+?\-[epi]+//g" | grep "^Bounding set .*cap_chown"'
++# sed: remove dropped (cap_xxx-[epi]) and IAB capabilities from the output
++ExecStart=/bin/sh -x -c '! capsh --print | sed -re "s/[^ ]+?\-[epi]+//g" -e '/IAB/d' | grep "^Bounding set .*cap_chown"'
+ Type=oneshot
+ CapabilityBoundingSet=~CAP_CHOWN
+diff --git a/test/test-execute/exec-privatedevices-no-capability-mknod.service b/test/test-execute/exec-privatedevices-no-capability-mknod.service
+index 4d61d9ffaa..8f135be0b5 100644
+--- a/test/test-execute/exec-privatedevices-no-capability-mknod.service
++++ b/test/test-execute/exec-privatedevices-no-capability-mknod.service
+@@ -3,6 +3,6 @@ Description=Test CAP_MKNOD capability for PrivateDevices=no
+ 
+ [Service]
+ PrivateDevices=no
+-# sed: remove dropped capabilities (cap_xxx-[epi]) from the output
+-ExecStart=/bin/sh -x -c 'capsh --print | sed -r "s/[^ ]+?\-[epi]+//g" | grep cap_mknod'
++# sed: remove dropped (cap_xxx-[epi]) and IAB capabilities from the output
++ExecStart=/bin/sh -x -c 'capsh --print | sed -re "s/[^ ]+?\-[epi]+//g" -e '/IAB/d' | grep cap_mknod'
+ Type=oneshot
+diff --git a/test/test-execute/exec-privatedevices-no-capability-sys-rawio.service b/test/test-execute/exec-privatedevices-no-capability-sys-rawio.service
+index f7f7a16736..30ce549254 100644
+--- a/test/test-execute/exec-privatedevices-no-capability-sys-rawio.service
++++ b/test/test-execute/exec-privatedevices-no-capability-sys-rawio.service
+@@ -3,6 +3,6 @@ Description=Test CAP_SYS_RAWIO capability for PrivateDevices=no
+ 
+ [Service]
+ PrivateDevices=no
+-# sed: remove dropped capabilities (cap_xxx-[epi]) from the output
+-ExecStart=/bin/sh -x -c 'capsh --print | sed -r "s/[^ ]+?\-[epi]+//g" | grep cap_sys_rawio'
++# sed: remove dropped (cap_xxx-[epi]) and IAB capabilities from the output
++ExecStart=/bin/sh -x -c 'capsh --print | sed -re "s/[^ ]+?\-[epi]+//g" -e '/IAB/d' | grep cap_sys_rawio'
+ Type=oneshot
+diff --git a/test/test-execute/exec-privatedevices-yes-capability-mknod.service b/test/test-execute/exec-privatedevices-yes-capability-mknod.service
+index 5bcace0845..b98cfb5c7e 100644
+--- a/test/test-execute/exec-privatedevices-yes-capability-mknod.service
++++ b/test/test-execute/exec-privatedevices-yes-capability-mknod.service
+@@ -3,6 +3,6 @@ Description=Test CAP_MKNOD capability for PrivateDevices=yes
+ 
+ [Service]
+ PrivateDevices=yes
+-# sed: remove dropped capabilities (cap_xxx-[epi]) from the output
+-ExecStart=/bin/sh -x -c '! capsh --print | sed -r "s/[^ ]+?\-[epi]+//g" | grep cap_mknod'
++# sed: remove dropped (cap_xxx-[epi]) and IAB capabilities from the output
++ExecStart=/bin/sh -x -c '! capsh --print | sed -re "s/[^ ]+?\-[epi]+//g" -e '/IAB/d' | grep cap_mknod'
+ Type=oneshot
+diff --git a/test/test-execute/exec-privatedevices-yes-capability-sys-rawio.service b/test/test-execute/exec-privatedevices-yes-capability-sys-rawio.service
+index a246f950c1..5b0c0700f2 100644
+--- a/test/test-execute/exec-privatedevices-yes-capability-sys-rawio.service
++++ b/test/test-execute/exec-privatedevices-yes-capability-sys-rawio.service
+@@ -3,6 +3,6 @@ Description=Test CAP_SYS_RAWIO capability for PrivateDevices=yes
+ 
+ [Service]
+ PrivateDevices=yes
+-# sed: remove dropped capabilities (cap_xxx-[epi]) from the output
+-ExecStart=/bin/sh -x -c '! capsh --print | sed -r "s/[^ ]+?\-[epi]+//g" | grep cap_sys_rawio'
++# sed: remove dropped (cap_xxx-[epi]) and IAB capabilities from the output
++ExecStart=/bin/sh -x -c '! capsh --print | sed -re "s/[^ ]+?\-[epi]+//g" -e '/IAB/d' | grep cap_sys_rawio'
+ Type=oneshot
+diff --git a/test/test-execute/exec-protectkernelmodules-no-capabilities.service b/test/test-execute/exec-protectkernelmodules-no-capabilities.service
+index 8d7e2b52d4..1b73656305 100644
+--- a/test/test-execute/exec-protectkernelmodules-no-capabilities.service
++++ b/test/test-execute/exec-protectkernelmodules-no-capabilities.service
+@@ -3,6 +3,6 @@ Description=Test CAP_SYS_MODULE ProtectKernelModules=no
+ 
+ [Service]
+ ProtectKernelModules=no
+-# sed: remove dropped capabilities (cap_xxx-[epi]) from the output
+-ExecStart=/bin/sh -x -c 'capsh --print | sed -r "s/[^ ]+?\-[epi]+//g" | grep cap_sys_module'
++# sed: remove dropped (cap_xxx-[epi]) and IAB capabilities from the output
++ExecStart=/bin/sh -x -c 'capsh --print | sed -re "s/[^ ]+?\-[epi]+//g" -e '/IAB/d' | grep cap_sys_module'
+ Type=oneshot
+diff --git a/test/test-execute/exec-protectkernelmodules-yes-capabilities.service b/test/test-execute/exec-protectkernelmodules-yes-capabilities.service
+index fe2ae208dd..e43e72733c 100644
+--- a/test/test-execute/exec-protectkernelmodules-yes-capabilities.service
++++ b/test/test-execute/exec-protectkernelmodules-yes-capabilities.service
+@@ -3,6 +3,6 @@ Description=Test CAP_SYS_MODULE for ProtectKernelModules=yes
+ 
+ [Service]
+ ProtectKernelModules=yes
+-# sed: remove dropped capabilities (cap_xxx-[epi]) from the output
+-ExecStart=/bin/sh -x -c '! capsh --print | sed -r "s/[^ ]+?\-[epi]+//g" | grep cap_sys_module'
++# sed: remove dropped (cap_xxx-[epi]) and IAB capabilities from the output
++ExecStart=/bin/sh -x -c '! capsh --print | sed -re "s/[^ ]+?\-[epi]+//g" -e '/IAB/d' | grep cap_sys_module'
+ Type=oneshot

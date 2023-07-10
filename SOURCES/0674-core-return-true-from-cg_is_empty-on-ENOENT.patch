@@ -1,0 +1,43 @@
+From 2aaa40e698f66fd10d0a7a71ca39637e24809e97 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 17 Oct 2018 17:48:35 +0200
+Subject: [PATCH] core: return true from cg_is_empty* on ENOENT
+
+(cherry picked from commit 1bcf3fc6c57d92927b96cad8c739099b4ceae236)
+
+Related: #1860899
+---
+ src/basic/cgroup-util.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/basic/cgroup-util.c b/src/basic/cgroup-util.c
+index 992b12811a..14abe6e014 100644
+--- a/src/basic/cgroup-util.c
++++ b/src/basic/cgroup-util.c
+@@ -1177,7 +1177,7 @@ int cg_is_empty(const char *controller, const char *path) {
+ 
+         r = cg_enumerate_processes(controller, path, &f);
+         if (r == -ENOENT)
+-                return 1;
++                return true;
+         if (r < 0)
+                 return r;
+ 
+@@ -1207,6 +1207,8 @@ int cg_is_empty_recursive(const char *controller, const char *path) {
+                  * via the "populated" attribute of "cgroup.events". */
+ 
+                 r = cg_read_event(controller, path, "populated", &t);
++                if (r == -ENOENT)
++                        return true;
+                 if (r < 0)
+                         return r;
+ 
+@@ -1221,7 +1223,7 @@ int cg_is_empty_recursive(const char *controller, const char *path) {
+ 
+                 r = cg_enumerate_subgroups(controller, path, &d);
+                 if (r == -ENOENT)
+-                        return 1;
++                        return true;
+                 if (r < 0)
+                         return r;
+ 

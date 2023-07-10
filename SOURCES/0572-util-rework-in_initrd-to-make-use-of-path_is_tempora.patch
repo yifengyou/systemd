@@ -1,0 +1,35 @@
+From 42f639d3689b7cbc9ce6b9578a2790c254508384 Mon Sep 17 00:00:00 2001
+From: Kairui Song <kasong@redhat.com>
+Date: Fri, 8 Jan 2021 14:52:26 +0800
+Subject: [PATCH] util: rework in_initrd() to make use of
+ path_is_temporary_fs()
+
+(cherry picked from commit 96cceb35e7985f5ee6c9b17e129a76259273cdde)
+
+Related: #1959339
+---
+ src/basic/util.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/src/basic/util.c b/src/basic/util.c
+index 82cb937314..b443e639f3 100644
+--- a/src/basic/util.c
++++ b/src/basic/util.c
+@@ -130,7 +130,6 @@ int prot_from_flags(int flags) {
+ }
+ 
+ bool in_initrd(void) {
+-        struct statfs s;
+ 
+         if (saved_in_initrd >= 0)
+                 return saved_in_initrd;
+@@ -146,8 +145,7 @@ bool in_initrd(void) {
+          */
+ 
+         saved_in_initrd = access("/etc/initrd-release", F_OK) >= 0 &&
+-                          statfs("/", &s) >= 0 &&
+-                          is_temporary_fs(&s);
++                          path_is_temporary_fs("/") > 0;
+ 
+         return saved_in_initrd;
+ }

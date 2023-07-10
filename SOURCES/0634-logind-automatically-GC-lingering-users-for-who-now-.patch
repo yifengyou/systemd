@@ -1,0 +1,82 @@
+From 89dd5e016a50da082e51129eecb3c5e04b8f0cf5 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 8 Aug 2018 16:04:40 +0200
+Subject: [PATCH] logind: automatically GC lingering users for who now
+ user@.service (nor slice, not runtime dir service) is running anymore
+
+This heavily borrows from @intelfx' PR #5546, but watches all three
+units that are associated with a user now: the slice, the user@.service
+and user-runtime-dir@.service.
+
+The logic and reasoning behind it is the same though: there's no value
+in keeping lingering users around if all their three services are gone.
+
+Replaces: #5546
+Fixes: #4162
+(cherry picked from commit 4e5b605af202c770dfc8e3562d0f8d0440b2fe14)
+
+Related: #1642460
+---
+ src/login/logind-user.c | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index 3fd28fc66c..bba3158d1a 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -26,6 +26,7 @@
+ #include "special.h"
+ #include "stdio-util.h"
+ #include "string-table.h"
++#include "strv.h"
+ #include "unit-name.h"
+ #include "user-util.h"
+ #include "util.h"
+@@ -542,6 +543,25 @@ int user_check_linger_file(User *u) {
+         return true;
+ }
+ 
++static bool user_unit_active(User *u) {
++        const char *i;
++        int r;
++
++        assert(u->service);
++        assert(u->runtime_dir_service);
++        assert(u->slice);
++
++        FOREACH_STRING(i, u->service, u->runtime_dir_service, u->slice) {
++                r = manager_unit_is_active(u->manager, i);
++                if (r < 0)
++                        log_debug_errno(r, "Failed to determine whether unit '%s' is active, ignoring", u->service);
++                if (r != 0)
++                        return true;
++        }
++
++        return false;
++}
++
+ bool user_may_gc(User *u, bool drop_not_started) {
+         assert(u);
+ 
+@@ -561,8 +581,10 @@ bool user_may_gc(User *u, bool drop_not_started) {
+                         return false; /* Leave it around for a bit longer. */
+         }
+ 
+-        /* Is this a user that shall stay around forever? */
+-        if (user_check_linger_file(u) > 0)
++        /* Is this a user that shall stay around forever ("linger")? Before we say "no" to GC'ing for lingering users, let's check
++         * if any of the three units that we maintain for this user is still around. If none of them is,
++         * there's no need to keep this user around even if lingering is enabled. */
++        if (user_check_linger_file(u) > 0 && user_unit_active(u))
+                 return false;
+ 
+         if (u->service_job && manager_job_is_active(u->manager, u->service_job))
+@@ -608,7 +630,7 @@ UserState user_get_state(User *u) {
+                 return all_closing ? USER_CLOSING : USER_ONLINE;
+         }
+ 
+-        if (user_check_linger_file(u) > 0)
++        if (user_check_linger_file(u) > 0 && user_unit_active(u))
+                 return USER_LINGERING;
+ 
+         return USER_CLOSING;

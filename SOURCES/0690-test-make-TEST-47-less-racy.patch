@@ -1,0 +1,33 @@
+From de7125dcfe6d6c8af05262ab786f9fe7cbf15113 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Wed, 15 Dec 2021 12:15:19 +0100
+Subject: [PATCH] test: make TEST-47 less racy
+
+Based on:
+  - 2e7090e94d0c8b31d418555ab2f6a9b75318f6a4
+  - e00e2e0b50bbd120290572c8d1242703fb98b34e
+  - 197298ff9fc930de450330095cc5b67d165d0801
+
+Related: #2017033
+---
+ test/TEST-47-ISSUE-14566/testsuite.sh | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/test/TEST-47-ISSUE-14566/testsuite.sh b/test/TEST-47-ISSUE-14566/testsuite.sh
+index d917cf52ff..b12b50e96c 100755
+--- a/test/TEST-47-ISSUE-14566/testsuite.sh
++++ b/test/TEST-47-ISSUE-14566/testsuite.sh
+@@ -6,11 +6,13 @@ systemd-analyze log-level debug
+ systemd-analyze log-target console
+ 
+ systemctl start issue_14566_test
++sleep 4
+ systemctl status issue_14566_test
+ 
+ leaked_pid=$(cat /leakedtestpid)
+ 
+ systemctl stop issue_14566_test
++sleep 4
+ 
+ # Leaked PID will still be around if we're buggy.
+ # I personally prefer to see 42.

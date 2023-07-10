@@ -1,0 +1,28 @@
+From 10758905f159bbe87a10f185f7e9afefbbd21fd4 Mon Sep 17 00:00:00 2001
+From: Jan Macku <jamacku@redhat.com>
+Date: Fri, 26 Aug 2022 13:06:42 +0200
+Subject: [PATCH] ci(functions): Add `useradd` and `userdel`
+
+Inspired by upstream commit:
+https://github.com/systemd/systemd/commit/9c94ab0f6ff22da4278a6e9a93ddc480607c55ac
+
+RHEL-only
+
+Related: #2110549
+---
+ test/test-functions | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/test-functions b/test/test-functions
+index ed8ab98173..19363be858 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -23,7 +23,7 @@ fi
+ 
+ PATH_TO_INIT=$ROOTLIBDIR/systemd
+ 
+-BASICTOOLS="test sh bash setsid loadkeys setfont login sulogin gzip sleep echo mount umount cryptsetup date dmsetup modprobe sed cmp tee rm true false chmod chown ln xargs env mktemp mountpoint"
++BASICTOOLS="test sh bash setsid loadkeys setfont login sulogin gzip sleep echo mount umount cryptsetup date dmsetup modprobe sed cmp tee rm true false chmod chown ln xargs env mktemp mountpoint useradd userdel"
+ DEBUGTOOLS="df free ls stty cat ps ln ip route dmesg dhclient mkdir cp ping dhclient strace less grep id tty touch du sort hostname find"
+ 
+ STATEDIR="${BUILD_DIR:-.}/test/$(basename $(dirname $(realpath $0)))"

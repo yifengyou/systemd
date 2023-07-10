@@ -1,0 +1,22 @@
+From 9a224b9480d218b782ac7bbacb3732672d0dad3f Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 17 Dec 2019 00:30:38 +0900
+Subject: [PATCH] network: set AlternativeNamesPolicy= in 99-default.link
+
+(cherry picked from commit 49f5cbe92484a6661bccc0ae6c547bc5767c83bf)
+
+Related: #2005008
+---
+ network/99-default.link | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/network/99-default.link b/network/99-default.link
+index 561bf329e4..58c0b74a7c 100644
+--- a/network/99-default.link
++++ b/network/99-default.link
+@@ -9,4 +9,5 @@
+ 
+ [Link]
+ NamePolicy=kernel database onboard slot path
++AlternativeNamesPolicy=database onboard slot path
+ MACAddressPolicy=persistent

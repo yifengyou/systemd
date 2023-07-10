@@ -1,0 +1,29 @@
+From 32ef99e27ca6242cd86e06b7f63ba49562a77335 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 11 Sep 2018 12:56:06 +0900
+Subject: [PATCH] core: fix assert() about number of built environment
+ variables
+
+Follow-up for 4b58153dd22172d817055d2a09a0cdf3f4bd9db3 and
+fd63e712b2025d235ce4bfbb512fada10e2690b5.
+
+(cherry picked from commit 76a9460d44b03a86691a8481544f4525bb43610a)
+
+Related: #2049788
+---
+ src/core/execute.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/execute.c b/src/core/execute.c
+index a104294966..c842b14ce7 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -1733,7 +1733,7 @@ static int build_environment(
+         }
+ 
+         our_env[n_env++] = NULL;
+-        assert(n_env <= 12);
++        assert(n_env <= 14);
+ 
+         *ret = TAKE_PTR(our_env);
+ 

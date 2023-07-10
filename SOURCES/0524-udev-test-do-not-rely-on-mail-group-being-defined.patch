@@ -1,0 +1,33 @@
+From c68da72231d5c502acd4e79791d0810790f3231b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Fri, 4 Sep 2020 18:09:20 +0200
+Subject: [PATCH] udev-test: do not rely on "mail" group being defined
+
+"audio" should be there, at least we declare it. "mail" nowadays is less
+likely to exist than in the past.
+
+Fixes one of the items in #16942.
+
+(cherry picked from commit a9030b81c154c3ec92227d04cad6b13cc1125608)
+
+Related: #1642728
+---
+ test/udev-test.pl | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 4bf97d82bb..a4deffacb9 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -629,9 +629,9 @@ EOF
+                 desc            => "textual user/group id",
+                 devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
+                 exp_name        => "node",
+-                exp_perms       => "root:mail:0660",
++                exp_perms       => "root:audio:0660",
+                 rules           => <<EOF
+-SUBSYSTEMS=="scsi", KERNEL=="sda", SYMLINK+="node", OWNER="root", GROUP="mail"
++SUBSYSTEMS=="scsi", KERNEL=="sda", SYMLINK+="node", OWNER="root", GROUP="audio"
+ EOF
+         },
+         {

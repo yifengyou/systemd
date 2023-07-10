@@ -1,0 +1,831 @@
+From 7155c010ef8c620295d230c284849636c07b40c0 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 22 Mar 2019 20:57:30 +0100
+Subject: [PATCH] core: add new API for enqueing a job with returning the
+ transaction data
+
+(cherry picked from commit 50cbaba4fe5a32850998682699322d012e597e4a)
+
+Related: #846319
+---
+ src/analyze/analyze-verify.c |   2 +-
+ src/core/automount.c         |   4 +-
+ src/core/dbus-manager.c      |  23 +++++-
+ src/core/dbus-unit.c         | 153 +++++++++++++++++++++++++++++++----
+ src/core/dbus-unit.h         |   8 +-
+ src/core/dbus.c              |   2 +-
+ src/core/device.c            |   2 +-
+ src/core/emergency-action.c  |   5 +-
+ src/core/main.c              |   4 +-
+ src/core/manager.c           |  38 +++++----
+ src/core/manager.h           |   6 +-
+ src/core/path.c              |   2 +-
+ src/core/service.c           |   2 +-
+ src/core/socket.c            |   4 +-
+ src/core/timer.c             |   2 +-
+ src/core/transaction.c       |  22 ++++-
+ src/core/transaction.h       |   2 +-
+ src/core/unit.c              |  16 ++--
+ src/test/test-engine.c       |  20 ++---
+ 19 files changed, 244 insertions(+), 73 deletions(-)
+
+diff --git a/src/analyze/analyze-verify.c b/src/analyze/analyze-verify.c
+index ed369532d4..1e143511b2 100644
+--- a/src/analyze/analyze-verify.c
++++ b/src/analyze/analyze-verify.c
+@@ -205,7 +205,7 @@ static int verify_unit(Unit *u, bool check_man) {
+                 unit_dump(u, stdout, "\t");
+ 
+         log_unit_debug(u, "Creating %s/start job", u->id);
+-        r = manager_add_job(u->manager, JOB_START, u, JOB_REPLACE, &err, NULL);
++        r = manager_add_job(u->manager, JOB_START, u, JOB_REPLACE, NULL, &err, NULL);
+         if (r < 0)
+                 log_unit_error_errno(u, r, "Failed to create %s/start: %s", u->id, bus_error_message(&err, r));
+ 
+diff --git a/src/core/automount.c b/src/core/automount.c
+index b1a155d8d4..76e70f4dac 100644
+--- a/src/core/automount.c
++++ b/src/core/automount.c
+@@ -776,7 +776,7 @@ static void automount_enter_running(Automount *a) {
+                 goto fail;
+         }
+ 
+-        r = manager_add_job(UNIT(a)->manager, JOB_START, trigger, JOB_REPLACE, &error, NULL);
++        r = manager_add_job(UNIT(a)->manager, JOB_START, trigger, JOB_REPLACE, NULL, &error, NULL);
+         if (r < 0) {
+                 log_unit_warning(UNIT(a), "Failed to queue mount startup job: %s", bus_error_message(&error, r));
+                 goto fail;
+@@ -1032,7 +1032,7 @@ static int automount_dispatch_io(sd_event_source *s, int fd, uint32_t events, vo
+                         goto fail;
+                 }
+ 
+-                r = manager_add_job(UNIT(a)->manager, JOB_STOP, trigger, JOB_REPLACE, &error, NULL);
++                r = manager_add_job(UNIT(a)->manager, JOB_STOP, trigger, JOB_REPLACE, NULL, &error, NULL);
+                 if (r < 0) {
+                         log_unit_warning(UNIT(a), "Failed to queue umount startup job: %s", bus_error_message(&error, r));
+                         goto fail;
+diff --git a/src/core/dbus-manager.c b/src/core/dbus-manager.c
+index a0777f63d5..0a1d3df42f 100644
+--- a/src/core/dbus-manager.c
++++ b/src/core/dbus-manager.c
+@@ -549,6 +549,26 @@ static int method_reload_or_try_restart_unit(sd_bus_message *message, void *user
+         return method_start_unit_generic(message, userdata, JOB_TRY_RESTART, true, error);
+ }
+ 
++static int method_enqueue_unit_job(sd_bus_message *message, void *userdata, sd_bus_error *error) {
++        Manager *m = userdata;
++        const char *name;
++        Unit *u;
++        int r;
++
++        assert(message);
++        assert(m);
++
++        r = sd_bus_message_read(message, "s", &name);
++        if (r < 0)
++                return r;
++
++        r = manager_load_unit(m, name, NULL, error, &u);
++        if (r < 0)
++                return r;
++
++        return bus_unit_method_enqueue_job(message, u, error);
++}
++
+ static int method_start_unit_replace(sd_bus_message *message, void *userdata, sd_bus_error *error) {
+         Manager *m = userdata;
+         const char *old_name;
+@@ -978,7 +998,7 @@ static int method_start_transient_unit(sd_bus_message *message, void *userdata,
+                 return r;
+ 
+         /* Finally, start it */
+-        return bus_unit_queue_job(message, u, JOB_START, mode, false, error);
++        return bus_unit_queue_job(message, u, JOB_START, mode, 0, error);
+ }
+ 
+ static int method_get_job(sd_bus_message *message, void *userdata, sd_bus_error *error) {
+@@ -2547,6 +2567,7 @@ const sd_bus_vtable bus_manager_vtable[] = {
+         SD_BUS_METHOD("TryRestartUnit", "ss", "o", method_try_restart_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("ReloadOrRestartUnit", "ss", "o", method_reload_or_restart_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("ReloadOrTryRestartUnit", "ss", "o", method_reload_or_try_restart_unit, SD_BUS_VTABLE_UNPRIVILEGED),
++        SD_BUS_METHOD("EnqueueUnitJob", "sss", "uososa(uosos)", method_enqueue_unit_job, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("KillUnit", "ssi", NULL, method_kill_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("FreezeUnit", "s", NULL, method_freeze_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("ThawUnit", "s", NULL, method_thaw_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+diff --git a/src/core/dbus-unit.c b/src/core/dbus-unit.c
+index ce81103e92..549a166abc 100644
+--- a/src/core/dbus-unit.c
++++ b/src/core/dbus-unit.c
+@@ -314,6 +314,14 @@ static int bus_verify_manage_units_async_full(
+                         error);
+ }
+ 
++static const char *const polkit_message_for_job[_JOB_TYPE_MAX] = {
++        [JOB_START]       = N_("Authentication is required to start '$(unit)'."),
++        [JOB_STOP]        = N_("Authentication is required to stop '$(unit)'."),
++        [JOB_RELOAD]      = N_("Authentication is required to reload '$(unit)'."),
++        [JOB_RESTART]     = N_("Authentication is required to restart '$(unit)'."),
++        [JOB_TRY_RESTART] = N_("Authentication is required to restart '$(unit)'."),
++};
++
+ int bus_unit_method_start_generic(
+                 sd_bus_message *message,
+                 Unit *u,
+@@ -324,13 +332,6 @@ int bus_unit_method_start_generic(
+         const char *smode;
+         JobMode mode;
+         _cleanup_free_ char *verb = NULL;
+-        static const char *const polkit_message_for_job[_JOB_TYPE_MAX] = {
+-                [JOB_START]       = N_("Authentication is required to start '$(unit)'."),
+-                [JOB_STOP]        = N_("Authentication is required to stop '$(unit)'."),
+-                [JOB_RELOAD]      = N_("Authentication is required to reload '$(unit)'."),
+-                [JOB_RESTART]     = N_("Authentication is required to restart '$(unit)'."),
+-                [JOB_TRY_RESTART] = N_("Authentication is required to restart '$(unit)'."),
+-        };
+         int r;
+ 
+         assert(message);
+@@ -372,7 +373,8 @@ int bus_unit_method_start_generic(
+         if (r == 0)
+                 return 1; /* No authorization for now, but the async polkit stuff will call us again when it has it */
+ 
+-        return bus_unit_queue_job(message, u, job_type, mode, reload_if_possible, error);
++        return bus_unit_queue_job(message, u, job_type, mode,
++                                  reload_if_possible ? BUS_UNIT_QUEUE_RELOAD_IF_POSSIBLE : 0, error);
+ }
+ 
+ static int method_start(sd_bus_message *message, void *userdata, sd_bus_error *error) {
+@@ -403,6 +405,62 @@ static int method_reload_or_try_restart(sd_bus_message *message, void *userdata,
+         return bus_unit_method_start_generic(message, userdata, JOB_TRY_RESTART, true, error);
+ }
+ 
++int bus_unit_method_enqueue_job(sd_bus_message *message, void *userdata, sd_bus_error *error) {
++        BusUnitQueueFlags flags = BUS_UNIT_QUEUE_VERBOSE_REPLY;
++        const char *jtype, *smode;
++        Unit *u = userdata;
++        JobType type;
++        JobMode mode;
++        int r;
++
++        assert(message);
++        assert(u);
++
++        r = sd_bus_message_read(message, "ss", &jtype, &smode);
++        if (r < 0)
++                return r;
++
++        /* Parse the two magic reload types "reload-or-…" manually */
++        if (streq(jtype, "reload-or-restart")) {
++                type = JOB_RESTART;
++                flags |= BUS_UNIT_QUEUE_RELOAD_IF_POSSIBLE;
++        } else if (streq(jtype, "reload-or-try-restart")) {
++                type = JOB_TRY_RESTART;
++                flags |= BUS_UNIT_QUEUE_RELOAD_IF_POSSIBLE;
++        } else {
++                /* And the rest generically */
++                type = job_type_from_string(jtype);
++                if (type < 0)
++                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "Job type %s invalid", jtype);
++        }
++
++        mode = job_mode_from_string(smode);
++        if (mode < 0)
++                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "Job mode %s invalid", smode);
++
++        r = mac_selinux_unit_access_check(
++                        u, message,
++                        job_type_to_access_method(type),
++                        error);
++        if (r < 0)
++                return r;
++
++        r = bus_verify_manage_units_async_full(
++                        u,
++                        jtype,
++                        CAP_SYS_ADMIN,
++                        polkit_message_for_job[type],
++                        true,
++                        message,
++                        error);
++        if (r < 0)
++                return r;
++        if (r == 0)
++                return 1; /* No authorization for now, but the async polkit stuff will call us again when it has it */
++
++        return bus_unit_queue_job(message, u, type, mode, flags, error);
++}
++
+ int bus_unit_method_kill(sd_bus_message *message, void *userdata, sd_bus_error *error) {
+         Unit *u = userdata;
+         const char *swho;
+@@ -722,6 +780,7 @@ const sd_bus_vtable bus_unit_vtable[] = {
+         SD_BUS_METHOD("TryRestart", "s", "o", method_try_restart, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("ReloadOrRestart", "s", "o", method_reload_or_restart, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("ReloadOrTryRestart", "s", "o", method_reload_or_try_restart, SD_BUS_VTABLE_UNPRIVILEGED),
++        SD_BUS_METHOD("EnqueueJob", "ss", "uososa(uosos)", bus_unit_method_enqueue_job, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("Kill", "si", NULL, bus_unit_method_kill, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("ResetFailed", NULL, NULL, bus_unit_method_reset_failed, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("SetProperties", "ba(sv)", NULL, bus_unit_method_set_properties, SD_BUS_VTABLE_UNPRIVILEGED),
+@@ -1354,11 +1413,14 @@ int bus_unit_queue_job(
+                 Unit *u,
+                 JobType type,
+                 JobMode mode,
+-                bool reload_if_possible,
++                BusUnitQueueFlags flags,
+                 sd_bus_error *error) {
+ 
+-        _cleanup_free_ char *path = NULL;
+-        Job *j;
++        _cleanup_(sd_bus_message_unrefp) sd_bus_message *reply = NULL;
++        _cleanup_free_ char *job_path = NULL, *unit_path = NULL;
++        _cleanup_(set_freep) Set *affected = NULL;
++        Iterator i;
++        Job *j, *a;
+         int r;
+ 
+         assert(message);
+@@ -1373,7 +1435,7 @@ int bus_unit_queue_job(
+         if (r < 0)
+                 return r;
+ 
+-        if (reload_if_possible && unit_can_reload(u)) {
++        if (FLAGS_SET(flags, BUS_UNIT_QUEUE_RELOAD_IF_POSSIBLE) && unit_can_reload(u)) {
+                 if (type == JOB_RESTART)
+                         type = JOB_RELOAD_OR_START;
+                 else if (type == JOB_TRY_RESTART)
+@@ -1391,7 +1453,13 @@ int bus_unit_queue_job(
+             (type == JOB_RELOAD_OR_START && job_type_collapse(type, u) == JOB_START && u->refuse_manual_start))
+                 return sd_bus_error_setf(error, BUS_ERROR_ONLY_BY_DEPENDENCY, "Operation refused, unit %s may be requested by dependency only (it is configured to refuse manual start/stop).", u->id);
+ 
+-        r = manager_add_job(u->manager, type, u, mode, error, &j);
++        if (FLAGS_SET(flags, BUS_UNIT_QUEUE_VERBOSE_REPLY)) {
++                affected = set_new(NULL);
++                if (!affected)
++                        return -ENOMEM;
++        }
++
++        r = manager_add_job(u->manager, type, u, mode, affected, error, &j);
+         if (r < 0)
+                 return r;
+ 
+@@ -1399,11 +1467,64 @@ int bus_unit_queue_job(
+         if (r < 0)
+                 return r;
+ 
+-        path = job_dbus_path(j);
+-        if (!path)
++        job_path = job_dbus_path(j);
++        if (!job_path)
+                 return -ENOMEM;
+ 
+-        return sd_bus_reply_method_return(message, "o", path);
++        /* The classic response is just a job object path */
++        if (!FLAGS_SET(flags, BUS_UNIT_QUEUE_VERBOSE_REPLY))
++                return sd_bus_reply_method_return(message, "o", job_path);
++
++        /* In verbose mode respond with the anchor job plus everything that has been affected */
++        r = sd_bus_message_new_method_return(message, &reply);
++        if (r < 0)
++                return r;
++
++        unit_path = unit_dbus_path(j->unit);
++        if (!unit_path)
++                return -ENOMEM;
++
++        r = sd_bus_message_append(reply, "uosos",
++                                  j->id, job_path,
++                                  j->unit->id, unit_path,
++                                  job_type_to_string(j->type));
++        if (r < 0)
++                return r;
++
++        r = sd_bus_message_open_container(reply, 'a', "(uosos)");
++        if (r < 0)
++                return r;
++
++        SET_FOREACH(a, affected, i) {
++
++                if (a->id == j->id)
++                        continue;
++
++                /* Free paths from previous iteration */
++                job_path = mfree(job_path);
++                unit_path = mfree(unit_path);
++
++                job_path = job_dbus_path(a);
++                if (!job_path)
++                        return -ENOMEM;
++
++                unit_path = unit_dbus_path(a->unit);
++                if (!unit_path)
++                        return -ENOMEM;
++
++                r = sd_bus_message_append(reply, "(uosos)",
++                                          a->id, job_path,
++                                          a->unit->id, unit_path,
++                                          job_type_to_string(a->type));
++                if (r < 0)
++                        return r;
++        }
++
++        r = sd_bus_message_close_container(reply);
++        if (r < 0)
++                return r;
++
++        return sd_bus_send(NULL, reply, NULL);
+ }
+ 
+ static int bus_unit_set_live_property(
+diff --git a/src/core/dbus-unit.h b/src/core/dbus-unit.h
+index 39aa1bb53c..d298fcc99e 100644
+--- a/src/core/dbus-unit.h
++++ b/src/core/dbus-unit.h
+@@ -15,6 +15,7 @@ int bus_unit_send_pending_freezer_message(Unit *u);
+ void bus_unit_send_removed_signal(Unit *u);
+ 
+ int bus_unit_method_start_generic(sd_bus_message *message, Unit *u, JobType job_type, bool reload_if_possible, sd_bus_error *error);
++int bus_unit_method_enqueue_job(sd_bus_message *message, void *userdata, sd_bus_error *error);
+ int bus_unit_method_kill(sd_bus_message *message, void *userdata, sd_bus_error *error);
+ int bus_unit_method_reset_failed(sd_bus_message *message, void *userdata, sd_bus_error *error);
+ 
+@@ -27,7 +28,12 @@ int bus_unit_method_unref(sd_bus_message *message, void *userdata, sd_bus_error
+ int bus_unit_method_freeze(sd_bus_message *message, void *userdata, sd_bus_error *error);
+ int bus_unit_method_thaw(sd_bus_message *message, void *userdata, sd_bus_error *error);
+ 
+-int bus_unit_queue_job(sd_bus_message *message, Unit *u, JobType type, JobMode mode, bool reload_if_possible, sd_bus_error *error);
++typedef enum BusUnitQueueFlags {
++        BUS_UNIT_QUEUE_RELOAD_IF_POSSIBLE = 1 << 0,
++        BUS_UNIT_QUEUE_VERBOSE_REPLY      = 1 << 1,
++} BusUnitQueueFlags;
++
++int bus_unit_queue_job(sd_bus_message *message, Unit *u, JobType type, JobMode mode, BusUnitQueueFlags flags, sd_bus_error *error);
+ int bus_unit_validate_load_state(Unit *u, sd_bus_error *error);
+ 
+ int bus_unit_track_add_name(Unit *u, const char *name);
+diff --git a/src/core/dbus.c b/src/core/dbus.c
+index b69c11c519..584a8a1b01 100644
+--- a/src/core/dbus.c
++++ b/src/core/dbus.c
+@@ -176,7 +176,7 @@ static int signal_activation_request(sd_bus_message *message, void *userdata, sd
+                 goto failed;
+         }
+ 
+-        r = manager_add_job(m, JOB_START, u, JOB_REPLACE, &error, NULL);
++        r = manager_add_job(m, JOB_START, u, JOB_REPLACE, NULL, &error, NULL);
+         if (r < 0)
+                 goto failed;
+ 
+diff --git a/src/core/device.c b/src/core/device.c
+index 021c28dfbd..cb8b66dfc5 100644
+--- a/src/core/device.c
++++ b/src/core/device.c
+@@ -419,7 +419,7 @@ static int device_add_udev_wants(Unit *u, struct udev_device *dev) {
+                         if (strv_contains(d->wants_property, *i)) /* Was this unit already listed before? */
+                                 continue;
+ 
+-                        r = manager_add_job_by_name(u->manager, JOB_START, *i, JOB_FAIL, &error, NULL);
++                        r = manager_add_job_by_name(u->manager, JOB_START, *i, JOB_FAIL, NULL, &error, NULL);
+                         if (r < 0)
+                                 log_unit_warning_errno(u, r, "Failed to enqueue SYSTEMD_WANTS= job, ignoring: %s", bus_error_message(&error, r));
+                 }
+diff --git a/src/core/emergency-action.c b/src/core/emergency-action.c
+index 76e1124cff..766a3b4d2b 100644
+--- a/src/core/emergency-action.c
++++ b/src/core/emergency-action.c
+@@ -54,8 +54,7 @@ int emergency_action(
+                 log_and_status(m, "Rebooting", reason);
+ 
+                 (void) update_reboot_parameter_and_warn(reboot_arg);
+-                (void) manager_add_job_by_name_and_warn(m, JOB_START, SPECIAL_REBOOT_TARGET, JOB_REPLACE_IRREVERSIBLY, NULL);
+-
++                (void) manager_add_job_by_name_and_warn(m, JOB_START, SPECIAL_REBOOT_TARGET, JOB_REPLACE_IRREVERSIBLY, NULL, NULL);
+                 break;
+ 
+         case EMERGENCY_ACTION_REBOOT_FORCE:
+@@ -83,7 +82,7 @@ int emergency_action(
+ 
+         case EMERGENCY_ACTION_POWEROFF:
+                 log_and_status(m, "Powering off", reason);
+-                (void) manager_add_job_by_name_and_warn(m, JOB_START, SPECIAL_POWEROFF_TARGET, JOB_REPLACE_IRREVERSIBLY, NULL);
++                (void) manager_add_job_by_name_and_warn(m, JOB_START, SPECIAL_POWEROFF_TARGET, JOB_REPLACE_IRREVERSIBLY, NULL, NULL);
+                 break;
+ 
+         case EMERGENCY_ACTION_POWEROFF_FORCE:
+diff --git a/src/core/main.c b/src/core/main.c
+index 25536054b3..d897155644 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -1952,13 +1952,13 @@ static int do_queue_default_job(
+ 
+         assert(target->load_state == UNIT_LOADED);
+ 
+-        r = manager_add_job(m, JOB_START, target, JOB_ISOLATE, &error, &default_unit_job);
++        r = manager_add_job(m, JOB_START, target, JOB_ISOLATE, NULL, &error, &default_unit_job);
+         if (r == -EPERM) {
+                 log_debug_errno(r, "Default target could not be isolated, starting instead: %s", bus_error_message(&error, r));
+ 
+                 sd_bus_error_free(&error);
+ 
+-                r = manager_add_job(m, JOB_START, target, JOB_REPLACE, &error, &default_unit_job);
++                r = manager_add_job(m, JOB_START, target, JOB_REPLACE, NULL, &error, &default_unit_job);
+                 if (r < 0) {
+                         *ret_error_message = "Failed to start default target";
+                         return log_emergency_errno(r, "Failed to start default target: %s", bus_error_message(&error, r));
+diff --git a/src/core/manager.c b/src/core/manager.c
+index 4c04896aaa..012615e537 100644
+--- a/src/core/manager.c
++++ b/src/core/manager.c
+@@ -1242,7 +1242,7 @@ static unsigned manager_dispatch_stop_when_unneeded_queue(Manager *m) {
+                 }
+ 
+                 /* Ok, nobody needs us anymore. Sniff. Then let's commit suicide */
+-                r = manager_add_job(u->manager, JOB_STOP, u, JOB_FAIL, &error, NULL);
++                r = manager_add_job(u->manager, JOB_STOP, u, JOB_FAIL, NULL, &error, NULL);
+                 if (r < 0)
+                         log_unit_warning_errno(u, r, "Failed to enqueue stop job, ignoring: %s", bus_error_message(&error, r));
+         }
+@@ -1685,9 +1685,17 @@ int manager_startup(Manager *m, FILE *serialization, FDSet *fds) {
+         return 0;
+ }
+ 
+-int manager_add_job(Manager *m, JobType type, Unit *unit, JobMode mode, sd_bus_error *e, Job **_ret) {
+-        int r;
++int manager_add_job(
++                Manager *m,
++                JobType type,
++                Unit *unit,
++                JobMode mode,
++                Set *affected_jobs,
++                sd_bus_error *error,
++                Job **ret) {
++
+         Transaction *tr;
++        int r;
+ 
+         assert(m);
+         assert(type < _JOB_TYPE_MAX);
+@@ -1695,10 +1703,10 @@ int manager_add_job(Manager *m, JobType type, Unit *unit, JobMode mode, sd_bus_e
+         assert(mode < _JOB_MODE_MAX);
+ 
+         if (mode == JOB_ISOLATE && type != JOB_START)
+-                return sd_bus_error_setf(e, SD_BUS_ERROR_INVALID_ARGS, "Isolate is only valid for start.");
++                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "Isolate is only valid for start.");
+ 
+         if (mode == JOB_ISOLATE && !unit->allow_isolate)
+-                return sd_bus_error_setf(e, BUS_ERROR_NO_ISOLATION, "Operation refused, unit may not be isolated.");
++                return sd_bus_error_setf(error, BUS_ERROR_NO_ISOLATION, "Operation refused, unit may not be isolated.");
+ 
+         log_unit_debug(unit, "Trying to enqueue job %s/%s/%s", unit->id, job_type_to_string(type), job_mode_to_string(mode));
+ 
+@@ -1710,7 +1718,7 @@ int manager_add_job(Manager *m, JobType type, Unit *unit, JobMode mode, sd_bus_e
+ 
+         r = transaction_add_job_and_dependencies(tr, type, unit, NULL, true, false,
+                                                  IN_SET(mode, JOB_IGNORE_DEPENDENCIES, JOB_IGNORE_REQUIREMENTS),
+-                                                 mode == JOB_IGNORE_DEPENDENCIES, e);
++                                                 mode == JOB_IGNORE_DEPENDENCIES, error);
+         if (r < 0)
+                 goto tr_abort;
+ 
+@@ -1720,7 +1728,7 @@ int manager_add_job(Manager *m, JobType type, Unit *unit, JobMode mode, sd_bus_e
+                         goto tr_abort;
+         }
+ 
+-        r = transaction_activate(tr, m, mode, e);
++        r = transaction_activate(tr, m, mode, affected_jobs, error);
+         if (r < 0)
+                 goto tr_abort;
+ 
+@@ -1728,8 +1736,8 @@ int manager_add_job(Manager *m, JobType type, Unit *unit, JobMode mode, sd_bus_e
+                        "Enqueued job %s/%s as %u", unit->id,
+                        job_type_to_string(type), (unsigned) tr->anchor_job->id);
+ 
+-        if (_ret)
+-                *_ret = tr->anchor_job;
++        if (ret)
++                *ret = tr->anchor_job;
+ 
+         transaction_free(tr);
+         return 0;
+@@ -1740,7 +1748,7 @@ tr_abort:
+         return r;
+ }
+ 
+-int manager_add_job_by_name(Manager *m, JobType type, const char *name, JobMode mode, sd_bus_error *e, Job **ret) {
++int manager_add_job_by_name(Manager *m, JobType type, const char *name, JobMode mode, Set *affected_jobs, sd_bus_error *e, Job **ret) {
+         Unit *unit = NULL;  /* just to appease gcc, initialization is not really necessary */
+         int r;
+ 
+@@ -1754,10 +1762,10 @@ int manager_add_job_by_name(Manager *m, JobType type, const char *name, JobMode
+                 return r;
+         assert(unit);
+ 
+-        return manager_add_job(m, type, unit, mode, e, ret);
++        return manager_add_job(m, type, unit, mode, affected_jobs, e, ret);
+ }
+ 
+-int manager_add_job_by_name_and_warn(Manager *m, JobType type, const char *name, JobMode mode, Job **ret) {
++int manager_add_job_by_name_and_warn(Manager *m, JobType type, const char *name, JobMode mode, Set *affected_jobs, Job **ret) {
+         _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
+         int r;
+ 
+@@ -1766,7 +1774,7 @@ int manager_add_job_by_name_and_warn(Manager *m, JobType type, const char *name,
+         assert(name);
+         assert(mode < _JOB_MODE_MAX);
+ 
+-        r = manager_add_job_by_name(m, type, name, mode, &error, ret);
++        r = manager_add_job_by_name(m, type, name, mode, affected_jobs, &error, ret);
+         if (r < 0)
+                 return log_warning_errno(r, "Failed to enqueue %s job for %s: %s", job_mode_to_string(mode), name, bus_error_message(&error, r));
+ 
+@@ -1794,7 +1802,7 @@ int manager_propagate_reload(Manager *m, Unit *unit, JobMode mode, sd_bus_error
+         /* Failure in adding individual dependencies is ignored, so this always succeeds. */
+         transaction_add_propagate_reload_jobs(tr, unit, tr->anchor_job, mode == JOB_IGNORE_DEPENDENCIES, e);
+ 
+-        r = transaction_activate(tr, m, mode, e);
++        r = transaction_activate(tr, m, mode, NULL, e);
+         if (r < 0)
+                 goto tr_abort;
+ 
+@@ -2512,7 +2520,7 @@ static void manager_start_target(Manager *m, const char *name, JobMode mode) {
+ 
+         log_debug("Activating special unit %s", name);
+ 
+-        r = manager_add_job_by_name(m, JOB_START, name, mode, &error, NULL);
++        r = manager_add_job_by_name(m, JOB_START, name, mode, NULL, &error, NULL);
+         if (r < 0)
+                 log_error("Failed to enqueue %s job: %s", name, bus_error_message(&error, r));
+ }
+diff --git a/src/core/manager.h b/src/core/manager.h
+index 40568d3c8b..c4b8e80093 100644
+--- a/src/core/manager.h
++++ b/src/core/manager.h
+@@ -397,9 +397,9 @@ int manager_load_unit(Manager *m, const char *name, const char *path, sd_bus_err
+ int manager_load_startable_unit_or_warn(Manager *m, const char *name, const char *path, Unit **ret);
+ int manager_load_unit_from_dbus_path(Manager *m, const char *s, sd_bus_error *e, Unit **_u);
+ 
+-int manager_add_job(Manager *m, JobType type, Unit *unit, JobMode mode, sd_bus_error *e, Job **_ret);
+-int manager_add_job_by_name(Manager *m, JobType type, const char *name, JobMode mode, sd_bus_error *e, Job **_ret);
+-int manager_add_job_by_name_and_warn(Manager *m, JobType type, const char *name, JobMode mode, Job **ret);
++int manager_add_job(Manager *m, JobType type, Unit *unit, JobMode mode, Set *affected_jobs, sd_bus_error *e, Job **_ret);
++int manager_add_job_by_name(Manager *m, JobType type, const char *name, JobMode mode, Set *affected_jobs, sd_bus_error *e, Job **_ret);
++int manager_add_job_by_name_and_warn(Manager *m, JobType type, const char *name, JobMode mode, Set *affected_jobs,  Job **ret);
+ int manager_propagate_reload(Manager *m, Unit *unit, JobMode mode, sd_bus_error *e);
+ 
+ void manager_dump_units(Manager *s, FILE *f, const char *prefix);
+diff --git a/src/core/path.c b/src/core/path.c
+index dda4a3036b..ed40bc6c19 100644
+--- a/src/core/path.c
++++ b/src/core/path.c
+@@ -474,7 +474,7 @@ static void path_enter_running(Path *p) {
+                 return;
+         }
+ 
+-        r = manager_add_job(UNIT(p)->manager, JOB_START, trigger, JOB_REPLACE, &error, NULL);
++        r = manager_add_job(UNIT(p)->manager, JOB_START, trigger, JOB_REPLACE, NULL, &error, NULL);
+         if (r < 0)
+                 goto fail;
+ 
+diff --git a/src/core/service.c b/src/core/service.c
+index 7cff419e4e..5e3e75b5ae 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -2176,7 +2176,7 @@ static void service_enter_restart(Service *s) {
+          * restarted. We use JOB_RESTART (instead of the more obvious
+          * JOB_START) here so that those dependency jobs will be added
+          * as well. */
+-        r = manager_add_job(UNIT(s)->manager, JOB_RESTART, UNIT(s), JOB_REPLACE, &error, NULL);
++        r = manager_add_job(UNIT(s)->manager, JOB_RESTART, UNIT(s), JOB_REPLACE, NULL, &error, NULL);
+         if (r < 0)
+                 goto fail;
+ 
+diff --git a/src/core/socket.c b/src/core/socket.c
+index 7c6d3dfad1..fe061eb73b 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -2274,7 +2274,7 @@ static void socket_enter_running(Socket *s, int cfd) {
+                                 goto fail;
+                         }
+ 
+-                        r = manager_add_job(UNIT(s)->manager, JOB_START, UNIT_DEREF(s->service), JOB_REPLACE, &error, NULL);
++                        r = manager_add_job(UNIT(s)->manager, JOB_START, UNIT_DEREF(s->service), JOB_REPLACE, NULL, &error, NULL);
+                         if (r < 0)
+                                 goto fail;
+                 }
+@@ -2349,7 +2349,7 @@ static void socket_enter_running(Socket *s, int cfd) {
+ 
+                 service->peer = TAKE_PTR(p); /* Pass ownership of the peer reference */
+ 
+-                r = manager_add_job(UNIT(s)->manager, JOB_START, UNIT(service), JOB_REPLACE, &error, NULL);
++                r = manager_add_job(UNIT(s)->manager, JOB_START, UNIT(service), JOB_REPLACE, NULL, &error, NULL);
+                 if (r < 0) {
+                         /* We failed to activate the new service, but it still exists. Let's make sure the service
+                          * closes and forgets the connection fd again, immediately. */
+diff --git a/src/core/timer.c b/src/core/timer.c
+index 2876d54a59..281ac7f97f 100644
+--- a/src/core/timer.c
++++ b/src/core/timer.c
+@@ -566,7 +566,7 @@ static void timer_enter_running(Timer *t) {
+                 return;
+         }
+ 
+-        r = manager_add_job(UNIT(t)->manager, JOB_START, trigger, JOB_REPLACE, &error, NULL);
++        r = manager_add_job(UNIT(t)->manager, JOB_START, trigger, JOB_REPLACE, NULL, &error, NULL);
+         if (r < 0)
+                 goto fail;
+ 
+diff --git a/src/core/transaction.c b/src/core/transaction.c
+index 045930838b..cdaaff4f55 100644
+--- a/src/core/transaction.c
++++ b/src/core/transaction.c
+@@ -585,7 +585,12 @@ rescan:
+         }
+ }
+ 
+-static int transaction_apply(Transaction *tr, Manager *m, JobMode mode) {
++static int transaction_apply(
++                Transaction *tr,
++                Manager *m,
++                JobMode mode,
++                Set *affected_jobs) {
++
+         Iterator i;
+         Job *j;
+         int r;
+@@ -642,6 +647,11 @@ static int transaction_apply(Transaction *tr, Manager *m, JobMode mode) {
+                 job_add_to_dbus_queue(j);
+                 job_start_timer(j, false);
+                 job_shutdown_magic(j);
++
++                /* When 'affected' is specified, let's track all in it all jobs that were touched because of
++                 * this transaction. */
++                if (affected_jobs)
++                        (void) set_put(affected_jobs, j);
+         }
+ 
+         return 0;
+@@ -654,7 +664,13 @@ rollback:
+         return r;
+ }
+ 
+-int transaction_activate(Transaction *tr, Manager *m, JobMode mode, sd_bus_error *e) {
++int transaction_activate(
++                Transaction *tr,
++                Manager *m,
++                JobMode mode,
++                Set *affected_jobs,
++                sd_bus_error *e) {
++
+         Iterator i;
+         Job *j;
+         int r;
+@@ -731,7 +747,7 @@ int transaction_activate(Transaction *tr, Manager *m, JobMode mode, sd_bus_error
+                 return log_notice_errno(r, "Requested transaction contradicts existing jobs: %s", bus_error_message(e, r));
+ 
+         /* Tenth step: apply changes */
+-        r = transaction_apply(tr, m, mode);
++        r = transaction_apply(tr, m, mode, affected_jobs);
+         if (r < 0)
+                 return log_warning_errno(r, "Failed to apply transaction: %m");
+ 
+diff --git a/src/core/transaction.h b/src/core/transaction.h
+index 70d74a4ccb..4b5620f5c8 100644
+--- a/src/core/transaction.h
++++ b/src/core/transaction.h
+@@ -29,6 +29,6 @@ int transaction_add_job_and_dependencies(
+                 bool ignore_requirements,
+                 bool ignore_order,
+                 sd_bus_error *e);
+-int transaction_activate(Transaction *tr, Manager *m, JobMode mode, sd_bus_error *e);
++int transaction_activate(Transaction *tr, Manager *m, JobMode mode, Set *affected, sd_bus_error *e);
+ int transaction_add_isolate_jobs(Transaction *tr, Manager *m);
+ void transaction_abort(Transaction *tr);
+diff --git a/src/core/unit.c b/src/core/unit.c
+index 29ce6c1fb7..ffbf3cfd48 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -2033,7 +2033,7 @@ static void unit_check_binds_to(Unit *u) {
+         log_unit_info(u, "Unit is bound to inactive unit %s. Stopping, too.", other->id);
+ 
+         /* A unit we need to run is gone. Sniff. Let's stop this. */
+-        r = manager_add_job(u->manager, JOB_STOP, u, JOB_FAIL, &error, NULL);
++        r = manager_add_job(u->manager, JOB_STOP, u, JOB_FAIL, NULL, &error, NULL);
+         if (r < 0)
+                 log_unit_warning_errno(u, r, "Failed to enqueue stop job, ignoring: %s", bus_error_message(&error, r));
+ }
+@@ -2049,25 +2049,25 @@ static void retroactively_start_dependencies(Unit *u) {
+         HASHMAP_FOREACH_KEY(v, other, u->dependencies[UNIT_REQUIRES], i)
+                 if (!hashmap_get(u->dependencies[UNIT_AFTER], other) &&
+                     !UNIT_IS_ACTIVE_OR_ACTIVATING(unit_active_state(other)))
+-                        manager_add_job(u->manager, JOB_START, other, JOB_REPLACE, NULL, NULL);
++                        manager_add_job(u->manager, JOB_START, other, JOB_REPLACE, NULL, NULL, NULL);
+ 
+         HASHMAP_FOREACH_KEY(v, other, u->dependencies[UNIT_BINDS_TO], i)
+                 if (!hashmap_get(u->dependencies[UNIT_AFTER], other) &&
+                     !UNIT_IS_ACTIVE_OR_ACTIVATING(unit_active_state(other)))
+-                        manager_add_job(u->manager, JOB_START, other, JOB_REPLACE, NULL, NULL);
++                        manager_add_job(u->manager, JOB_START, other, JOB_REPLACE, NULL, NULL, NULL);
+ 
+         HASHMAP_FOREACH_KEY(v, other, u->dependencies[UNIT_WANTS], i)
+                 if (!hashmap_get(u->dependencies[UNIT_AFTER], other) &&
+                     !UNIT_IS_ACTIVE_OR_ACTIVATING(unit_active_state(other)))
+-                        manager_add_job(u->manager, JOB_START, other, JOB_FAIL, NULL, NULL);
++                        manager_add_job(u->manager, JOB_START, other, JOB_FAIL, NULL, NULL, NULL);
+ 
+         HASHMAP_FOREACH_KEY(v, other, u->dependencies[UNIT_CONFLICTS], i)
+                 if (!UNIT_IS_INACTIVE_OR_DEACTIVATING(unit_active_state(other)))
+-                        manager_add_job(u->manager, JOB_STOP, other, JOB_REPLACE, NULL, NULL);
++                        manager_add_job(u->manager, JOB_STOP, other, JOB_REPLACE, NULL, NULL, NULL);
+ 
+         HASHMAP_FOREACH_KEY(v, other, u->dependencies[UNIT_CONFLICTED_BY], i)
+                 if (!UNIT_IS_INACTIVE_OR_DEACTIVATING(unit_active_state(other)))
+-                        manager_add_job(u->manager, JOB_STOP, other, JOB_REPLACE, NULL, NULL);
++                        manager_add_job(u->manager, JOB_STOP, other, JOB_REPLACE, NULL, NULL, NULL);
+ }
+ 
+ static void retroactively_stop_dependencies(Unit *u) {
+@@ -2081,7 +2081,7 @@ static void retroactively_stop_dependencies(Unit *u) {
+         /* Pull down units which are bound to us recursively if enabled */
+         HASHMAP_FOREACH_KEY(v, other, u->dependencies[UNIT_BOUND_BY], i)
+                 if (!UNIT_IS_INACTIVE_OR_DEACTIVATING(unit_active_state(other)))
+-                        manager_add_job(u->manager, JOB_STOP, other, JOB_REPLACE, NULL, NULL);
++                        manager_add_job(u->manager, JOB_STOP, other, JOB_REPLACE, NULL, NULL, NULL);
+ }
+ 
+ void unit_start_on_failure(Unit *u) {
+@@ -2100,7 +2100,7 @@ void unit_start_on_failure(Unit *u) {
+         HASHMAP_FOREACH_KEY(v, other, u->dependencies[UNIT_ON_FAILURE], i) {
+                 _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
+ 
+-                r = manager_add_job(u->manager, JOB_START, other, u->on_failure_job_mode, &error, NULL);
++                r = manager_add_job(u->manager, JOB_START, other, u->on_failure_job_mode, NULL, &error, NULL);
+                 if (r < 0)
+                         log_unit_warning_errno(u, r, "Failed to enqueue OnFailure= job, ignoring: %s", bus_error_message(&error, r));
+         }
+diff --git a/src/test/test-engine.c b/src/test/test-engine.c
+index 0f3e244dc1..f2e327b3f5 100644
+--- a/src/test/test-engine.c
++++ b/src/test/test-engine.c
+@@ -46,7 +46,7 @@ int main(int argc, char *argv[]) {
+         manager_dump_units(m, stdout, "\t");
+ 
+         printf("Test1: (Trivial)\n");
+-        r = manager_add_job(m, JOB_START, c, JOB_REPLACE, &err, &j);
++        r = manager_add_job(m, JOB_START, c, JOB_REPLACE, NULL, &err, &j);
+         if (sd_bus_error_is_set(&err))
+                 log_error("error: %s: %s", err.name, err.message);
+         assert_se(r == 0);
+@@ -59,15 +59,15 @@ int main(int argc, char *argv[]) {
+         manager_dump_units(m, stdout, "\t");
+ 
+         printf("Test2: (Cyclic Order, Unfixable)\n");
+-        assert_se(manager_add_job(m, JOB_START, d, JOB_REPLACE, NULL, &j) == -EDEADLK);
++        assert_se(manager_add_job(m, JOB_START, d, JOB_REPLACE, NULL, NULL, &j) == -EDEADLK);
+         manager_dump_jobs(m, stdout, "\t");
+ 
+         printf("Test3: (Cyclic Order, Fixable, Garbage Collector)\n");
+-        assert_se(manager_add_job(m, JOB_START, e, JOB_REPLACE, NULL, &j) == 0);
++        assert_se(manager_add_job(m, JOB_START, e, JOB_REPLACE, NULL, NULL, &j) == 0);
+         manager_dump_jobs(m, stdout, "\t");
+ 
+         printf("Test4: (Identical transaction)\n");
+-        assert_se(manager_add_job(m, JOB_START, e, JOB_FAIL, NULL, &j) == 0);
++        assert_se(manager_add_job(m, JOB_START, e, JOB_FAIL, NULL, NULL, &j) == 0);
+         manager_dump_jobs(m, stdout, "\t");
+ 
+         printf("Load3:\n");
+@@ -75,21 +75,21 @@ int main(int argc, char *argv[]) {
+         manager_dump_units(m, stdout, "\t");
+ 
+         printf("Test5: (Colliding transaction, fail)\n");
+-        assert_se(manager_add_job(m, JOB_START, g, JOB_FAIL, NULL, &j) == -EDEADLK);
++        assert_se(manager_add_job(m, JOB_START, g, JOB_FAIL, NULL, NULL, &j) == -EDEADLK);
+ 
+         printf("Test6: (Colliding transaction, replace)\n");
+-        assert_se(manager_add_job(m, JOB_START, g, JOB_REPLACE, NULL, &j) == 0);
++        assert_se(manager_add_job(m, JOB_START, g, JOB_REPLACE, NULL, NULL, &j) == 0);
+         manager_dump_jobs(m, stdout, "\t");
+ 
+         printf("Test7: (Unmergeable job type, fail)\n");
+-        assert_se(manager_add_job(m, JOB_STOP, g, JOB_FAIL, NULL, &j) == -EDEADLK);
++        assert_se(manager_add_job(m, JOB_STOP, g, JOB_FAIL, NULL, NULL, &j) == -EDEADLK);
+ 
+         printf("Test8: (Mergeable job type, fail)\n");
+-        assert_se(manager_add_job(m, JOB_RESTART, g, JOB_FAIL, NULL, &j) == 0);
++        assert_se(manager_add_job(m, JOB_RESTART, g, JOB_FAIL, NULL, NULL, &j) == 0);
+         manager_dump_jobs(m, stdout, "\t");
+ 
+         printf("Test9: (Unmergeable job type, replace)\n");
+-        assert_se(manager_add_job(m, JOB_STOP, g, JOB_REPLACE, NULL, &j) == 0);
++        assert_se(manager_add_job(m, JOB_STOP, g, JOB_REPLACE, NULL, NULL, &j) == 0);
+         manager_dump_jobs(m, stdout, "\t");
+ 
+         printf("Load4:\n");
+@@ -97,7 +97,7 @@ int main(int argc, char *argv[]) {
+         manager_dump_units(m, stdout, "\t");
+ 
+         printf("Test10: (Unmergeable job type of auxiliary job, fail)\n");
+-        assert_se(manager_add_job(m, JOB_START, h, JOB_FAIL, NULL, &j) == 0);
++        assert_se(manager_add_job(m, JOB_START, h, JOB_FAIL, NULL, NULL, &j) == 0);
+         manager_dump_jobs(m, stdout, "\t");
+ 
+         assert_se(!hashmap_get(a->dependencies[UNIT_PROPAGATES_RELOAD_TO], b));

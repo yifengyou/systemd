@@ -1,0 +1,29 @@
+From 50a4e03d2da89df32f2f63eb56051d789508ae75 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 6 Aug 2018 18:15:07 +0200
+Subject: [PATCH] units: improve Description= string a bit
+
+Let's not use the word "wrapper", as it's not clear what that is, and in
+some way any unit file is a "wrapper"... let's simply say that it's
+about the runtime directory.
+
+(cherry picked from commit 14df094a51e87013d96ac697ae4f14593cbcad39)
+
+Related: #1642460
+---
+ units/user-runtime-dir@.service.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/units/user-runtime-dir@.service.in b/units/user-runtime-dir@.service.in
+index bfd6488d61..63db1cca6a 100644
+--- a/units/user-runtime-dir@.service.in
++++ b/units/user-runtime-dir@.service.in
+@@ -8,7 +8,7 @@
+ #  (at your option) any later version.
+ 
+ [Unit]
+-Description=/run/user/%i mount wrapper
++Description=User runtime directory /run/user/%i
+ After=systemd-user-sessions.service
+ StopWhenUnneeded=yes
+ 

@@ -1,0 +1,29 @@
+From 0bf1df5c35c310c3efe49c7a3cb8c3be3e33492b Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 26 Nov 2018 21:05:37 +0100
+Subject: [PATCH] core: drop references to 'StandardOutputFileToCreate'
+
+This property never existed, let's drop any reference to it.
+
+(cherry picked from commit 922ce049d1ed37ce77e3322711e29f256d9e5959)
+
+Related: #2093479
+---
+ src/core/dbus-execute.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index 2e64f0baf4..05134851c5 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -1809,8 +1809,8 @@ int bus_exec_context_set_transient_property(
+ 
+         } else if (STR_IN_SET(name,
+                               "StandardInputFile",
+-                              "StandardOutputFile", "StandardOutputFileToCreate", "StandardOutputFileToAppend",
+-                              "StandardErrorFile", "StandardErrorFileToCreate", "StandardErrorFileToAppend")) {
++                              "StandardOutputFile", "StandardOutputFileToAppend",
++                              "StandardErrorFile", "StandardErrorFileToAppend")) {
+                 const char *s;
+ 
+                 r = sd_bus_message_read(message, "s", &s);

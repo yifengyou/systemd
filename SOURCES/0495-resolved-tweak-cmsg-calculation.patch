@@ -1,0 +1,30 @@
+From 6ece87bef14ac5741fc870644504737b00607546 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 27 May 2020 19:38:38 +0200
+Subject: [PATCH] resolved: tweak cmsg calculation
+
+We ask for the TTL, then have enough space for it.
+
+We probably can drop the extra cmsg space now, but let's figure that out
+another time, since the extra cmsg space is used elsewhere in resolved
+as well.
+
+(cherry picked from commit 08ab18618ec59022582f1513c0718ba369f5ba85)
+
+Related: #1887181
+---
+ src/resolve/resolved-dns-stream.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/resolve/resolved-dns-stream.c b/src/resolve/resolved-dns-stream.c
+index 066daef96e..555e200a23 100644
+--- a/src/resolve/resolved-dns-stream.c
++++ b/src/resolve/resolved-dns-stream.c
+@@ -70,6 +70,7 @@ static int dns_stream_identify(DnsStream *s) {
+         union {
+                 struct cmsghdr header; /* For alignment */
+                 uint8_t buffer[CMSG_SPACE(MAXSIZE(struct in_pktinfo, struct in6_pktinfo))
++                               + CMSG_SPACE(int) + /* for the TTL */
+                                + EXTRA_CMSG_SPACE /* kernel appears to require extra space */];
+         } control;
+         struct msghdr mh = {};

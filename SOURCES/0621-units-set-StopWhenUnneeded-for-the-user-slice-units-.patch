@@ -1,0 +1,27 @@
+From f94c1bbec9e2c3efcbafd61ea1fdf8dbc3245d1b Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 3 Aug 2018 20:19:38 +0200
+Subject: [PATCH] units: set StopWhenUnneeded= for the user slice units too
+
+We'd like them to go away, just like the user-runtime-dir@.service when
+they aren't needed anymore.
+
+(cherry picked from commit 1007473b49b5aaeef0e53cd4a15f4ed8cf721926)
+
+Related: #1642460
+---
+ units/user-.slice.d/10-defaults.conf | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/units/user-.slice.d/10-defaults.conf b/units/user-.slice.d/10-defaults.conf
+index efc9d37c8e..1147e7aed9 100644
+--- a/units/user-.slice.d/10-defaults.conf
++++ b/units/user-.slice.d/10-defaults.conf
+@@ -10,6 +10,7 @@
+ [Unit]
+ Description=User Slice of UID %j
+ After=systemd-user-sessions.service
++StopWhenUnneeded=yes
+ 
+ [Slice]
+ TasksMax=80%

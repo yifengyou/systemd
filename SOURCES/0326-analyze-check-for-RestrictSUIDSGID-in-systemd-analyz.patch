@@ -1,0 +1,52 @@
+From 3d338556760632b9c8b646a719d56e02e3ad2088 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 20 Mar 2019 19:20:35 +0100
+Subject: [PATCH] analyze: check for RestrictSUIDSGID= in "systemd-analyze
+ security"
+
+And let's give it a heigh weight, since it pretty much can be used for
+bad things only.
+
+(cherry picked from commit 9d880b70ba5c6ca83c82952f4c90e86e56c7b70c)
+Related: #1687512
+---
+ src/analyze/analyze-security.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/src/analyze/analyze-security.c b/src/analyze/analyze-security.c
+index eec040d5c3..969101c57b 100644
+--- a/src/analyze/analyze-security.c
++++ b/src/analyze/analyze-security.c
+@@ -69,6 +69,7 @@ struct security_info {
+ 
+         uint64_t restrict_namespaces;
+         bool restrict_realtime;
++        bool restrict_suid_sgid;
+ 
+         char *root_directory;
+         char *root_image;
+@@ -1130,6 +1131,16 @@ static const struct security_assessor security_assessor_table[] = {
+                 .assess = assess_bool,
+                 .offset = offsetof(struct security_info, restrict_realtime),
+         },
++        {
++                .id = "RestrictSUIDSGID=",
++                .url = "https://www.freedesktop.org/software/systemd/man/systemd.exec.html#RestrictSUIDSGID=",
++                .description_good = "SUID/SGID file creation by service is restricted",
++                .description_bad = "Service may create SUID/SGID files",
++                .weight = 1000,
++                .range = 1,
++                .assess = assess_bool,
++                .offset = offsetof(struct security_info, restrict_suid_sgid),
++        },
+         {
+                 .id = "RestrictNamespaces=~CLONE_NEWUSER",
+                 .url = "https://www.freedesktop.org/software/systemd/man/systemd.exec.html#RestrictNamespaces=",
+@@ -1862,6 +1873,7 @@ static int acquire_security_info(sd_bus *bus, const char *name, struct security_
+                 { "RestrictAddressFamilies", "(bas)",   property_read_restrict_address_families, 0                                                         },
+                 { "RestrictNamespaces",      "t",       NULL,                                    offsetof(struct security_info, restrict_namespaces)       },
+                 { "RestrictRealtime",        "b",       NULL,                                    offsetof(struct security_info, restrict_realtime)         },
++                { "RestrictSUIDSGID",        "b",       NULL,                                    offsetof(struct security_info, restrict_suid_sgid)        },
+                 { "RootDirectory",           "s",       NULL,                                    offsetof(struct security_info, root_directory)            },
+                 { "RootImage",               "s",       NULL,                                    offsetof(struct security_info, root_image)                },
+                 { "SupplementaryGroups",     "as",      NULL,                                    offsetof(struct security_info, supplementary_groups)      },

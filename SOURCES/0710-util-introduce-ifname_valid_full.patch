@@ -1,0 +1,79 @@
+From 1b12b8e9c0f6f230e12ca13bd70f27ef0a2fcfdd Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Sun, 15 Dec 2019 23:01:54 +0900
+Subject: [PATCH] util: introduce ifname_valid_full()
+
+(cherry picked from commit 4252696aec9ec038ff312a164e25f039da25126f)
+
+Related: #2005008
+---
+ src/basic/socket-util.c     | 12 +++++++++---
+ src/basic/socket-util.h     |  5 ++++-
+ src/test/test-socket-util.c |  1 +
+ 3 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/src/basic/socket-util.c b/src/basic/socket-util.c
+index 053bcba670..7f8066123b 100644
+--- a/src/basic/socket-util.c
++++ b/src/basic/socket-util.c
+@@ -13,6 +13,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
++#include <linux/if.h>
+ 
+ #include "alloc-util.h"
+ #include "fd-util.h"
+@@ -868,7 +869,7 @@ static const char* const ip_tos_table[] = {
+ 
+ DEFINE_STRING_TABLE_LOOKUP_WITH_FALLBACK(ip_tos, int, 0xff);
+ 
+-bool ifname_valid(const char *p) {
++bool ifname_valid_full(const char *p, bool alternative) {
+         bool numeric = true;
+ 
+         /* Checks whether a network interface name is valid. This is inspired by dev_valid_name() in the kernel sources
+@@ -878,8 +879,13 @@ bool ifname_valid(const char *p) {
+         if (isempty(p))
+                 return false;
+ 
+-        if (strlen(p) >= IFNAMSIZ)
+-                return false;
++        if (alternative) {
++                if (strlen(p) >= ALTIFNAMSIZ)
++                        return false;
++        } else {
++                if (strlen(p) >= IFNAMSIZ)
++                        return false;
++        }
+ 
+         if (dot_or_dot_dot(p))
+                 return false;
+diff --git a/src/basic/socket-util.h b/src/basic/socket-util.h
+index c7c9ad34d6..30baba6c03 100644
+--- a/src/basic/socket-util.h
++++ b/src/basic/socket-util.h
+@@ -123,7 +123,10 @@ int fd_inc_rcvbuf(int fd, size_t n);
+ int ip_tos_to_string_alloc(int i, char **s);
+ int ip_tos_from_string(const char *s);
+ 
+-bool ifname_valid(const char *p);
++bool ifname_valid_full(const char *p, bool alternative);
++static inline bool ifname_valid(const char *p) {
++        return ifname_valid_full(p, false);
++}
+ bool address_label_valid(const char *p);
+ 
+ int getpeercred(int fd, struct ucred *ucred);
+diff --git a/src/test/test-socket-util.c b/src/test/test-socket-util.c
+index 19c5395b92..c545622c09 100644
+--- a/src/test/test-socket-util.c
++++ b/src/test/test-socket-util.c
+@@ -39,6 +39,7 @@ static void test_ifname_valid(void) {
+ 
+         assert(ifname_valid("xxxxxxxxxxxxxxx"));
+         assert(!ifname_valid("xxxxxxxxxxxxxxxx"));
++        assert(ifname_valid_full("xxxxxxxxxxxxxxxx", true));
+ }
+ 
+ static void test_socket_address_parse(void) {

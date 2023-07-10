@@ -1,0 +1,59 @@
+From 0bef8805c81eecfe3960bf00b6022837e4979198 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <fsumsal@redhat.com>
+Date: Tue, 3 Mar 2020 15:54:29 +0100
+Subject: [PATCH] test: replace cursor file with a plain cursor
+
+systemd in RHEL 8 doesn't support the --cursor-file option, so let's
+fall back to a plain cursor string
+
+Related: #1808940
+rhel-only
+---
+ test/TEST-36-NUMAPOLICY/test.sh      | 2 +-
+ test/TEST-36-NUMAPOLICY/testsuite.sh | 6 +++---
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/test/TEST-36-NUMAPOLICY/test.sh b/test/TEST-36-NUMAPOLICY/test.sh
+index 3b3b120423..7cc909765b 100755
+--- a/test/TEST-36-NUMAPOLICY/test.sh
++++ b/test/TEST-36-NUMAPOLICY/test.sh
+@@ -17,7 +17,7 @@ test_setup() {
+         eval $(udevadm info --export --query=env --name=${LOOPDEV}p2)
+ 
+         setup_basic_environment
+-        dracut_install mktemp
++        dracut_install mktemp awk
+ 
+         # mask some services that we do not want to run in these tests
+         ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
+diff --git a/test/TEST-36-NUMAPOLICY/testsuite.sh b/test/TEST-36-NUMAPOLICY/testsuite.sh
+index a5ac788178..bffac4ffe6 100755
+--- a/test/TEST-36-NUMAPOLICY/testsuite.sh
++++ b/test/TEST-36-NUMAPOLICY/testsuite.sh
+@@ -30,7 +30,7 @@ journalSleep=5
+ sleepAfterStart=1
+ 
+ # Journal cursor for easier navigation
+-journalCursorFile="jounalCursorFile"
++journalCursor=""
+ 
+ startStrace() {
+     coproc strace -qq -p 1 -o $straceLog -e set_mempolicy -s 1024 $1
+@@ -46,7 +46,7 @@ stopStrace() {
+ 
+ startJournalctl() {
+     # Save journal's cursor for later navigation
+-    journalctl --no-pager --cursor-file="$journalCursorFile" -n0 -ocat
++    journalCursor="$(journalctl --no-pager --show-cursor -n0 -ocat | awk '{print $3}')"
+ }
+ 
+ stopJournalctl() {
+@@ -55,7 +55,7 @@ stopJournalctl() {
+     # the --sync wait until the synchronization is complete
+     echo "Force journald to write all queued messages"
+     journalctl --sync
+-    journalctl -u $unit --cursor-file="$journalCursorFile" > "$journalLog"
++    journalctl -u $unit --after-cursor="$journalCursor" > "$journalLog"
+ }
+ 
+ checkNUMA() {

@@ -1,0 +1,32 @@
+From ed282d8d84fa32aaef21994d92d1d3dbfa281094 Mon Sep 17 00:00:00 2001
+From: Ryan Gonzalez <kirbyfan64@users.noreply.github.com>
+Date: Fri, 22 Feb 2019 23:45:03 -0600
+Subject: [PATCH] cryptsetup: Treat key file errors as a failed password
+ attempt
+
+6f177c7dc092eb68762b4533d41b14244adb2a73 caused key file errors to immediately fail, which would make it hard to correct an issue due to e.g. a crypttab typo or a damaged key file.
+
+Closes #11723.
+
+(cherry picked from commit c20db3887569e0c0d9c0e2845c5286e7edf0133a)
+
+Related: #1763155
+---
+ src/cryptsetup/cryptsetup.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/cryptsetup/cryptsetup.c b/src/cryptsetup/cryptsetup.c
+index 33c215eaa1..11162eb722 100644
+--- a/src/cryptsetup/cryptsetup.c
++++ b/src/cryptsetup/cryptsetup.c
+@@ -558,6 +558,10 @@ static int attach_luks_or_plain(struct crypt_device *cd,
+                         log_error_errno(r, "Failed to activate with key file '%s'. (Key data incorrect?)", key_file);
+                         return -EAGAIN; /* Log actual error, but return EAGAIN */
+                 }
++                if (r == -EINVAL) {
++                        log_error_errno(r, "Failed to activate with key file '%s'. (Key file missing?)", key_file);
++                        return -EAGAIN; /* Log actual error, but return EAGAIN */
++                }
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to activate with key file '%s': %m", key_file);
+         } else {

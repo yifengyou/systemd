@@ -1,0 +1,73 @@
+From dc50d1cc5bf445f1a26dbc646ff52421563e677f Mon Sep 17 00:00:00 2001
+From: Dan Streetman <ddstreet@canonical.com>
+Date: Fri, 5 Jul 2019 11:24:55 -0400
+Subject: [PATCH] test/udev-test.pl: cleanup if skipping test
+
+In Ubuntu CI, udev-test.pl is run from the debian/test/udev script,
+in a test dir created for it; but udev-test.pl setup mounts a
+dir, so if it doesn't cleanup/unmount before exiting, the test dir
+autopkgtest created for it can't be removed, and autopkgtest
+aborts the entire test suite, for example this output (from a
+test run inside an armhf container):
+
+autopkgtest [12:45:36]: test udev: [-----------------------
+umount: test/tmpfs: no mount point specified.
+mknod: test/tmpfs/dev/null: Operation not permitted
+unable to create test/tmpfs/dev/null at ./udev-test.pl line 1611.
+Failed to set up the environment, skipping the test at ./udev-test.pl line 1731.
+autopkgtest [12:45:41]: test udev: -----------------------]
+autopkgtest [12:45:44]: test udev:  - - - - - - - - - - results - - - - - - - - - -
+udev                 FAIL non-zero exit status 77
+rm: cannot remove '/tmp/autopkgtest.ocPFA6/autopkgtest_tmp/test/tmpfs': Device or resource busy
+autopkgtest [12:46:22]: ERROR: "rm -rf /tmp/autopkgtest.ocPFA6/udev-artifacts /tmp/autopkgtest.ocPFA6/autopkgtest_tmp" failed with stderr "rm:
+
+(cherry picked from commit abb9cc50afb3949c442849f43301fb33578f3888)
+
+Related: #1642728
+---
+ test/udev-test.pl | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 122359e377..2fea72875b 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1713,6 +1713,12 @@ sub run_test {
+ 
+ }
+ 
++sub cleanup {
++        system("rm", "-rf", "$udev_run");
++        system("umount", "$udev_tmpfs");
++        rmdir($udev_tmpfs);
++}
++
+ # only run if we have root permissions
+ # due to mknod restrictions
+ if (!($<==0)) {
+@@ -1729,11 +1735,13 @@ if ($? >> 8 == 0) {
+ 
+ if (!udev_setup()) {
+         warn "Failed to set up the environment, skipping the test";
++        cleanup();
+         exit($EXIT_TEST_SKIP);
+ }
+ 
+ if (system($udev_bin, "check")) {
+         warn "$udev_bin failed to set up the environment, skipping the test";
++        cleanup();
+         exit($EXIT_TEST_SKIP);
+ }
+ 
+@@ -1776,10 +1784,7 @@ if ($list[0]) {
+ 
+ print "$error errors occurred\n\n";
+ 
+-# cleanup
+-system("rm", "-rf", "$udev_run");
+-system("umount", "$udev_tmpfs");
+-rmdir($udev_tmpfs);
++cleanup();
+ 
+ if ($error > 0) {
+         exit(1);

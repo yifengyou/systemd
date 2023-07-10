@@ -1,0 +1,89 @@
+From 81b967279f6e23474b1e7a0ea9b4ecf9405f87bb Mon Sep 17 00:00:00 2001
+From: Masahiro Matsuya <mmatsuya@redhat.com>
+Date: Wed, 31 Mar 2021 11:44:24 +0900
+Subject: [PATCH] tmpfiles: use a entry in hashmap as ItemArray in
+ read_config_file()
+
+[zjs: squash commits and use size_t as appropriate.
+
+Bug seems to have been introduced in 811a15877825da9e53f9a2a8603da34589af6bbb.
+Fixes https://bugzilla.redhat.com/show_bug.cgi?id=1944468.]
+
+(cherry picked from commit bec890e3cd6dac249cb12ce9430fdb78b6cf546b)
+
+Resolves: #1944468
+---
+ src/tmpfiles/tmpfiles.c | 47 +++++++++++++++++++++++------------------
+ 1 file changed, 26 insertions(+), 21 deletions(-)
+
+diff --git a/src/tmpfiles/tmpfiles.c b/src/tmpfiles/tmpfiles.c
+index 927de35f32..1aeeed0d2e 100644
+--- a/src/tmpfiles/tmpfiles.c
++++ b/src/tmpfiles/tmpfiles.c
+@@ -2646,7 +2646,7 @@ static int read_config_file(char **config_dirs, const char *fn, bool ignore_enoe
+         char line[LINE_MAX];
+         Iterator iterator;
+         unsigned v = 0;
+-        Item *i;
++        ItemArray *ia;
+         int r = 0;
+ 
+         assert(fn);
+@@ -2692,32 +2692,37 @@ static int read_config_file(char **config_dirs, const char *fn, bool ignore_enoe
+         }
+ 
+         /* we have to determine age parameter for each entry of type X */
+-        ORDERED_HASHMAP_FOREACH(i, globs, iterator) {
+-                Iterator iter;
+-                Item *j, *candidate_item = NULL;
++        ORDERED_HASHMAP_FOREACH(ia, globs, iterator)
++                for (size_t ni = 0; ni < ia->count; ni++) {
++                        Iterator iter;
++                        ItemArray *ja;
++                        Item *i = ia->items + ni, *candidate_item = NULL;
+ 
+-                if (i->type != IGNORE_DIRECTORY_PATH)
+-                        continue;
+-
+-                ORDERED_HASHMAP_FOREACH(j, items, iter) {
+-                        if (!IN_SET(j->type, CREATE_DIRECTORY, TRUNCATE_DIRECTORY, CREATE_SUBVOLUME, CREATE_SUBVOLUME_INHERIT_QUOTA, CREATE_SUBVOLUME_NEW_QUOTA))
++                        if (i->type != IGNORE_DIRECTORY_PATH)
+                                 continue;
+ 
+-                        if (path_equal(j->path, i->path)) {
+-                                candidate_item = j;
+-                                break;
+-                        }
++                        ORDERED_HASHMAP_FOREACH(ja, items, iter)
++                                for (size_t nj = 0; nj < ja->count; nj++) {
++                                        Item *j = ja->items + nj;
+ 
+-                        if ((!candidate_item && path_startswith(i->path, j->path)) ||
+-                            (candidate_item && path_startswith(j->path, candidate_item->path) && (fnmatch(i->path, j->path, FNM_PATHNAME | FNM_PERIOD) == 0)))
+-                                candidate_item = j;
+-                }
++                                        if (!IN_SET(j->type, CREATE_DIRECTORY, TRUNCATE_DIRECTORY, CREATE_SUBVOLUME, CREATE_SUBVOLUME_INHERIT_QUOTA, CREATE_SUBVOLUME_NEW_QUOTA))
++                                                continue;
+ 
+-                if (candidate_item && candidate_item->age_set) {
+-                        i->age = candidate_item->age;
+-                        i->age_set = true;
++                                        if (path_equal(j->path, i->path)) {
++                                                candidate_item = j;
++                                                break;
++                                        }
++
++                                        if ((!candidate_item && path_startswith(i->path, j->path)) ||
++                                            (candidate_item && path_startswith(j->path, candidate_item->path) && (fnmatch(i->path, j->path, FNM_PATHNAME | FNM_PERIOD) == 0)))
++                                                candidate_item = j;
++                                }
++
++                        if (candidate_item && candidate_item->age_set) {
++                                i->age = candidate_item->age;
++                                i->age_set = true;
++                        }
+                 }
+-        }
+ 
+         if (ferror(f)) {
+                 log_error_errno(errno, "Failed to read from file %s: %m", fn);

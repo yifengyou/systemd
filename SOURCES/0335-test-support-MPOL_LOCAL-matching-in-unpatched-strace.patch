@@ -1,0 +1,58 @@
+From d6d43b81df76d571d57f83ceb050c8b4ac4701b8 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Mon, 1 Jul 2019 13:08:26 +0200
+Subject: [PATCH] test: support MPOL_LOCAL matching in unpatched strace
+ versions
+
+The MPOL_LOCAL constant is not recognized in current strace versions.
+Let's match at least the numerical value of this constant until the
+strace patch is approved & merged.
+
+(cherry picked from commit ac14396d027023e1be910327989cb422cb2f6724)
+
+Related: #1808940
+---
+ test/TEST-36-NUMAPOLICY/testsuite.sh | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/test/TEST-36-NUMAPOLICY/testsuite.sh b/test/TEST-36-NUMAPOLICY/testsuite.sh
+index 306a96b517..a4134bdeca 100755
+--- a/test/TEST-36-NUMAPOLICY/testsuite.sh
++++ b/test/TEST-36-NUMAPOLICY/testsuite.sh
+@@ -173,12 +173,16 @@ echo "PID1 NUMAPolicy support - Local policy w/o mask"
+ writePID1NUMAPolicy "local"
+ pid1ReloadWithStrace
+ # Kernel requires that nodemask argument is set to NULL when setting default policy
+-grep "set_mempolicy(MPOL_LOCAL, NULL" $straceLog
++# The unpatched versions of strace don't recognize the MPOL_LOCAL constant and
++# return a numerical constant instead (with a comment):
++#   set_mempolicy(0x4 /* MPOL_??? */, NULL, 0) = 0
++# Let's cover this scenario as well
++grep -E "set_mempolicy\((MPOL_LOCAL|0x4 [^,]*), NULL" $straceLog
+ 
+ echo "PID1 NUMAPolicy support - Local policy w/ mask"
+ writePID1NUMAPolicy "local" "0"
+ pid1ReloadWithStrace
+-grep "set_mempolicy(MPOL_LOCAL, NULL" $straceLog
++grep -E "set_mempolicy\((MPOL_LOCAL|0x4 [^,]*), NULL" $straceLog
+ 
+ echo "Unit file NUMAPolicy support - Default policy w/o mask"
+ writeTestUnitNUMAPolicy "default"
+@@ -240,7 +244,7 @@ writeTestUnitNUMAPolicy "local"
+ pid1StartUnitWithStrace $testUnit
+ systemctlCheckNUMAProperties $testUnit "local"
+ pid1StopUnit $testUnit
+-grep "set_mempolicy(MPOL_LOCAL, NULL" $straceLog
++grep -E "set_mempolicy\((MPOL_LOCAL|0x4 [^,]*), NULL" $straceLog
+ 
+ echo "Unit file NUMAPolicy support - Local policy w/ mask"
+ writeTestUnitNUMAPolicy "local" "0"
+@@ -248,7 +252,7 @@ pid1StartUnitWithStrace $testUnit
+ systemctlCheckNUMAProperties $testUnit "local" "0"
+ pid1StopUnit $testUnit
+ # Maks must be ignored
+-grep "set_mempolicy(MPOL_LOCAL, NULL" $straceLog
++grep -E "set_mempolicy\((MPOL_LOCAL|0x4 [^,]*), NULL" $straceLog
+ 
+ echo "systemd-run NUMAPolicy support"
+ runUnit='numa-systemd-run-test.service'

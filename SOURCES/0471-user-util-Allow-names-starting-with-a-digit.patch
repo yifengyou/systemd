@@ -1,0 +1,103 @@
+From f06434cc51eedd72f7d4a640a1fa118f57a5e68e Mon Sep 17 00:00:00 2001
+From: Balint Reczey <balint.reczey@canonical.com>
+Date: Wed, 18 Mar 2020 18:29:02 +0100
+Subject: [PATCH] user-util: Allow names starting with a digit
+
+In 1a29610f5fa1bcb2eeb37d2c6b79d8d1a6dbb865 the change inadvertedly
+disabled names with digit as the first character. This follow-up change
+allows a digit as the first character in compat mode.
+
+Fixes: #15141
+(cherry picked from commit 93c23c9297e48e594785e0bb9c51504aae5fbe3e)
+
+Related: #1848373
+---
+ src/basic/user-util.c     | 20 +++++++++++++++++---
+ src/test/test-user-util.c |  4 ++--
+ 2 files changed, 19 insertions(+), 5 deletions(-)
+
+diff --git a/src/basic/user-util.c b/src/basic/user-util.c
+index 359da08a83..7dd2bb2c84 100644
+--- a/src/basic/user-util.c
++++ b/src/basic/user-util.c
+@@ -579,16 +579,18 @@ int take_etc_passwd_lock(const char *root) {
+ bool valid_user_group_name_full(const char *u, bool strict) {
+         const char *i;
+         long sz;
++        bool warned = false;
+ 
+         /* Checks if the specified name is a valid user/group name. Also see POSIX IEEE Std 1003.1-2008, 2016 Edition,
+          * 3.437. We are a bit stricter here however. Specifically we deviate from POSIX rules:
+          *
+          * - We require that names fit into the appropriate utmp field
+          * - We don't allow empty user names
+-         * - No dots or digits in the first character
++         * - No dots in the first character
+          *
+          * If strict==true, additionally:
+          * - We don't allow any dots (this conflicts with chown syntax which permits dots as user/group name separator)
++         * - We don't allow a digit as the first character
+          *
+          * Note that other systems are even more restrictive, and don't permit underscores or uppercase characters.
+          */
+@@ -598,17 +600,26 @@ bool valid_user_group_name_full(const char *u, bool strict) {
+ 
+         if (!(u[0] >= 'a' && u[0] <= 'z') &&
+             !(u[0] >= 'A' && u[0] <= 'Z') &&
++            !(u[0] >= '0' && u[0] <= '9' && !strict) &&
+             u[0] != '_')
+                 return false;
+ 
+-        bool warned = false;
++        bool only_digits_seen = u[0] >= '0' && u[0] <= '9';
++
++        if (only_digits_seen) {
++                log_warning("User or group name \"%s\" starts with a digit, accepting for compatibility.", u);
++                warned = true;
++        }
+ 
+         for (i = u+1; *i; i++) {
+                 if (((*i >= 'a' && *i <= 'z') ||
+                      (*i >= 'A' && *i <= 'Z') ||
+                      (*i >= '0' && *i <= '9') ||
+-                     IN_SET(*i, '_', '-')))
++                     IN_SET(*i, '_', '-'))) {
++                        if (!(*i >= '0' && *i <= '9'))
++                                only_digits_seen = false;
+                         continue;
++                        }
+ 
+                 if (*i == '.' && !strict) {
+                         if (!warned) {
+@@ -622,6 +633,9 @@ bool valid_user_group_name_full(const char *u, bool strict) {
+                 return false;
+         }
+ 
++        if (only_digits_seen)
++                return false;
++
+         sz = sysconf(_SC_LOGIN_NAME_MAX);
+         assert_se(sz > 0);
+ 
+diff --git a/src/test/test-user-util.c b/src/test/test-user-util.c
+index 3a4211655d..56079f1486 100644
+--- a/src/test/test-user-util.c
++++ b/src/test/test-user-util.c
+@@ -164,7 +164,7 @@ static void test_valid_user_group_name_compat(void) {
+         assert_se(valid_user_group_name_compat("eff."));
+ 
+         assert_se(valid_user_group_name_compat("some5"));
+-        assert_se(!valid_user_group_name_compat("5some"));
++        assert_se(valid_user_group_name_compat("5some"));
+         assert_se(valid_user_group_name_compat("INNER5NUMBER"));
+ }
+ 
+@@ -234,7 +234,7 @@ static void test_valid_user_group_name_or_id_compat(void) {
+         assert_se(valid_user_group_name_or_id_compat("kk-k"));
+ 
+         assert_se(valid_user_group_name_or_id_compat("some5"));
+-        assert_se(!valid_user_group_name_or_id_compat("5some"));
++        assert_se(valid_user_group_name_or_id_compat("5some"));
+         assert_se(valid_user_group_name_or_id_compat("INNER5NUMBER"));
+ }
+ 

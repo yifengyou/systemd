@@ -1,0 +1,32 @@
+From 4d994a262ec1ad3e33e197cb09aa5aeabb5835dd Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 3 Jul 2018 15:40:53 +0200
+Subject: [PATCH] rpm: emit warning when macro with typo is used
+
+Follow-up for a6bb550458. Suggested by @ignatenkobrain.
+
+$ rpmbuild --eval %_environmentdir
+/usr/lib/environment.d
+$ rpmbuild --eval %_environmnentdir
+warning: Use %_environmentdir instead
+/usr/lib/environment.d
+
+(cherry picked from commit be9bf171bbf764997551f8a9b3c2aba5c6a875d3)
+Related: #2018024
+---
+ src/core/macros.systemd.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/macros.systemd.in b/src/core/macros.systemd.in
+index abbb42b22f..fe7ca26a34 100644
+--- a/src/core/macros.systemd.in
++++ b/src/core/macros.systemd.in
+@@ -28,7 +28,7 @@
+ 
+ # Because we had one release with a typo...
+ # This is temporary (Remove after systemd 240 is released)
+-%_environmnentdir %_environmentdir
++%_environmnentdir %{warn:Use %%_environmentdir instead}%_environmentdir
+ 
+ %systemd_requires \
+ Requires(post): systemd \

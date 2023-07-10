@@ -1,0 +1,51 @@
+From 462420bc7ea22a05bfc2d021d395aade2b8ee7dc Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Mon, 19 Oct 2020 10:56:11 +0200
+Subject: [PATCH] udev/net_id: parse _SUN ACPI index as a signed integer
+
+Negative value means there is no match between a PCI device and any of
+the slots. In the following commit we will extend this and value of 0
+will indicate that there is a match between some slot and PCI device,
+but that device is a PCI bridge.
+
+(cherry picked from commit 3e545ae5abcf258791eacbee60c829c100a33274)
+
+Related: #1827462
+---
+ src/udev/udev-builtin-net_id.c | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/src/udev/udev-builtin-net_id.c b/src/udev/udev-builtin-net_id.c
+index aa553d5ade..ede24dee41 100644
+--- a/src/udev/udev-builtin-net_id.c
++++ b/src/udev/udev-builtin-net_id.c
+@@ -391,7 +391,8 @@ static bool is_pci_ari_enabled(struct udev_device *dev) {
+ 
+ static int dev_pci_slot(struct udev_device *dev, struct netnames *names) {
+         struct udev *udev = udev_device_get_udev(names->pcidev);
+-        unsigned domain, bus, slot, func, dev_port = 0, hotplug_slot = 0;
++        unsigned domain, bus, slot, func, dev_port = 0;
++        int hotplug_slot = -1;
+         size_t l;
+         char *s;
+         const char *attr, *port_name;
+@@ -449,15 +450,15 @@ static int dev_pci_slot(struct udev_device *dev, struct netnames *names) {
+         hotplug_slot_dev = names->pcidev;
+         while (hotplug_slot_dev) {
+                 FOREACH_DIRENT_ALL(dent, dir, break) {
+-                        unsigned i;
+-                        int r;
++                        int i, r;
+                         char str[PATH_MAX];
+                         _cleanup_free_ char *address = NULL;
+ 
+                         if (dent->d_name[0] == '.')
+                                 continue;
+-                        r = safe_atou_full(dent->d_name, 10, &i);
+-                        if (i < 1 || r < 0)
++
++                        r = safe_atoi(dent->d_name, &i);
++                        if (r < 0 || i <= 0)
+                                 continue;
+ 
+                         if (snprintf_ok(str, sizeof str, "%s/%s/address", slots, dent->d_name) &&

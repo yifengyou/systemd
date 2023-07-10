@@ -1,0 +1,33 @@
+From 2ab6e6ae9853e410310268efc0cea7f2276979ee Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 20 Oct 2020 17:12:42 +0200
+Subject: [PATCH] sd-hwdb: allow empty properties
+
+So far we didn't allow empty properties, but it makes sense to do so, for
+example to distinguish empty data from lack of data. It also makes it easy to
+override properties (back to the empty) value for specific cases.
+
+(cherry picked from commit afe87974dd57741f74dd87165b251886f24c859f)
+
+Related: #2005009
+---
+ src/hwdb/hwdb.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/src/hwdb/hwdb.c b/src/hwdb/hwdb.c
+index 317cad8a67..af085cdb75 100644
+--- a/src/hwdb/hwdb.c
++++ b/src/hwdb/hwdb.c
+@@ -462,10 +462,9 @@ static int insert_data(struct trie *trie, char **match_list, char *line,
+         while (isblank(line[0]) && isblank(line[1]))
+                 line++;
+ 
+-        if (isempty(line + 1) || isempty(value))
++        if (isempty(line + 1))
+                 return log_syntax(NULL, LOG_WARNING, filename, line_number, EINVAL,
+-                                  "Empty %s in \"%s=%s\", ignoring",
+-                                  isempty(line + 1) ? "key" : "value",
++                                  "Empty key in \"%s=%s\", ignoring",
+                                   line, value);
+ 
+         STRV_FOREACH(entry, match_list)

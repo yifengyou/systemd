@@ -1,0 +1,25 @@
+From 830bd662276ee117e65a4b3d541f77e8b172eafd Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Mon, 25 Jan 2021 16:19:56 +0100
+Subject: [PATCH] set core ulimit to 0 like on RHEL-7
+
+RHEL-only
+
+Resolves: #1905582
+---
+ src/core/system.conf.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/system.conf.in b/src/core/system.conf.in
+index 0d93fbf147..b4d6dfa15a 100644
+--- a/src/core/system.conf.in
++++ b/src/core/system.conf.in
+@@ -52,7 +52,7 @@
+ #DefaultLimitFSIZE=
+ #DefaultLimitDATA=
+ #DefaultLimitSTACK=
+-#DefaultLimitCORE=
++DefaultLimitCORE=0
+ #DefaultLimitRSS=
+ #DefaultLimitNOFILE=
+ #DefaultLimitAS=

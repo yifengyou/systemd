@@ -1,0 +1,114 @@
+From 5e6b616ed2708391752ba8c45f183ceb38573d7d Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 28 May 2019 21:38:41 +0200
+Subject: [PATCH] test-execute: use CPUSet too
+
+cpu_set_malloc() was the last user. It doesn't seem useful to keep
+it just to save the allocation of a few hundred bytes in a test, so
+it is dropped and a fixed maximum is allocated (1024 bytes).
+
+(cherry picked from commit 167a776dbe9d033523bd6881e5a695f2155dc321)
+
+Related: #1734787
+---
+ src/basic/cpu-set-util.c | 31 +------------------------------
+ src/basic/cpu-set-util.h |  3 +--
+ src/test/test-execute.c  | 13 ++++++-------
+ 3 files changed, 8 insertions(+), 39 deletions(-)
+
+diff --git a/src/basic/cpu-set-util.c b/src/basic/cpu-set-util.c
+index 1803539ac6..c297eab032 100644
+--- a/src/basic/cpu-set-util.c
++++ b/src/basic/cpu-set-util.c
+@@ -37,36 +37,7 @@ char* cpu_set_to_string(const CPUSet *a) {
+         return TAKE_PTR(str) ?: strdup("");
+ }
+ 
+-cpu_set_t* cpu_set_malloc(unsigned *ncpus) {
+-        cpu_set_t *c;
+-        unsigned n = 1024;
+-
+-        /* Allocates the cpuset in the right size */
+-
+-        for (;;) {
+-                c = CPU_ALLOC(n);
+-                if (!c)
+-                        return NULL;
+-
+-                if (sched_getaffinity(0, CPU_ALLOC_SIZE(n), c) >= 0) {
+-                        CPU_ZERO_S(CPU_ALLOC_SIZE(n), c);
+-
+-                        if (ncpus)
+-                                *ncpus = n;
+-
+-                        return c;
+-                }
+-
+-                CPU_FREE(c);
+-
+-                if (errno != EINVAL)
+-                        return NULL;
+-
+-                n *= 2;
+-        }
+-}
+-
+-static int cpu_set_realloc(CPUSet *cpu_set, unsigned ncpus) {
++int cpu_set_realloc(CPUSet *cpu_set, unsigned ncpus) {
+         size_t need;
+ 
+         assert(cpu_set);
+diff --git a/src/basic/cpu-set-util.h b/src/basic/cpu-set-util.h
+index 9b026aca09..b54e737110 100644
+--- a/src/basic/cpu-set-util.h
++++ b/src/basic/cpu-set-util.h
+@@ -12,8 +12,6 @@
+ DEFINE_TRIVIAL_CLEANUP_FUNC(cpu_set_t*, CPU_FREE);
+ #define _cleanup_cpu_free_ _cleanup_(CPU_FREEp)
+ 
+-cpu_set_t* cpu_set_malloc(unsigned *ncpus);
+-
+ /* This wraps the libc interface with a variable to keep the allocated size. */
+ typedef struct CPUSet {
+         cpu_set_t *set;
+@@ -30,6 +28,7 @@ static inline void cpu_set_reset(CPUSet *a) {
+ int cpu_set_add_all(CPUSet *a, const CPUSet *b);
+ 
+ char* cpu_set_to_string(const CPUSet *a);
++int cpu_set_realloc(CPUSet *cpu_set, unsigned ncpus);
+ int parse_cpu_set_full(
+                 const char *rvalue,
+                 CPUSet *cpu_set,
+diff --git a/src/test/test-execute.c b/src/test/test-execute.c
+index fa8efdddd2..6c22995b1e 100644
+--- a/src/test/test-execute.c
++++ b/src/test/test-execute.c
+@@ -144,13 +144,12 @@ static void test_exec_bindpaths(Manager *m) {
+ }
+ 
+ static void test_exec_cpuaffinity(Manager *m) {
+-        _cleanup_cpu_free_ cpu_set_t *c = NULL;
+-        unsigned n;
++        _cleanup_(cpu_set_reset) CPUSet c = {};
+ 
+-        assert_se(c = cpu_set_malloc(&n));
+-        assert_se(sched_getaffinity(0, CPU_ALLOC_SIZE(n), c) >= 0);
++        assert_se(cpu_set_realloc(&c, 8192) >= 0); /* just allocate the maximum possible size */
++        assert_se(sched_getaffinity(0, c.allocated, c.set) >= 0);
+ 
+-        if (CPU_ISSET_S(0, CPU_ALLOC_SIZE(n), c) == 0) {
++        if (!CPU_ISSET_S(0, c.allocated, c.set)) {
+                 log_notice("Cannot use CPU 0, skipping %s", __func__);
+                 return;
+         }
+@@ -158,8 +157,8 @@ static void test_exec_cpuaffinity(Manager *m) {
+         test(m, "exec-cpuaffinity1.service", 0, CLD_EXITED);
+         test(m, "exec-cpuaffinity2.service", 0, CLD_EXITED);
+ 
+-        if (CPU_ISSET_S(1, CPU_ALLOC_SIZE(n), c) == 0 ||
+-            CPU_ISSET_S(2, CPU_ALLOC_SIZE(n), c) == 0) {
++        if (!CPU_ISSET_S(1, c.allocated, c.set) ||
++            !CPU_ISSET_S(2, c.allocated, c.set)) {
+                 log_notice("Cannot use CPU 1 or 2, skipping remaining tests in %s", __func__);
+                 return;
+         }

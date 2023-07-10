@@ -1,0 +1,26 @@
+From 46fa8ff1a62e3334582a971cc6bbd9b8a16680d5 Mon Sep 17 00:00:00 2001
+From: Michael Biebl <biebl@debian.org>
+Date: Thu, 7 Mar 2019 12:02:53 +0100
+Subject: [PATCH] units: fix systemd.special man page reference in
+ system-update-cleanup.service
+
+(cherry picked from commit faab72d16b310c17be4b908cfe15eca122d16ae4)
+
+Resolves: #1871827
+---
+ units/system-update-cleanup.service | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/units/system-update-cleanup.service b/units/system-update-cleanup.service
+index 58baab3023..d5eca2546b 100644
+--- a/units/system-update-cleanup.service
++++ b/units/system-update-cleanup.service
+@@ -9,7 +9,7 @@
+ 
+ [Unit]
+ Description=Remove the Offline System Updates symlink
+-Documentation=man:systemd.special(5) man:systemd.offline-updates(7)
++Documentation=man:systemd.special(7) man:systemd.offline-updates(7)
+ After=system-update.target
+ DefaultDependencies=no
+ Conflicts=shutdown.target

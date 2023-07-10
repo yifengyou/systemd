@@ -1,0 +1,58 @@
+From 980add7d84084a474c6c604c0670743c2d1e624c Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Mon, 13 Mar 2023 14:32:20 +0100
+Subject: [PATCH] journald-server: always touch state file in signal handler
+
+`journalctl --relinquish-var` waits on that file, so we must create if
+even if nothing has really happened.
+
+RHEL-only
+
+Related: #2174645
+---
+ src/journal/journald-server.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/src/journal/journald-server.c b/src/journal/journald-server.c
+index aa70db95cc..4788ff78bb 100644
+--- a/src/journal/journald-server.c
++++ b/src/journal/journald-server.c
+@@ -1259,8 +1259,6 @@ static int dispatch_sigrtmin1(sd_event_source *es, const struct signalfd_siginfo
+ }
+ 
+ static void relinquish_var(Server *s) {
+-        int r;
+-
+         assert(s);
+ 
+         if (s->storage == STORAGE_NONE)
+@@ -1278,15 +1276,15 @@ static void relinquish_var(Server *s) {
+         if (unlink("/run/systemd/journal/flushed") < 0 && errno != ENOENT)
+                 log_warning_errno(errno, "Failed to unlink /run/systemd/journal/flushed, ignoring: %m")  ;
+ 
+-        r = write_timestamp_file_atomic("/run/systemd/journal/relinquished", now(CLOCK_MONOTONIC));
+-        if (r < 0)
+-                log_warning_errno(r, "Failed to write /run/systemd/journal/relinquished, ignoring: %m");
++        /* NOTE: We don't create our own state file here, because dispatch_sigrtmin2() has to do it anyway.
++         * But if this function is ever called from another place, the creation must be done here too. */
+ 
+         return;
+ }
+ 
+ static int dispatch_sigrtmin2(sd_event_source *es, const struct signalfd_siginfo *si, void *userdata) {
+         Server *s = userdata;
++        int r;
+ 
+         assert(s);
+         assert(si);
+@@ -1295,6 +1293,10 @@ static int dispatch_sigrtmin2(sd_event_source *es, const struct signalfd_siginfo
+ 
+         relinquish_var(s);
+ 
++        r = write_timestamp_file_atomic("/run/systemd/journal/relinquished", now(CLOCK_MONOTONIC));
++        if (r < 0)
++                log_warning_errno(r, "Failed to write /run/systemd/journal/relinquished, ignoring: %m");
++
+         return 0;
+ }
+ 

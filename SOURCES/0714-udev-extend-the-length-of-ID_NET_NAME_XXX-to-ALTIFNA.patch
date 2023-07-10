@@ -1,0 +1,170 @@
+From 9f59dca3868b1e934a2aac2d811c55ab33cca0eb Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 17 Dec 2019 11:01:35 +0900
+Subject: [PATCH] udev: extend the length of ID_NET_NAME_XXX= to ALTIFNAMSIZ
+
+(cherry picked from commit 78f8849f84ca0939796edb840e878a9d2e124a4d)
+
+Related: #2005008
+---
+ src/udev/net/link-config.c     |  5 ++++-
+ src/udev/udev-builtin-net_id.c | 33 +++++++++++++++++----------------
+ src/udev/udev-event.c          |  4 ++--
+ 3 files changed, 23 insertions(+), 19 deletions(-)
+
+diff --git a/src/udev/net/link-config.c b/src/udev/net/link-config.c
+index e5052f8f29..4de8ee7d7e 100644
+--- a/src/udev/net/link-config.c
++++ b/src/udev/net/link-config.c
+@@ -19,6 +19,7 @@
+ #include "path-util.h"
+ #include "proc-cmdline.h"
+ #include "random-util.h"
++#include "socket-util.h"
+ #include "stat-util.h"
+ #include "string-table.h"
+ #include "string-util.h"
+@@ -405,7 +406,7 @@ int link_config_apply(link_config_ctx *ctx, link_config *config,
+                 NamePolicy *policy;
+ 
+                 for (policy = config->name_policy;
+-                     !new_name && *policy != _NAMEPOLICY_INVALID; policy++) {
++                     *policy != _NAMEPOLICY_INVALID; policy++) {
+                         switch (*policy) {
+                                 case NAMEPOLICY_KERNEL:
+                                         respect_predictable = true;
+@@ -428,6 +429,8 @@ int link_config_apply(link_config_ctx *ctx, link_config *config,
+                                 default:
+                                         break;
+                         }
++                        if (ifname_valid(new_name))
++                                break;
+                 }
+         }
+ 
+diff --git a/src/udev/udev-builtin-net_id.c b/src/udev/udev-builtin-net_id.c
+index eafcbb64c5..386d74ca5e 100644
+--- a/src/udev/udev-builtin-net_id.c
++++ b/src/udev/udev-builtin-net_id.c
+@@ -90,6 +90,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
++#include <linux/if.h>
+ #include <linux/pci_regs.h>
+ 
+ #include "dirent-util.h"
+@@ -176,21 +177,21 @@ struct netnames {
+         bool mac_valid;
+ 
+         struct udev_device *pcidev;
+-        char pci_slot[IFNAMSIZ];
+-        char pci_path[IFNAMSIZ];
+-        char pci_onboard[IFNAMSIZ];
++        char pci_slot[ALTIFNAMSIZ];
++        char pci_path[ALTIFNAMSIZ];
++        char pci_onboard[ALTIFNAMSIZ];
+         const char *pci_onboard_label;
+ 
+-        char usb_ports[IFNAMSIZ];
+-        char bcma_core[IFNAMSIZ];
+-        char ccw_busid[IFNAMSIZ];
+-        char vio_slot[IFNAMSIZ];
+-        char platform_path[IFNAMSIZ];
++        char usb_ports[ALTIFNAMSIZ];
++        char bcma_core[ALTIFNAMSIZ];
++        char ccw_busid[ALTIFNAMSIZ];
++        char vio_slot[ALTIFNAMSIZ];
++        char platform_path[ALTIFNAMSIZ];
+ };
+ 
+ struct virtfn_info {
+         struct udev_device *physfn_pcidev;
+-        char suffix[IFNAMSIZ];
++        char suffix[ALTIFNAMSIZ];
+ };
+ 
+ static const NamingScheme* naming_scheme_from_name(const char *name) {
+@@ -887,7 +888,7 @@ static int builtin_net_id(struct udev_device *dev, int argc, char *argv[], bool
+ 
+         err = names_mac(dev, &names);
+         if (err >= 0 && names.mac_valid) {
+-                char str[IFNAMSIZ];
++                char str[ALTIFNAMSIZ];
+ 
+                 xsprintf(str, "%sx%02x%02x%02x%02x%02x%02x", prefix,
+                          names.mac[0], names.mac[1], names.mac[2],
+@@ -900,7 +901,7 @@ static int builtin_net_id(struct udev_device *dev, int argc, char *argv[], bool
+         /* get path names for Linux on System z network devices */
+         err = names_ccw(dev, &names);
+         if (err >= 0 && names.type == NET_CCW) {
+-                char str[IFNAMSIZ];
++                char str[ALTIFNAMSIZ];
+ 
+                 if (snprintf_ok(str, sizeof str, "%s%s", prefix, names.ccw_busid))
+                         udev_builtin_add_property(dev, test, "ID_NET_NAME_PATH", str);
+@@ -910,7 +911,7 @@ static int builtin_net_id(struct udev_device *dev, int argc, char *argv[], bool
+         /* get ibmveth/ibmvnic slot-based names. */
+         err = names_vio(dev, &names);
+         if (err >= 0 && names.type == NET_VIO) {
+-                char str[IFNAMSIZ];
++                char str[ALTIFNAMSIZ];
+ 
+                 if (snprintf_ok(str, sizeof str, "%s%s", prefix, names.vio_slot))
+                         udev_builtin_add_property(dev, test, "ID_NET_NAME_SLOT", str);
+@@ -920,7 +921,7 @@ static int builtin_net_id(struct udev_device *dev, int argc, char *argv[], bool
+         /* get ACPI path names for ARM64 platform devices */
+         err = names_platform(dev, &names, test);
+         if (err >= 0 && names.type == NET_PLATFORM) {
+-                char str[IFNAMSIZ];
++                char str[ALTIFNAMSIZ];
+ 
+                 if (snprintf_ok(str, sizeof str, "%s%s", prefix, names.platform_path))
+                         udev_builtin_add_property(dev, test, "ID_NET_NAME_PATH", str);
+@@ -934,7 +935,7 @@ static int builtin_net_id(struct udev_device *dev, int argc, char *argv[], bool
+ 
+         /* plain PCI device */
+         if (names.type == NET_PCI) {
+-                char str[IFNAMSIZ];
++                char str[ALTIFNAMSIZ];
+ 
+                 if (names.pci_onboard[0] &&
+                     snprintf_ok(str, sizeof str, "%s%s", prefix, names.pci_onboard))
+@@ -957,7 +958,7 @@ static int builtin_net_id(struct udev_device *dev, int argc, char *argv[], bool
+         /* USB device */
+         err = names_usb(dev, &names);
+         if (err >= 0 && names.type == NET_USB) {
+-                char str[IFNAMSIZ];
++                char str[ALTIFNAMSIZ];
+ 
+                 if (names.pci_path[0] &&
+                     snprintf_ok(str, sizeof str, "%s%s%s", prefix, names.pci_path, names.usb_ports))
+@@ -972,7 +973,7 @@ static int builtin_net_id(struct udev_device *dev, int argc, char *argv[], bool
+         /* Broadcom bus */
+         err = names_bcma(dev, &names);
+         if (err >= 0 && names.type == NET_BCMA) {
+-                char str[IFNAMSIZ];
++                char str[ALTIFNAMSIZ];
+ 
+                 if (names.pci_path[0] &&
+                     snprintf_ok(str, sizeof str, "%s%s%s", prefix, names.pci_path, names.bcma_core))
+diff --git a/src/udev/udev-event.c b/src/udev/udev-event.c
+index fd8406d959..19b100d4f8 100644
+--- a/src/udev/udev-event.c
++++ b/src/udev/udev-event.c
+@@ -816,13 +816,13 @@ out:
+ 
+ static int rename_netif(struct udev_event *event) {
+         struct udev_device *dev = event->dev;
+-        char name[IFNAMSIZ];
++        char name[ALTIFNAMSIZ];
+         const char *oldname;
+         int r;
+ 
+         oldname = udev_device_get_sysname(dev);
+ 
+-        strscpy(name, IFNAMSIZ, event->name);
++        strscpy(name, ALTIFNAMSIZ, event->name);
+ 
+         r = rtnl_set_link_name(&event->rtnl, udev_device_get_ifindex(dev), name);
+         if (r < 0)

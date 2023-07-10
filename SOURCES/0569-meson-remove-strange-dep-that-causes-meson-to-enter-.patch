@@ -1,0 +1,36 @@
+From 7fb2d86b58201341a582b739a5445821bec66eea Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 6 Nov 2019 12:44:39 +0100
+Subject: [PATCH] meson: remove strange dep that causes meson to enter infinite
+ loop
+
+The value is obviously bogus, but didn't seem to cause problems so far.
+With meson-0.52.0, it causes a hang. The number of aliases is always rather
+small (usually just one or two, possibly up to a dozen in a few cases), so
+even if this causes some looping, it is strange that it has such a huge impact.
+But let's just remove it.
+
+Fixes #13742.
+
+Tested with meson-0.52.0-1.module_f31+6771+f5d842eb.noarch,
+meson-0.51.1-1.fc29.noarch.
+
+(cherry picked from commit af336643a01d0b210b18312c253a50594ba54b0a)
+
+Resolves: #1970860
+---
+ man/meson.build | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/man/meson.build b/man/meson.build
+index ec05d73bc6..a953d34098 100644
+--- a/man/meson.build
++++ b/man/meson.build
+@@ -68,7 +68,6 @@ foreach tuple : xsltproc.found() ? manpages : []
+                 foreach htmlalias : htmlaliases
+                         link = custom_target(
+                                 htmlalias,
+-                                input : p2,
+                                 output : htmlalias,
+                                 command : ['ln', '-fs', html, '@OUTPUT@'])
+                         if want_html

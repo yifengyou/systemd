@@ -1,0 +1,62 @@
+From 9b7aa39e7db5a6446d3c034741e64cda1a9dd200 Mon Sep 17 00:00:00 2001
+From: Filipe Brandenburger <filbranden@google.com>
+Date: Mon, 25 Jun 2018 18:07:48 -0700
+Subject: [PATCH] resolvconf: fixes for the compatibility interface
+
+Also use compat_main() when called as `resolvconf`, since the interface
+is closer to that of `systemd-resolve`.
+
+Use a heap allocated string to set arg_ifname, since a stack allocated
+one would be lost after the function returns. (This last one broke the
+case where an interface name was suffixed with a dot, such as in
+`resolvconf -a tap0.dhcp`.)
+
+Tested:
+  $ build/resolvconf -a nonexistent.abc </etc/resolv.conf
+  Unknown interface 'nonexistent': No such device
+
+Fixes #9423.
+
+(cherry picked from commit 5a01b3f35d7b6182c78b6973db8d99bdabd4f9c3)
+
+Resolves: #1835594
+---
+ src/resolve/resolvconf-compat.c | 4 +++-
+ src/resolve/resolvectl.c        | 2 +-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/resolve/resolvconf-compat.c b/src/resolve/resolvconf-compat.c
+index d7e68003e6..0723458945 100644
+--- a/src/resolve/resolvconf-compat.c
++++ b/src/resolve/resolvconf-compat.c
+@@ -53,6 +53,8 @@ static int parse_nameserver(const char *string) {
+ 
+                 if (strv_push(&arg_set_dns, word) < 0)
+                         return log_oom();
++
++                word = NULL;
+         }
+ 
+         return 0;
+@@ -202,7 +204,7 @@ int resolvconf_parse_argv(int argc, char *argv[]) {
+ 
+         dot = strchr(argv[optind], '.');
+         if (dot) {
+-                iface = strndupa(argv[optind], dot - argv[optind]);
++                iface = strndup(argv[optind], dot - argv[optind]);
+                 log_debug("Ignoring protocol specifier '%s'.", dot + 1);
+         } else
+                 iface = argv[optind];
+diff --git a/src/resolve/resolvectl.c b/src/resolve/resolvectl.c
+index cf1ec323a4..355e5c62b1 100644
+--- a/src/resolve/resolvectl.c
++++ b/src/resolve/resolvectl.c
+@@ -3090,7 +3090,7 @@ int main(int argc, char **argv) {
+                 goto finish;
+         }
+ 
+-        if (streq(program_invocation_short_name, "systemd-resolve"))
++        if (STR_IN_SET(program_invocation_short_name, "systemd-resolve", "resolvconf"))
+                 r = compat_main(argc, argv, bus);
+         else
+                 r = native_main(argc, argv, bus);

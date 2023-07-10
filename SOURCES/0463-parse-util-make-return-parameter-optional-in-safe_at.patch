@@ -1,0 +1,31 @@
+From 91ed5edcdea79773f6918e739637521e47129b07 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 1 Jun 2020 17:10:27 +0200
+Subject: [PATCH] parse-util: make return parameter optional in
+ safe_atou16_full()
+
+All other safe_atoXYZ_full() functions have the parameter optional,
+let's make it optoinal here, too.
+
+(cherry picked from commit aa85e4d3cef8ca8436e480bce9fa4ce72876b636)
+
+Related: #1848373
+---
+ src/basic/parse-util.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/basic/parse-util.c b/src/basic/parse-util.c
+index 53d181dd60..7a7cefe6ff 100644
+--- a/src/basic/parse-util.c
++++ b/src/basic/parse-util.c
+@@ -559,7 +559,9 @@ int safe_atou16_full(const char *s, unsigned base, uint16_t *ret) {
+         if ((unsigned long) (uint16_t) l != l)
+                 return -ERANGE;
+ 
+-        *ret = (uint16_t) l;
++        if (ret)
++                *ret = (uint16_t) l;
++
+         return 0;
+ }
+ 

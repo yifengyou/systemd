@@ -1,0 +1,80 @@
+From a6d76bf2d21e01a2e031e204966d946925ecc3f6 Mon Sep 17 00:00:00 2001
+From: Jan Synacek <jsynacek@redhat.com>
+Date: Mon, 17 Aug 2020 14:29:04 +0200
+Subject: [PATCH] build: use simple project version in pkgconfig files
+
+Loosely based on commit a67c318df8800ba98d7361308937ed276dc73982.
+
+Resolves: #1862714
+---
+ meson.build                     | 2 ++
+ src/core/systemd.pc.in          | 2 +-
+ src/libsystemd/libsystemd.pc.in | 2 +-
+ src/libudev/libudev.pc.in       | 2 +-
+ src/udev/udev.pc.in             | 2 +-
+ 5 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 0ba3f924ea..65c1d0785e 100644
+--- a/meson.build
++++ b/meson.build
+@@ -27,12 +27,14 @@ endif
+ # names, sometimes. Not all variables are included in every
+ # set. Ugh, ugh, ugh!
+ conf = configuration_data()
++conf.set_quoted('PROJECT_VERSION', meson.project_version())
+ conf.set_quoted('PACKAGE_STRING',  meson.project_name() + ' ' + dist_version)
+ conf.set_quoted('PACKAGE_VERSION', dist_version)
+ 
+ substs = configuration_data()
+ substs.set('PACKAGE_URL',          'https://www.freedesktop.org/wiki/Software/systemd')
+ substs.set('PACKAGE_VERSION',      dist_version)
++substs.set('PROJECT_VERSION',      meson.project_version())
+ 
+ #####################################################################
+ 
+diff --git a/src/core/systemd.pc.in b/src/core/systemd.pc.in
+index 655773ea8a..a350737cf2 100644
+--- a/src/core/systemd.pc.in
++++ b/src/core/systemd.pc.in
+@@ -37,4 +37,4 @@ containeruidbasemax=@containeruidbasemax@
+ Name: systemd
+ Description: systemd System and Service Manager
+ URL: @PACKAGE_URL@
+-Version: @PACKAGE_VERSION@
++Version: @PROJECT_VERSION@
+diff --git a/src/libsystemd/libsystemd.pc.in b/src/libsystemd/libsystemd.pc.in
+index c861905b67..85d6ebf293 100644
+--- a/src/libsystemd/libsystemd.pc.in
++++ b/src/libsystemd/libsystemd.pc.in
+@@ -15,6 +15,6 @@ includedir=@includedir@
+ Name: systemd
+ Description: systemd Library
+ URL: @PACKAGE_URL@
+-Version: @PACKAGE_VERSION@
++Version: @PROJECT_VERSION@
+ Libs: -L${libdir} -lsystemd
+ Cflags: -I${includedir}
+diff --git a/src/libudev/libudev.pc.in b/src/libudev/libudev.pc.in
+index 69f5c6463e..40b340362e 100644
+--- a/src/libudev/libudev.pc.in
++++ b/src/libudev/libudev.pc.in
+@@ -14,6 +14,6 @@ includedir=@includedir@
+ 
+ Name: libudev
+ Description: Library to access udev device information
+-Version: @PACKAGE_VERSION@
++Version: @PROJECT_VERSION@
+ Libs: -L${libdir} -ludev
+ Cflags: -I${includedir}
+diff --git a/src/udev/udev.pc.in b/src/udev/udev.pc.in
+index e384a6f7c9..5acbb2d01a 100644
+--- a/src/udev/udev.pc.in
++++ b/src/udev/udev.pc.in
+@@ -1,5 +1,5 @@
+ Name: udev
+ Description: udev
+-Version: @PACKAGE_VERSION@
++Version: @PROJECT_VERSION@
+ 
+ udevdir=@udevlibexecdir@

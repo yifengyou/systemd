@@ -1,0 +1,30 @@
+From 1d8931bb5d65e9f77b470835786a97f814bd93ea Mon Sep 17 00:00:00 2001
+From: Dan Streetman <ddstreet@canonical.com>
+Date: Fri, 23 Oct 2020 15:50:28 -0400
+Subject: [PATCH] test: ignore ENOMEDIUM error from sd_pid_get_cgroup()
+
+Ubuntu builds on the Launchpad infrastructure run inside a chroot that does
+not have the sysfs cgroup dirs mounted, so this call will return ENOMEDIUM
+from cg_unified_cached() during the build-time testing, for example when
+building the package in a Launchpad PPA.
+
+(cherry picked from commit 352ab9d74049b4ac694fdba1a6e67339f12ded93)
+
+Related: #2175623
+---
+ src/libsystemd/sd-login/test-login.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/libsystemd/sd-login/test-login.c b/src/libsystemd/sd-login/test-login.c
+index 60ef889ec0..d24a04ccc8 100644
+--- a/src/libsystemd/sd-login/test-login.c
++++ b/src/libsystemd/sd-login/test-login.c
+@@ -71,7 +71,7 @@ static void test_login(void) {
+ 
+         r = sd_pid_get_cgroup(0, &cgroup);
+         log_info("sd_pid_get_cgroup(0, …) → %s / \"%s\"", e(r), strnull(cgroup));
+-        assert_se(r == 0);
++        assert_se(IN_SET(r, 0, -ENOMEDIUM));
+ 
+         r = sd_uid_get_display(u2, &display_session);
+         log_info("sd_uid_get_display("UID_FMT", …) → %s / \"%s\"", u2, e(r), strnull(display_session));

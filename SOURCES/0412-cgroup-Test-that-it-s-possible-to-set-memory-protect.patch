@@ -1,0 +1,58 @@
+From ef4157dab3d267c33ec2a06ae9bb5e4c87f785a6 Mon Sep 17 00:00:00 2001
+From: Chris Down <chris@chrisdown.name>
+Date: Fri, 3 May 2019 08:40:11 -0400
+Subject: [PATCH] cgroup: Test that it's possible to set memory protection to 0
+ again
+
+The previous commit fixes this up, and this should prevent it
+regressing.
+
+(cherry picked from commit 465ace74d9820824968ab5e82c81e42c2f1894b0)
+
+Related: #1763435
+---
+ src/test/test-cgroup-unit-default.c | 6 +++---
+ test/dml-passthrough-set-ml.service | 2 +-
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/test/test-cgroup-unit-default.c b/src/test/test-cgroup-unit-default.c
+index 54f7d50c45..1938609cee 100644
+--- a/src/test/test-cgroup-unit-default.c
++++ b/src/test/test-cgroup-unit-default.c
+@@ -39,7 +39,7 @@ static int test_default_memory_low(void) {
+          * 1. dml-passthrough.slice sets MemoryLow=100. This should not affect its children, as only
+          *    DefaultMemoryLow is propagated, not MemoryLow. As such, all leaf services should end up with
+          *    memory.low as 50, inherited from dml.slice, *except* for dml-passthrough-set-ml.service, which
+-         *    should have the value of 25, as it has MemoryLow explicitly set.
++         *    should have the value of 0, as it has MemoryLow explicitly set.
+          *
+          *                                                  ┌───────────┐
+          *                                                  │ dml.slice │
+@@ -49,7 +49,7 @@ static int test_default_memory_low(void) {
+          *                                            │ dml-passthrough.slice │
+          *                                            └───────────┬───────────┘
+          *                    ┌───────────────────────────────────┼───────────────────────────────────┐
+-         *             no new settings                   DefaultMemoryLow=15                     MemoryLow=25
++         *             no new settings                   DefaultMemoryLow=15                     MemoryLow=0
+          *    ┌───────────────┴───────────────┐  ┌────────────────┴────────────────┐  ┌───────────────┴────────────────┐
+          *    │ dml-passthrough-empty.service │  │ dml-passthrough-set-dml.service │  │ dml-passthrough-set-ml.service │
+          *    └───────────────────────────────┘  └─────────────────────────────────┘  └────────────────────────────────┘
+@@ -122,7 +122,7 @@ static int test_default_memory_low(void) {
+         assert_se(unit_get_ancestor_memory_low(dml_passthrough) == 100);
+         assert_se(unit_get_ancestor_memory_low(dml_passthrough_empty) == dml_tree_default);
+         assert_se(unit_get_ancestor_memory_low(dml_passthrough_set_dml) == 50);
+-        assert_se(unit_get_ancestor_memory_low(dml_passthrough_set_ml) == 25);
++        assert_se(unit_get_ancestor_memory_low(dml_passthrough_set_ml) == 0);
+ 
+         assert_se(unit_get_ancestor_memory_low(dml_override) == dml_tree_default);
+         assert_se(unit_get_ancestor_memory_low(dml_override_empty) == 10);
+diff --git a/test/dml-passthrough-set-ml.service b/test/dml-passthrough-set-ml.service
+index 2abd591389..2e568b5deb 100644
+--- a/test/dml-passthrough-set-ml.service
++++ b/test/dml-passthrough-set-ml.service
+@@ -5,4 +5,4 @@ Description=DML passthrough set ML service
+ Slice=dml-passthrough.slice
+ Type=oneshot
+ ExecStart=/bin/true
+-MemoryLow=25
++MemoryLow=0

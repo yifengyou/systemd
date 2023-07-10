@@ -1,0 +1,61 @@
+From 9aa12f2f564c208c4c1eaef613d18d1c0b481a16 Mon Sep 17 00:00:00 2001
+From: Martin Wilck <mwilck@suse.com>
+Date: Mon, 23 Apr 2018 21:58:12 +0200
+Subject: [PATCH] test/udev-test.pl: create rules only once
+
+It's not necessary to write the rules for every udev run, as we
+now may have many (rather than just 2) per test.
+
+(cherry picked from commit af7ee3eae689f9c31b49ea13758ad9c901918ce3)
+
+Related: #1642728
+---
+ test/udev-test.pl | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index bd5401da75..8b5a97ad61 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -2069,14 +2069,18 @@ EOF
+         },
+ );
+ 
+-sub udev {
+-        my ($action, $devpath, $rules) = @_;
++sub create_rules {
++        my ($rules) = @_;
+ 
+         # create temporary rules
+         system("mkdir", "-p", "$udev_rules_dir");
+         open CONF, ">$udev_rules" || die "unable to create rules file: $udev_rules";
+         print CONF $$rules;
+         close CONF;
++}
++
++sub udev {
++        my ($action, $devpath) = @_;
+ 
+         if ($valgrind > 0) {
+                 return system("$udev_bin_valgrind $action $devpath");
+@@ -2259,9 +2263,10 @@ sub run_test {
+         my @devices = @{$rules->{devices}};
+ 
+         print "TEST $number: $rules->{desc}\n";
++        create_rules(\$rules->{rules});
+         foreach my $dev (@devices) {
+                 print "device \'$dev->{devpath}\' expecting node/link \'$dev->{exp_name}\'\n";
+-                $rc = udev("add", $dev->{devpath}, \$rules->{rules});
++                $rc = udev("add", $dev->{devpath});
+                 if ($rc != 0) {
+                         print "$udev_bin add failed with code $rc\n";
+                         $error++;
+@@ -2278,7 +2283,7 @@ sub run_test {
+         }
+ 
+         foreach my $dev (@devices) {
+-                $rc = udev("remove", $dev->{devpath}, \$rules->{rules});
++                $rc = udev("remove", $dev->{devpath});
+                 if ($rc != 0) {
+                         print "$udev_bin remove failed with code $rc\n";
+                         $error++;

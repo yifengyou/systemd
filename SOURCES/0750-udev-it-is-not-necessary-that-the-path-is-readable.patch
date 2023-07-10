@@ -1,0 +1,25 @@
+From 100324ef0d911913e09db71e030a5ba137ac357e Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Wed, 7 Apr 2021 19:19:45 +0900
+Subject: [PATCH] udev: it is not necessary that the path is readable
+
+Related: #1939914
+
+(cherry picked from commit 70c35e4bfd64f24c7cb3536bdf63af537e0f2971)
+---
+ src/udev/udev-builtin-net_id.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/udev/udev-builtin-net_id.c b/src/udev/udev-builtin-net_id.c
+index 816661fb93..ba7638fcb8 100644
+--- a/src/udev/udev-builtin-net_id.c
++++ b/src/udev/udev-builtin-net_id.c
+@@ -502,7 +502,7 @@ static int dev_pci_slot(struct udev_device *dev, struct netnames *names) {
+ 
+                                 if (safe_atoi(attr, &function_id) >= 0 &&
+                                     asprintf(&str, "%s/%08x/", slots, function_id) >= 0 &&
+-                                    access(str, R_OK) == 0) {
++                                    access(str, F_OK) == 0) {
+                                         hotplug_slot = function_id;
+                                         domain = 0;
+                                 } else

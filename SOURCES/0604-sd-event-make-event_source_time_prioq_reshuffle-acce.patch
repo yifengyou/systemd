@@ -1,0 +1,40 @@
+From bf370d05bbc8c4d91c8c2b455116e59a24e48911 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 15 Jun 2021 02:03:02 +0900
+Subject: [PATCH] sd-event: make event_source_time_prioq_reshuffle() accept all
+ event source type
+
+But it does nothing for an event source which is neither a timer nor
+ratelimited.
+
+(cherry picked from commit 5c08c7ab23dbf02aaf4e4bbae8e08a195da230a4)
+
+Related: #1968528
+---
+ src/libsystemd/sd-event/sd-event.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/src/libsystemd/sd-event/sd-event.c b/src/libsystemd/sd-event/sd-event.c
+index f675c09d84..ae46392901 100644
+--- a/src/libsystemd/sd-event/sd-event.c
++++ b/src/libsystemd/sd-event/sd-event.c
+@@ -954,14 +954,15 @@ static void event_source_time_prioq_reshuffle(sd_event_source *s) {
+         assert(s);
+ 
+         /* Called whenever the event source's timer ordering properties changed, i.e. time, accuracy,
+-         * pending, enable state. Makes sure the two prioq's are ordered properly again. */
++         * pending, enable state, and ratelimiting state. Makes sure the two prioq's are ordered
++         * properly again. */
+ 
+         if (s->ratelimited)
+                 d = &s->event->monotonic;
+-        else {
+-                assert(EVENT_SOURCE_IS_TIME(s->type));
++        else if (EVENT_SOURCE_IS_TIME(s->type))
+                 assert_se(d = event_get_clock_data(s->event, s->type));
+-        }
++        else
++                return; /* no-op for an event source which is neither a timer nor ratelimited. */
+ 
+         prioq_reshuffle(d->earliest, s, &s->earliest_index);
+         prioq_reshuffle(d->latest, s, &s->latest_index);

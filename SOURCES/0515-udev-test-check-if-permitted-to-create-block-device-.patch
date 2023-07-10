@@ -1,0 +1,31 @@
+From 57e9ee0f19098d56995955f6692437affdf94041 Mon Sep 17 00:00:00 2001
+From: Alexey Bogdanenko <alexey@bogdanenko.com>
+Date: Tue, 11 Dec 2018 16:55:34 +0300
+Subject: [PATCH] udev-test: check if permitted to create block device nodes
+
+(cherry picked from commit dbfbc6c4e34366033cb340e8b0c3cbca683ff6f5)
+
+Related: #1642728
+---
+ test/udev-test.pl | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index eb76ebd72e..957cda541c 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1554,6 +1554,14 @@ sub udev_setup {
+                 return 0;
+         }
+ 
++        # check if we are permitted to create block device nodes
++        my $block_device_filename = $udev_dev . "/sda";
++        if (system("mknod", $block_device_filename, "b", "8", "0")) {
++                warn "unable to create $block_device_filename";
++                return 0;
++        }
++        unlink $block_device_filename;
++
+         system("cp", "-r", "test/sys/", $udev_sys) && die "unable to copy test/sys";
+ 
+         system("rm", "-rf", "$udev_run");

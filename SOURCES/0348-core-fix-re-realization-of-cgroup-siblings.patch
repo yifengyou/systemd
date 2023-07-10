@@ -1,0 +1,62 @@
+From ca843e40587fb87fe20bd0561b6ccb42aaafc4ab Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 9 Jan 2020 17:30:31 +0100
+Subject: [PATCH] core: fix re-realization of cgroup siblings
+
+This is a fix-up for eef85c4a3f8054d29383a176f6cebd1ef3a15b9a which
+broke this.
+
+Tracked down by @w-simon
+
+Fixes: #14453
+(cherry picked from commit 65f6b6bdcb500c576674b5838e4cc4c35e18bfde)
+
+Related: #1818054
+---
+ src/core/cgroup.c | 21 +++++++--------------
+ 1 file changed, 7 insertions(+), 14 deletions(-)
+
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index 664d269483..3f7665b755 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -1796,32 +1796,25 @@ unsigned manager_dispatch_cgroup_realize_queue(Manager *m) {
+ static void unit_add_siblings_to_cgroup_realize_queue(Unit *u) {
+         Unit *slice;
+ 
+-        /* This adds the siblings of the specified unit and the
+-         * siblings of all parent units to the cgroup queue. (But
+-         * neither the specified unit itself nor the parents.) */
++        /* This adds the siblings of the specified unit and the siblings of all parent units to the cgroup
++         * queue. (But neither the specified unit itself nor the parents.) */
+ 
+         while ((slice = UNIT_DEREF(u->slice))) {
+                 Iterator i;
+                 Unit *m;
+                 void *v;
+ 
+-                HASHMAP_FOREACH_KEY(v, m, u->dependencies[UNIT_BEFORE], i) {
+-                        if (m == u)
+-                                continue;
+-
+-                        /* Skip units that have a dependency on the slice
+-                         * but aren't actually in it. */
++                HASHMAP_FOREACH_KEY(v, m, slice->dependencies[UNIT_BEFORE], i) {
++                        /* Skip units that have a dependency on the slice but aren't actually in it. */
+                         if (UNIT_DEREF(m->slice) != slice)
+                                 continue;
+ 
+-                        /* No point in doing cgroup application for units
+-                         * without active processes. */
++                        /* No point in doing cgroup application for units without active processes. */
+                         if (UNIT_IS_INACTIVE_OR_FAILED(unit_active_state(m)))
+                                 continue;
+ 
+-                        /* If the unit doesn't need any new controllers
+-                         * and has current ones realized, it doesn't need
+-                         * any changes. */
++                        /* If the unit doesn't need any new controllers and has current ones realized, it
++                         * doesn't need any changes. */
+                         if (unit_has_mask_realized(m,
+                                                    unit_get_target_mask(m),
+                                                    unit_get_enable_mask(m),

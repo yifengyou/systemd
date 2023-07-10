@@ -1,0 +1,26 @@
+From 91dddaafe0b6fcc9c0a57d2feef599b82ce2a146 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Thu, 26 Mar 2020 13:34:20 +0100
+Subject: [PATCH] device: make sure we emit PropertiesChanged signal once we
+ set sysfs
+
+(cherry picked from commit 7c4d139485139eae95b17a1d54cb51ae958abd70)
+
+Related: #1793533
+---
+ src/core/device.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/core/device.c b/src/core/device.c
+index a2d00a0fbe..21fe3802bd 100644
+--- a/src/core/device.c
++++ b/src/core/device.c
+@@ -81,6 +81,8 @@ static int device_set_sysfs(Device *d, const char *sysfs) {
+         }
+ 
+         d->sysfs = TAKE_PTR(copy);
++        unit_add_to_dbus_queue(UNIT(d));
++
+         return 0;
+ }
+ 

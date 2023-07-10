@@ -1,0 +1,148 @@
+From e7077e3a551a3faedfcc3d007de6a72fb5e1df62 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Tue, 20 Nov 2018 01:20:32 +0100
+Subject: [PATCH] tests: add a fuzzer for journald streams
+
+(cherry picked from commit 9541f5ff5c637bb1b3e3c69706cb73e68ff06813)
+
+Resolves: #1764560
+---
+ src/fuzz/fuzz-journald-stream.c      | 35 ++++++++++++++++++++++++++++
+ src/fuzz/fuzz-journald.c             | 10 +++++---
+ src/fuzz/meson.build                 |  6 +++++
+ src/journal/journald-stream.c        |  4 ++--
+ src/journal/journald-stream.h        |  2 ++
+ test/fuzz/fuzz-journald-stream/basic |  8 +++++++
+ 6 files changed, 60 insertions(+), 5 deletions(-)
+ create mode 100644 src/fuzz/fuzz-journald-stream.c
+ create mode 100644 test/fuzz/fuzz-journald-stream/basic
+
+diff --git a/src/fuzz/fuzz-journald-stream.c b/src/fuzz/fuzz-journald-stream.c
+new file mode 100644
+index 0000000000..247c0889bc
+--- /dev/null
++++ b/src/fuzz/fuzz-journald-stream.c
+@@ -0,0 +1,35 @@
++/* SPDX-License-Identifier: LGPL-2.1+ */
++
++#include <linux/sockios.h>
++
++#include "fd-util.h"
++#include "fuzz.h"
++#include "fuzz-journald.h"
++#include "journald-stream.h"
++
++static int stream_fds[2] = { -1, -1 };
++
++int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
++        Server s;
++        StdoutStream *stream;
++        int v;
++
++        if (size == 0)
++                return 0;
++
++        if (!getenv("SYSTEMD_LOG_LEVEL"))
++                log_set_max_level(LOG_CRIT);
++
++        assert_se(socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK, 0, stream_fds) >= 0);
++        dummy_server_init(&s, NULL, 0);
++        assert_se(stdout_stream_install(&s, stream_fds[0], &stream) >= 0);
++        assert_se(write(stream_fds[1], data, size) == (ssize_t) size);
++        while (ioctl(stream_fds[0], SIOCINQ, &v) == 0 && v)
++                sd_event_run(s.event, (uint64_t) -1);
++        if (s.n_stdout_streams)
++                stdout_stream_destroy(stream);
++        server_done(&s);
++        stream_fds[1] = safe_close(stream_fds[1]);
++
++        return 0;
++}
+diff --git a/src/fuzz/fuzz-journald.c b/src/fuzz/fuzz-journald.c
+index 0659b92ba3..950e885cae 100644
+--- a/src/fuzz/fuzz-journald.c
++++ b/src/fuzz/fuzz-journald.c
+@@ -15,11 +15,15 @@ void dummy_server_init(Server *s, const uint8_t *buffer, size_t size) {
+                 .hostname_fd = -1,
+                 .notify_fd = -1,
+                 .storage = STORAGE_NONE,
++                .line_max = 64,
+         };
+         assert_se(sd_event_default(&s->event) >= 0);
+-        s->buffer = memdup_suffix0(buffer, size);
+-        assert_se(s->buffer);
+-        s->buffer_size = size + 1;
++
++        if (buffer) {
++                s->buffer = memdup_suffix0(buffer, size);
++                assert_se(s->buffer);
++                s->buffer_size = size + 1;
++        }
+ }
+ 
+ void fuzz_journald_processing_function(
+diff --git a/src/fuzz/meson.build b/src/fuzz/meson.build
+index 897c02e4ae..eea9117360 100644
+--- a/src/fuzz/meson.build
++++ b/src/fuzz/meson.build
+@@ -51,6 +51,12 @@ fuzzers += [
+           libshared],
+          [libselinux]],
+ 
++        [['src/fuzz/fuzz-journald-stream.c',
++          'src/fuzz/fuzz-journald.c'],
++         [libjournal_core,
++          libshared],
++         [libselinux]],
++
+         [['src/fuzz/fuzz-journald-syslog.c',
+           'src/fuzz/fuzz-journald.c'],
+          [libjournal_core,
+diff --git a/src/journal/journald-stream.c b/src/journal/journald-stream.c
+index dbf3503a82..6f8a4011ff 100644
+--- a/src/journal/journald-stream.c
++++ b/src/journal/journald-stream.c
+@@ -125,7 +125,7 @@ void stdout_stream_free(StdoutStream *s) {
+ 
+ DEFINE_TRIVIAL_CLEANUP_FUNC(StdoutStream*, stdout_stream_free);
+ 
+-static void stdout_stream_destroy(StdoutStream *s) {
++void stdout_stream_destroy(StdoutStream *s) {
+         if (!s)
+                 return;
+ 
+@@ -534,7 +534,7 @@ terminate:
+         return 0;
+ }
+ 
+-static int stdout_stream_install(Server *s, int fd, StdoutStream **ret) {
++int stdout_stream_install(Server *s, int fd, StdoutStream **ret) {
+         _cleanup_(stdout_stream_freep) StdoutStream *stream = NULL;
+         sd_id128_t id;
+         int r;
+diff --git a/src/journal/journald-stream.h b/src/journal/journald-stream.h
+index bc5622ab3b..487376e763 100644
+--- a/src/journal/journald-stream.h
++++ b/src/journal/journald-stream.h
+@@ -10,4 +10,6 @@ int server_open_stdout_socket(Server *s);
+ int server_restore_streams(Server *s, FDSet *fds);
+ 
+ void stdout_stream_free(StdoutStream *s);
++int stdout_stream_install(Server *s, int fd, StdoutStream **ret);
++void stdout_stream_destroy(StdoutStream *s);
+ void stdout_stream_send_notify(StdoutStream *s);
+diff --git a/test/fuzz/fuzz-journald-stream/basic b/test/fuzz/fuzz-journald-stream/basic
+new file mode 100644
+index 0000000000..a088f1a539
+--- /dev/null
++++ b/test/fuzz/fuzz-journald-stream/basic
+@@ -0,0 +1,8 @@
++
++
++6
++1
++0
++0
++0
++hey
+\ No newline at end of file

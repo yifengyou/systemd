@@ -1,0 +1,40 @@
+From 9dbb6564826a0def39a77ad292aecde75537d164 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 14:49:36 +0200
+Subject: [PATCH] core: accept system mode emergency action specifiers with a
+ warning
+
+Before we would only accept those "system" values, so there wasn't other
+chocie. Let's provide backwards compatiblity in case somebody made use of
+this functionality in user mode.
+
+v2: use 'exit-force' not 'exit'
+v3: use error value in log_syntax
+(cherry picked from commit 469f76f170db39c72578e869ec7c087bb43f9350)
+
+Related: #1860899
+---
+ src/core/load-fragment.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index c102ffb9f0..c0b1fd4f91 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -4280,6 +4280,16 @@ int config_parse_emergency_action(
+ 
+         r = parse_emergency_action(rvalue, MANAGER_IS_SYSTEM(m), x);
+         if (r < 0) {
++                if (r == -EOPNOTSUPP && MANAGER_IS_USER(m)) {
++                        /* Compat mode: remove for systemd 241. */
++
++                        log_syntax(unit, LOG_INFO, filename, line, r,
++                                   "%s= in user mode specified as \"%s\", using \"exit-force\" instead.",
++                                   lvalue, rvalue);
++                        *x = EMERGENCY_ACTION_EXIT_FORCE;
++                        return 0;
++                }
++
+                 if (r == -EOPNOTSUPP)
+                         log_syntax(unit, LOG_ERR, filename, line, r,
+                                    "%s= specified as %s mode action, ignoring: %s",

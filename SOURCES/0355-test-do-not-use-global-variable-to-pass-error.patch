@@ -1,0 +1,58 @@
+From 35e9e01b2879854a2adb8d571d0204990cad38d9 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Fri, 14 Sep 2018 13:25:02 +0900
+Subject: [PATCH] test: do not use global variable to pass error
+
+(cherry picked from commit 0013fac248a15be3acce84c17a65e3ae0377294b)
+
+Resolves: #1823767
+---
+ test/TEST-21-SYSUSERS/test.sh | 1 +
+ test/test-functions           | 8 +++++---
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/test/TEST-21-SYSUSERS/test.sh b/test/TEST-21-SYSUSERS/test.sh
+index 73cbe10b69..b1049e720d 100755
+--- a/test/TEST-21-SYSUSERS/test.sh
++++ b/test/TEST-21-SYSUSERS/test.sh
+@@ -15,6 +15,7 @@ prepare_testdir() {
+         for i in $1.initial-{passwd,group,shadow}; do
+                 test -f $i && cp $i $TESTDIR/etc/${i#*.initial-}
+         done
++        return 0
+ }
+ 
+ preprocess() {
+diff --git a/test/test-functions b/test/test-functions
+index fe25a501da..da83891f46 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -449,7 +449,7 @@ EOF
+ }
+ 
+ check_result_nspawn() {
+-    ret=1
++    local ret=1
+     [[ -e $TESTDIR/$1/testok ]] && ret=0
+     [[ -f $TESTDIR/$1/failed ]] && cp -a $TESTDIR/$1/failed $TESTDIR
+     cp -a $TESTDIR/$1/var/log/journal $TESTDIR
+@@ -462,7 +462,7 @@ check_result_nspawn() {
+ 
+ # can be overridden in specific test
+ check_result_qemu() {
+-    ret=1
++    local ret=1
+     mkdir -p $TESTDIR/root
+     mount ${LOOPDEV}p1 $TESTDIR/root
+     [[ -e $TESTDIR/root/testok ]] && ret=0
+@@ -1527,7 +1527,9 @@ do_test() {
+         case $1 in
+             --run)
+                 echo "TEST RUN: $TEST_DESCRIPTION"
+-                if test_run; then
++                test_run
++                ret=$?
++                if (( $ret == 0 )); then
+                     echo "TEST RUN: $TEST_DESCRIPTION [OK]"
+                 else
+                     echo "TEST RUN: $TEST_DESCRIPTION [FAILED]"

@@ -1,0 +1,172 @@
+From b276c85200786add6c86b6c1fedc888c71ffe5db Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Sat, 17 Nov 2018 13:01:09 +0100
+Subject: [PATCH] tests: introduce dummy_server_init and use it in all journald
+ fuzzers
+
+(cherry picked from commit ed62712dc6fb236845c489a7f386c7aff0ec31d6)
+
+Resolves: #1764560
+---
+ src/fuzz/fuzz-journald-audit.c | 18 +++---------------
+ src/fuzz/fuzz-journald-kmsg.c  | 20 ++++----------------
+ src/fuzz/fuzz-journald.c       | 26 +++++++++++++++++++-------
+ src/fuzz/fuzz-journald.h       |  2 ++
+ src/fuzz/meson.build           |  6 ++++--
+ 5 files changed, 32 insertions(+), 40 deletions(-)
+
+diff --git a/src/fuzz/fuzz-journald-audit.c b/src/fuzz/fuzz-journald-audit.c
+index fe401c0d98..3f3ce7e8ee 100644
+--- a/src/fuzz/fuzz-journald-audit.c
++++ b/src/fuzz/fuzz-journald-audit.c
+@@ -1,26 +1,14 @@
+ /* SPDX-License-Identifier: LGPL-2.1+ */
+ 
+ #include "fuzz.h"
++#include "fuzz-journald.h"
+ #include "journald-audit.h"
+ 
+ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+         Server s;
+-        _cleanup_free_ char *buffer = NULL;
+ 
+-        s = (Server) {
+-                .syslog_fd = -1,
+-                .native_fd = -1,
+-                .stdout_fd = -1,
+-                .dev_kmsg_fd = -1,
+-                .audit_fd = -1,
+-                .hostname_fd = -1,
+-                .notify_fd = -1,
+-                .storage = STORAGE_NONE,
+-        };
+-        assert_se(sd_event_default(&s.event) >= 0);
+-        buffer = memdup_suffix0(data, size);
+-        assert_se(buffer);
+-        process_audit_string(&s, 0, buffer, size);
++        dummy_server_init(&s, data, size);
++        process_audit_string(&s, 0, s.buffer, size);
+         server_done(&s);
+ 
+         return 0;
+diff --git a/src/fuzz/fuzz-journald-kmsg.c b/src/fuzz/fuzz-journald-kmsg.c
+index e2611c6d45..f7426c8400 100644
+--- a/src/fuzz/fuzz-journald-kmsg.c
++++ b/src/fuzz/fuzz-journald-kmsg.c
+@@ -1,29 +1,17 @@
+ /* SPDX-License-Identifier: LGPL-2.1+ */
+ 
+ #include "fuzz.h"
++#include "fuzz-journald.h"
+ #include "journald-kmsg.h"
+ 
+ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+-        Server s = {};
+-        _cleanup_free_ char *buffer = NULL;
++        Server s;
+ 
+         if (size == 0)
+                 return 0;
+ 
+-        s = (Server) {
+-                .syslog_fd = -1,
+-                .native_fd = -1,
+-                .stdout_fd = -1,
+-                .dev_kmsg_fd = -1,
+-                .audit_fd = -1,
+-                .hostname_fd = -1,
+-                .notify_fd = -1,
+-                .storage = STORAGE_NONE,
+-        };
+-        assert_se(sd_event_default(&s.event) >= 0);
+-        buffer = memdup(data, size);
+-        assert_se(buffer);
+-        dev_kmsg_record(&s, buffer, size);
++        dummy_server_init(&s, data, size);
++        dev_kmsg_record(&s, s.buffer, size);
+         server_done(&s);
+ 
+         return 0;
+diff --git a/src/fuzz/fuzz-journald.c b/src/fuzz/fuzz-journald.c
+index f271d7f2fe..0659b92ba3 100644
+--- a/src/fuzz/fuzz-journald.c
++++ b/src/fuzz/fuzz-journald.c
+@@ -5,12 +5,29 @@
+ #include "journald-server.h"
+ #include "sd-event.h"
+ 
++void dummy_server_init(Server *s, const uint8_t *buffer, size_t size) {
++        *s = (Server) {
++                .syslog_fd = -1,
++                .native_fd = -1,
++                .stdout_fd = -1,
++                .dev_kmsg_fd = -1,
++                .audit_fd = -1,
++                .hostname_fd = -1,
++                .notify_fd = -1,
++                .storage = STORAGE_NONE,
++        };
++        assert_se(sd_event_default(&s->event) >= 0);
++        s->buffer = memdup_suffix0(buffer, size);
++        assert_se(s->buffer);
++        s->buffer_size = size + 1;
++}
++
+ void fuzz_journald_processing_function(
+                 const uint8_t *data,
+                 size_t size,
+                 void (*f)(Server *s, const char *buf, size_t raw_len, const struct ucred *ucred, const struct timeval *tv, const char *label, size_t label_len)
+         ) {
+-        Server s = {};
++        Server s;
+         char *label = NULL;
+         size_t label_len = 0;
+         struct ucred *ucred = NULL;
+@@ -19,12 +36,7 @@ void fuzz_journald_processing_function(
+         if (size == 0)
+                 return;
+ 
+-        assert_se(sd_event_default(&s.event) >= 0);
+-        s.syslog_fd = s.native_fd = s.stdout_fd = s.dev_kmsg_fd = s.audit_fd = s.hostname_fd = s.notify_fd = -1;
+-        s.buffer = memdup_suffix0(data, size);
+-        assert_se(s.buffer);
+-        s.buffer_size = size + 1;
+-        s.storage = STORAGE_NONE;
++        dummy_server_init(&s, data, size);
+         (*f)(&s, s.buffer, size, ucred, tv, label, label_len);
+         server_done(&s);
+ }
+diff --git a/src/fuzz/fuzz-journald.h b/src/fuzz/fuzz-journald.h
+index e9d32a74aa..77e3b0c064 100644
+--- a/src/fuzz/fuzz-journald.h
++++ b/src/fuzz/fuzz-journald.h
+@@ -3,6 +3,8 @@
+ 
+ #include "journald-server.h"
+ 
++void dummy_server_init(Server *s, const uint8_t *buffer, size_t size);
++
+ void fuzz_journald_processing_function(
+                 const uint8_t *data,
+                 size_t size,
+diff --git a/src/fuzz/meson.build b/src/fuzz/meson.build
+index 5548da3822..897c02e4ae 100644
+--- a/src/fuzz/meson.build
++++ b/src/fuzz/meson.build
+@@ -33,12 +33,14 @@ fuzzers += [
+           libshared],
+          [libmount]],
+ 
+-        [['src/fuzz/fuzz-journald-audit.c'],
++        [['src/fuzz/fuzz-journald-audit.c',
++          'src/fuzz/fuzz-journald.c'],
+          [libjournal_core,
+           libshared],
+          [libselinux]],
+ 
+-        [['src/fuzz/fuzz-journald-kmsg.c'],
++        [['src/fuzz/fuzz-journald-kmsg.c',
++          'src/fuzz/fuzz-journald.c'],
+          [libjournal_core,
+           libshared],
+          [libselinux]],

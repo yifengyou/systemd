@@ -1,0 +1,149 @@
+From 613a02b7d67864af1860e9137e2ee101d603463e Mon Sep 17 00:00:00 2001
+From: Jan Synacek <jsynacek@redhat.com>
+Date: Thu, 25 Apr 2019 12:19:16 +0200
+Subject: [PATCH] debug-generator: enable custom systemd.debug_shell tty
+
+(cherry picked from commit 93912e872fb14e9c372e090409e429084a6450f5)
+
+Resolves: #1723722
+---
+ man/custom-entities.ent.in            |  1 +
+ man/systemd-debug-generator.xml       | 13 ++++++---
+ meson.build                           |  1 +
+ src/debug-generator/debug-generator.c | 41 +++++++++++++++++++++------
+ 4 files changed, 43 insertions(+), 13 deletions(-)
+
+diff --git a/man/custom-entities.ent.in b/man/custom-entities.ent.in
+index e2bd44e5e7..85805777a0 100644
+--- a/man/custom-entities.ent.in
++++ b/man/custom-entities.ent.in
+@@ -8,3 +8,4 @@
+ <!ENTITY CERTIFICATE_ROOT @CERTIFICATE_ROOT@>
+ <!ENTITY MEMORY_ACCOUNTING_DEFAULT @MEMORY_ACCOUNTING_DEFAULT_YES_NO@>
+ <!ENTITY KILL_USER_PROCESSES @KILL_USER_PROCESSES_YES_NO@>
++<!ENTITY DEBUGTTY @DEBUGTTY@>
+diff --git a/man/systemd-debug-generator.xml b/man/systemd-debug-generator.xml
+index fa88e8ac01..25d8b1a873 100644
+--- a/man/systemd-debug-generator.xml
++++ b/man/systemd-debug-generator.xml
+@@ -1,6 +1,10 @@
+ <?xml version="1.0"?>
+ <!--*-nxml-*-->
+-<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN" "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
++<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
++  "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd" [
++<!ENTITY % entities SYSTEM "custom-entities.ent" >
++%entities;
++]>
+ <!--
+   SPDX-License-Identifier: LGPL-2.1+
+ -->
+@@ -57,9 +61,10 @@
+     <option>rd.systemd.debug_shell</option> option is
+     specified, the debug shell service
+     <literal>debug-shell.service</literal> is pulled into the boot
+-    transaction. It will spawn a debug shell on tty9 during early
+-    system startup. Note that the shell may also be turned on
+-    persistently by enabling it with
++    transaction and a debug shell will be spawned during early boot.
++    By default, <filename>&DEBUGTTY;</filename> is used, but a specific tty can also be set,
++    either with or without the <filename>/dev/</filename> prefix.
++    Note that the shell may also be turned on persistently by enabling it with
+     <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>'s
+     <command>enable</command> command.
+     <option>rd.systemd.debug_shell=</option> is honored only by initial
+diff --git a/meson.build b/meson.build
+index fe82ca4ac2..70811c29cf 100644
+--- a/meson.build
++++ b/meson.build
+@@ -768,6 +768,7 @@ conf.set_quoted('GETTEXT_PACKAGE', meson.project_name())
+ 
+ substs.set('SUSHELL', get_option('debug-shell'))
+ substs.set('DEBUGTTY', get_option('debug-tty'))
++conf.set_quoted('DEBUGTTY', get_option('debug-tty'))
+ 
+ enable_debug_hashmap = false
+ enable_debug_mmap_cache = false
+diff --git a/src/debug-generator/debug-generator.c b/src/debug-generator/debug-generator.c
+index 800d31cebe..ddef385833 100644
+--- a/src/debug-generator/debug-generator.c
++++ b/src/debug-generator/debug-generator.c
+@@ -1,8 +1,11 @@
+ /* SPDX-License-Identifier: LGPL-2.1+ */
+ 
+ #include "alloc-util.h"
++#include "dropin.h"
++#include "generator.h"
+ #include "mkdir.h"
+ #include "parse-util.h"
++#include "path-util.h"
+ #include "proc-cmdline.h"
+ #include "special.h"
+ #include "string-util.h"
+@@ -14,7 +17,7 @@ static char *arg_default_unit = NULL;
+ static const char *arg_dest = "/tmp";
+ static char **arg_mask = NULL;
+ static char **arg_wants = NULL;
+-static bool arg_debug_shell = false;
++static char *arg_debug_shell = NULL;
+ 
+ static int parse_proc_cmdline_item(const char *key, const char *value, void *data) {
+         int r;
+@@ -50,15 +53,16 @@ static int parse_proc_cmdline_item(const char *key, const char *value, void *dat
+                         return log_oom();
+ 
+         } else if (proc_cmdline_key_streq(key, "systemd.debug_shell")) {
++                const char *t = NULL;
+ 
+-                if (value) {
+-                        r = parse_boolean(value);
+-                        if (r < 0)
+-                                log_error("Failed to parse systemd.debug_shell= argument '%s', ignoring.", value);
+-                        else
+-                                arg_debug_shell = r;
+-                } else
+-                        arg_debug_shell = true;
++                r = value ? parse_boolean(value) : 1;
++                if (r < 0)
++                        t = skip_dev_prefix(value);
++                else if (r > 0)
++                        t = skip_dev_prefix(DEBUGTTY);
++
++                if (free_and_strdup(&arg_debug_shell, t) < 0)
++                        return log_oom();
+ 
+         } else if (streq(key, "systemd.unit")) {
+ 
+@@ -136,6 +140,23 @@ static int generate_wants_symlinks(void) {
+         return r;
+ }
+ 
++static void install_debug_shell_dropin(const char *dir) {
++        int r;
++
++        if (streq(arg_debug_shell, skip_dev_prefix(DEBUGTTY)))
++                return;
++
++        r = write_drop_in_format(dir, "debug-shell.service", 50, "tty",
++                        "[Unit]\n"
++                        "Description=Early root shell on /dev/%s FOR DEBUGGING ONLY\n"
++                        "ConditionPathExists=\n"
++                        "[Service]\n"
++                        "TTYPath=/dev/%s",
++                        arg_debug_shell, arg_debug_shell);
++        if (r < 0)
++                log_warning_errno(r, "Failed to write drop-in for debug-shell.service, ignoring: %m");
++}
++
+ int main(int argc, char *argv[]) {
+         int r, q;
+ 
+@@ -164,6 +185,8 @@ int main(int argc, char *argv[]) {
+                         r = log_oom();
+                         goto finish;
+                 }
++
++                install_debug_shell_dropin(arg_dest);
+         }
+ 
+         r = generate_mask_symlinks();

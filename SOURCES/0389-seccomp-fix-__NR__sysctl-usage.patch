@@ -1,0 +1,35 @@
+From 65a066aae68744e889c114cee56dff5b48d872df Mon Sep 17 00:00:00 2001
+From: Jan Synacek <jsynacek@redhat.com>
+Date: Thu, 4 Jun 2020 16:55:52 +0200
+Subject: [PATCH] seccomp: fix __NR__sysctl usage
+
+Loosely based on
+https://github.com/systemd/systemd/pull/14032 and
+https://github.com/systemd/systemd/pull/14268.
+
+Related: #1843871
+---
+ src/test/test-seccomp.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/test/test-seccomp.c b/src/test/test-seccomp.c
+index 4021a06e0e..009a2e1922 100644
+--- a/src/test/test-seccomp.c
++++ b/src/test/test-seccomp.c
+@@ -237,14 +237,14 @@ static void test_protect_sysctl(void) {
+         assert_se(pid >= 0);
+ 
+         if (pid == 0) {
+-#if __NR__sysctl > 0
++#if defined __NR__sysctl &&  __NR__sysctl >= 0
+                 assert_se(syscall(__NR__sysctl, NULL) < 0);
+                 assert_se(errno == EFAULT);
+ #endif
+ 
+                 assert_se(seccomp_protect_sysctl() >= 0);
+ 
+-#if __NR__sysctl > 0
++#if defined __NR__sysctl && __NR__sysctl >= 0
+                 assert_se(syscall(__NR__sysctl, 0, 0, 0) < 0);
+                 assert_se(errno == EPERM);
+ #endif

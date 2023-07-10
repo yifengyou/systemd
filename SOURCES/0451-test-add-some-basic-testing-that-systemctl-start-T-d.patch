@@ -1,0 +1,31 @@
+From f31afbfd2fa68e20a10a8432fb4714a6d4e1170a Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 26 Mar 2019 17:39:36 +0100
+Subject: [PATCH] test: add some basic testing that "systemctl start -T" does
+ something
+
+(cherry picked from commit f087c7e072bb338d5c7c0781c9fbc900612efd18)
+
+Related: #846319
+---
+ test/TEST-03-JOBS/test-jobs.sh | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/test/TEST-03-JOBS/test-jobs.sh b/test/TEST-03-JOBS/test-jobs.sh
+index e66ea53621..42190cf478 100755
+--- a/test/TEST-03-JOBS/test-jobs.sh
++++ b/test/TEST-03-JOBS/test-jobs.sh
+@@ -26,6 +26,13 @@ grep 'sleep\.service.*running' /root/list-jobs.txt
+ grep 'hello\.service' /root/list-jobs.txt && exit 1
+ systemctl stop sleep.service hello-after-sleep.target
+ 
++# Some basic testing that --show-transaction does something useful
++! systemctl is-active systemd-importd
++systemctl -T start systemd-importd
++systemctl is-active systemd-importd
++systemctl --show-transaction stop systemd-importd
++! systemctl is-active systemd-importd
++
+ # Test for a crash when enqueuing a JOB_NOP when other job already exists
+ systemctl start --no-block hello-after-sleep.target
+ # hello.service should still be waiting, so these try-restarts will collapse

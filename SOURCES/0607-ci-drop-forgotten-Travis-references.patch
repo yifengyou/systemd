@@ -1,0 +1,32 @@
+From 9bb57b7bed93e79f578e7c5b0c95f1f454e5d829 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Wed, 3 Mar 2021 12:33:38 +0100
+Subject: [PATCH] ci: drop forgotten Travis references
+
+rhel-only
+Related: #1934504
+---
+ .github/workflows/unit_tests.sh | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/.github/workflows/unit_tests.sh b/.github/workflows/unit_tests.sh
+index ea4f7e7592..43882b27da 100755
+--- a/.github/workflows/unit_tests.sh
++++ b/.github/workflows/unit_tests.sh
+@@ -68,7 +68,7 @@ for phase in "${PHASES[@]}"; do
+     case $phase in
+         SETUP)
+             info "Setup phase"
+-            info "Using Travis $CENTOS_RELEASE"
++            info "Using $CENTOS_RELEASE image"
+             # Pull a Docker image and start a new container
+             docker pull quay.io/centos/centos:$CENTOS_RELEASE
+             info "Starting container $CONT_NAME"
+@@ -110,7 +110,6 @@ for phase in "${PHASES[@]}"; do
+             docker exec --interactive=false \
+                 -e UBSAN_OPTIONS=print_stacktrace=1:print_summary=1:halt_on_error=1 \
+                 -e ASAN_OPTIONS=strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1 \
+-                -e "TRAVIS=$TRAVIS" \
+                 -t $CONT_NAME \
+                 meson test --timeout-multiplier=3 -C ./build/ --print-errorlogs
+             ;;

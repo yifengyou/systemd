@@ -1,0 +1,30 @@
+From 8cff80d7fc28ca04bd6c8e2257b46d96bea338ce Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 18 Oct 2018 19:48:18 +0200
+Subject: [PATCH] introduce setsockopt_int() helper
+
+As suggested by @heftig:
+
+https://github.com/systemd/systemd/commit/6d5e65f6454212cd400d0ebda34978a9f20cc26a#commitcomment-30938667
+(cherry picked from commit 2ff48e981e6cd1ccbfae49943274d9c8319a5e5d)
+
+Related: #1887181
+---
+ src/basic/socket-util.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/basic/socket-util.h b/src/basic/socket-util.h
+index 82781a0de1..616f2e0d05 100644
+--- a/src/basic/socket-util.h
++++ b/src/basic/socket-util.h
+@@ -183,3 +183,10 @@ struct cmsghdr* cmsg_find(struct msghdr *mh, int level, int type, socklen_t leng
+         })
+ 
+ int socket_ioctl_fd(void);
++
++static inline int setsockopt_int(int fd, int level, int optname, int value) {
++        if (setsockopt(fd, level, optname, &value, sizeof(value)) < 0)
++                return -errno;
++
++        return 0;
++}

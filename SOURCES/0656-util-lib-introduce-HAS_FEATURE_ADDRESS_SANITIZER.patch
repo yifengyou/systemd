@@ -1,0 +1,35 @@
+From 39b10c9e7e4ad80adc0e8c43f7d1917edee515dd Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Sun, 2 Dec 2018 08:28:24 +0100
+Subject: [PATCH] util-lib: introduce HAS_FEATURE_ADDRESS_SANITIZER
+
+https://clang.llvm.org/docs/AddressSanitizer.html#conditional-compilation-with-has-feature-address-sanitizer
+(cherry picked from commit 289acab951c5937fdf6d3a2666f411fd66dd20e5)
+
+Related: #2017033
+---
+ src/basic/macro.h | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/basic/macro.h b/src/basic/macro.h
+index 0fe6a62aa8..62f2359633 100644
+--- a/src/basic/macro.h
++++ b/src/basic/macro.h
+@@ -55,6 +55,17 @@
+ #  endif
+ #endif
+ 
++#if !defined(HAS_FEATURE_ADDRESS_SANITIZER)
++#  if defined(__has_feature)
++#    if __has_feature(address_sanitizer)
++#      define HAS_FEATURE_ADDRESS_SANITIZER 1
++#    endif
++#  endif
++#  if !defined(HAS_FEATURE_ADDRESS_SANITIZER)
++#    define HAS_FEATURE_ADDRESS_SANITIZER 0
++#  endif
++#endif
++
+ /* Temporarily disable some warnings */
+ #define DISABLE_WARNING_DECLARATION_AFTER_STATEMENT                     \
+         _Pragma("GCC diagnostic push");                                 \

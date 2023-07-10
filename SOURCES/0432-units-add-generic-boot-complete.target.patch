@@ -1,0 +1,46 @@
+From dd573e5fbac858c20628052acfa19401d3e0d135 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 22 Jun 2018 12:52:28 +0200
+Subject: [PATCH] units: add generic boot-complete.target
+
+(cherry picked from commit 329d20db3cb02d789473b8f7e4a59526fcbf5728)
+
+Resolves: #1872243
+---
+ units/boot-complete.target | 14 ++++++++++++++
+ units/meson.build          |  1 +
+ 2 files changed, 15 insertions(+)
+ create mode 100644 units/boot-complete.target
+
+diff --git a/units/boot-complete.target b/units/boot-complete.target
+new file mode 100644
+index 0000000000..f0b9e57e7c
+--- /dev/null
++++ b/units/boot-complete.target
+@@ -0,0 +1,14 @@
++#  SPDX-License-Identifier: LGPL-2.1+
++#
++#  This file is part of systemd.
++#
++#  systemd is free software; you can redistribute it and/or modify it
++#  under the terms of the GNU Lesser General Public License as published by
++#  the Free Software Foundation; either version 2.1 of the License, or
++#  (at your option) any later version.
++
++[Unit]
++Description=Boot Completion Check
++Documentation=man:systemd.special(7)
++Requires=sysinit.target
++After=sysinit.target
+diff --git a/units/meson.build b/units/meson.build
+index e118d81888..a1cd2524dc 100644
+--- a/units/meson.build
++++ b/units/meson.build
+@@ -3,6 +3,7 @@
+ units = [
+         ['basic.target',                        ''],
+         ['bluetooth.target',                    ''],
++        ['boot-complete.target',                ''],
+         ['cryptsetup-pre.target',               'HAVE_LIBCRYPTSETUP'],
+         ['cryptsetup.target',                   'HAVE_LIBCRYPTSETUP',
+          'sysinit.target.wants/'],

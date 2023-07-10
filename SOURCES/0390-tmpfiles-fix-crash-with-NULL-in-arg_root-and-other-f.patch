@@ -1,0 +1,174 @@
+From 3569b29eb8b082229dd97b8aae60bbe4d2f96ef5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 19 Dec 2018 23:05:48 +0100
+Subject: [PATCH] tmpfiles: fix crash with NULL in arg_root and other fixes and
+ tests
+
+The function to replacement paths into the configuration file list was borked.
+Apart from the crash with empty root prefix, it would incorrectly handle the
+case where root *was* set, and the replacement file was supposed to override
+an existing file.
+
+prefix_root is used instead of path_join because prefix_root removes duplicate
+slashes (when --root=dir/ is used).
+
+A test is added.
+
+Fixes #11124.
+
+(cherry picked from commit 082bb1c59bd4300bcdc08488c94109680cfadf57)
+
+Resolves: #1836024
+---
+ src/basic/conf-files.c     | 21 ++++++++-----
+ src/test/test-conf-files.c | 61 +++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 73 insertions(+), 9 deletions(-)
+
+diff --git a/src/basic/conf-files.c b/src/basic/conf-files.c
+index d6ef0e941e..5ca83091c9 100644
+--- a/src/basic/conf-files.c
++++ b/src/basic/conf-files.c
+@@ -204,14 +204,17 @@ int conf_files_insert(char ***strv, const char *root, char **dirs, const char *p
+                 if (c == 0) {
+                         char **dir;
+ 
+-                        /* Oh, we found our spot and it already contains something. */
++                        /* Oh, there already is an entry with a matching name (the last component). */
++
+                         STRV_FOREACH(dir, dirs) {
++                                _cleanup_free_ char *rdir = NULL;
+                                 char *p1, *p2;
+ 
+-                                p1 = path_startswith((*strv)[i], root);
+-                                if (p1)
+-                                        /* Skip "/" in *dir, because p1 is without "/" too */
+-                                        p1 = path_startswith(p1, *dir + 1);
++                                rdir = prefix_root(root, *dir);
++                                if (!rdir)
++                                        return -ENOMEM;
++
++                                p1 = path_startswith((*strv)[i], rdir);
+                                 if (p1)
+                                         /* Existing entry with higher priority
+                                          * or same priority, no need to do anything. */
+@@ -220,7 +223,8 @@ int conf_files_insert(char ***strv, const char *root, char **dirs, const char *p
+                                 p2 = path_startswith(path, *dir);
+                                 if (p2) {
+                                         /* Our new entry has higher priority */
+-                                        t = path_join(root, path, NULL);
++
++                                        t = prefix_root(root, path);
+                                         if (!t)
+                                                 return log_oom();
+ 
+@@ -236,7 +240,8 @@ int conf_files_insert(char ***strv, const char *root, char **dirs, const char *p
+                 /* … we are not there yet, let's continue */
+         }
+ 
+-        t = path_join(root, path, NULL);
++        /* The new file has lower priority than all the existing entries */
++        t = prefix_root(root, path);
+         if (!t)
+                 return log_oom();
+ 
+@@ -322,7 +327,7 @@ int conf_files_list_with_replacement(
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to extend config file list: %m");
+ 
+-                p = path_join(root, replacement, NULL);
++                p = prefix_root(root, replacement);
+                 if (!p)
+                         return log_oom();
+         }
+diff --git a/src/test/test-conf-files.c b/src/test/test-conf-files.c
+index 2ec2dfc261..5789767161 100644
+--- a/src/test/test-conf-files.c
++++ b/src/test/test-conf-files.c
+@@ -13,6 +13,7 @@
+ #include "macro.h"
+ #include "mkdir.h"
+ #include "parse-util.h"
++#include "path-util.h"
+ #include "rm-rf.h"
+ #include "string-util.h"
+ #include "strv.h"
+@@ -42,7 +43,7 @@ static void test_conf_files_list(bool use_root) {
+         _cleanup_strv_free_ char **found_files = NULL, **found_files2 = NULL;
+         const char *root_dir, *search_1, *search_2, *expect_a, *expect_b, *expect_c, *mask;
+ 
+-        log_debug("/* %s */", __func__);
++        log_debug("/* %s(%s) */", __func__, yes_no(use_root));
+ 
+         setup_test_dir(tmp_dir,
+                        "/dir1/a.conf",
+@@ -92,6 +93,60 @@ static void test_conf_files_list(bool use_root) {
+         assert_se(rm_rf(tmp_dir, REMOVE_ROOT|REMOVE_PHYSICAL) == 0);
+ }
+ 
++static void test_conf_files_insert(const char *root) {
++        _cleanup_strv_free_ char **s = NULL;
++
++        log_info("/* %s root=%s */", __func__, strempty(root));
++
++        char **dirs = STRV_MAKE("/dir1", "/dir2", "/dir3");
++
++        _cleanup_free_ const char
++                *foo1 = prefix_root(root, "/dir1/foo.conf"),
++                *foo2 = prefix_root(root, "/dir2/foo.conf"),
++                *bar2 = prefix_root(root, "/dir2/bar.conf"),
++                *zzz3 = prefix_root(root, "/dir3/zzz.conf"),
++                *whatever = prefix_root(root, "/whatever.conf");
++
++        assert_se(conf_files_insert(&s, root, dirs, "/dir2/foo.conf") == 0);
++        assert_se(strv_equal(s, STRV_MAKE(foo2)));
++
++        /* The same file again, https://github.com/systemd/systemd/issues/11124 */
++        assert_se(conf_files_insert(&s, root, dirs, "/dir2/foo.conf") == 0);
++        assert_se(strv_equal(s, STRV_MAKE(foo2)));
++
++        /* Lower priority → new entry is ignored */
++        assert_se(conf_files_insert(&s, root, dirs, "/dir3/foo.conf") == 0);
++        assert_se(strv_equal(s, STRV_MAKE(foo2)));
++
++        /* Higher priority → new entry replaces */
++        assert_se(conf_files_insert(&s, root, dirs, "/dir1/foo.conf") == 0);
++        assert_se(strv_equal(s, STRV_MAKE(foo1)));
++
++        /* Earlier basename */
++        assert_se(conf_files_insert(&s, root, dirs, "/dir2/bar.conf") == 0);
++        assert_se(strv_equal(s, STRV_MAKE(bar2, foo1)));
++
++        /* Later basename */
++        assert_se(conf_files_insert(&s, root, dirs, "/dir3/zzz.conf") == 0);
++        assert_se(strv_equal(s, STRV_MAKE(bar2, foo1, zzz3)));
++
++        /* All lower priority → all ignored */
++        assert_se(conf_files_insert(&s, root, dirs, "/dir3/zzz.conf") == 0);
++        assert_se(conf_files_insert(&s, root, dirs, "/dir2/bar.conf") == 0);
++        assert_se(conf_files_insert(&s, root, dirs, "/dir3/bar.conf") == 0);
++        assert_se(conf_files_insert(&s, root, dirs, "/dir2/foo.conf") == 0);
++        assert_se(strv_equal(s, STRV_MAKE(bar2, foo1, zzz3)));
++
++        /* Two entries that don't match any of the directories, but match basename */
++        assert_se(conf_files_insert(&s, root, dirs, "/dir4/zzz.conf") == 0);
++        assert_se(conf_files_insert(&s, root, dirs, "/zzz.conf") == 0);
++        assert_se(strv_equal(s, STRV_MAKE(bar2, foo1, zzz3)));
++
++        /* An entry that doesn't match any of the directories, no match at all */
++        assert_se(conf_files_insert(&s, root, dirs, "/whatever.conf") == 0);
++        assert_se(strv_equal(s, STRV_MAKE(bar2, foo1, whatever, zzz3)));
++}
++
+ int main(int argc, char **argv) {
+         log_set_max_level(LOG_DEBUG);
+         log_parse_environment();
+@@ -99,5 +154,9 @@ int main(int argc, char **argv) {
+ 
+         test_conf_files_list(false);
+         test_conf_files_list(true);
++        test_conf_files_insert(NULL);
++        test_conf_files_insert("/root");
++        test_conf_files_insert("/root/");
++
+         return 0;
+ }

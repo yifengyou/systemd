@@ -1,0 +1,35 @@
+From 11a9ea82827d7b57dbce307b77ef8233a4cc028a Mon Sep 17 00:00:00 2001
+From: Lukas Nykryn <lnykryn@redhat.com>
+Date: Thu, 28 Aug 2014 15:12:10 +0200
+Subject: [PATCH] man: mention System Administrator's Guide in systemctl
+ manpage
+
+(cherry picked from commit d4582346f47064de24470b5f92e418966004925f)
+
+Resolves: #1623116
+---
+ man/systemctl.xml | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/man/systemctl.xml b/man/systemctl.xml
+index fa08ab6c0a..56f94d084c 100644
+--- a/man/systemctl.xml
++++ b/man/systemctl.xml
+@@ -2000,6 +2000,17 @@ Jan 12 10:46:45 example.com bluetoothd[8900]: gatt-time-server: Input/output err
+     <xi:include href="less-variables.xml" xpointer="lesscharset"/>
+   </refsect1>
+ 
++  <refsect1>
++    <title>Examples</title>
++    <para>
++            For examples how to use systemctl in comparsion
++            with old service and chkconfig command please see:
++            <ulink url="https://access.redhat.com/documentation/en-US/Red_Hat_Enterprise_Linux/7/html/System_Administrators_Guide/sect-Managing_Services_with_systemd-Services.html">
++                    Managing System Services
++            </ulink>
++    </para>
++  </refsect1>
++
+   <refsect1>
+     <title>See Also</title>
+     <para>

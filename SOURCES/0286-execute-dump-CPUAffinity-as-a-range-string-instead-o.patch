@@ -1,0 +1,36 @@
+From b90f935f8d2268522480a7c12f7e2213a7a5e19d Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Fri, 31 May 2019 18:02:20 +0200
+Subject: [PATCH] execute: dump CPUAffinity as a range string instead of a list
+ of CPUs
+
+We do this already when printing the property in systemctl so be
+consistent and do the same for systemd-analyze dump.
+
+(cherry picked from commit e7fca352ba43988682a927de6b1f629b3f10a415)
+
+Related: #1734787
+---
+ src/core/execute.c | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/src/core/execute.c b/src/core/execute.c
+index 22e5825905..bc26aa66e7 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -4098,11 +4098,10 @@ void exec_context_dump(const ExecContext *c, FILE* f, const char *prefix) {
+         }
+ 
+         if (c->cpu_set.set) {
+-                fprintf(f, "%sCPUAffinity:", prefix);
+-                for (i = 0; i < c->cpu_set.allocated * 8; i++)
+-                        if (CPU_ISSET_S(i, c->cpu_set.allocated, c->cpu_set.set))
+-                                fprintf(f, " %u", i);
+-                fputs("\n", f);
++                _cleanup_free_ char *affinity = NULL;
++
++                affinity = cpu_set_to_range_string(&c->cpu_set);
++                fprintf(f, "%sCPUAffinity: %s\n", prefix, affinity);
+         }
+ 
+         if (c->timer_slack_nsec != NSEC_INFINITY)

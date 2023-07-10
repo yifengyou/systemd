@@ -1,0 +1,135 @@
+From 4e48673172b012a06575e4f5b681d3554eded2e2 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Christian=20G=C3=B6ttsche?= <cgzones@googlemail.com>
+Date: Mon, 6 Jan 2020 15:27:23 +0100
+Subject: [PATCH] selinux: add trigger for policy reload to refresh internal
+ selabel cache
+
+Reload the internal selabel cache automatically on SELinux policy reloads so non pid-1 daemons are participating.
+
+Run the reload function `mac_selinux_reload()` not manually on daemon-reload, but rather pass it as callback to libselinux.
+Trigger the callback prior usage of the systemd internal selabel cache by depleting the selinux netlink socket via `avc_netlink_check_nb()`.
+
+Improves: a9dfac21ec85 ("core: reload SELinux label cache on daemon-reload")
+Improves: #13363
+(cherry picked from commit 61f3e897f13101f29fb8027e8839498a469ad58e)
+
+Related: #1888912
+---
+ src/basic/selinux-util.c | 23 +++++++++++++++++++----
+ src/basic/selinux-util.h |  1 -
+ src/core/main.c          |  2 --
+ 3 files changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/src/basic/selinux-util.c b/src/basic/selinux-util.c
+index a078ce23ef..bfe3d015aa 100644
+--- a/src/basic/selinux-util.c
++++ b/src/basic/selinux-util.c
+@@ -10,6 +10,7 @@
+ #include <syslog.h>
+ 
+ #if HAVE_SELINUX
++#include <selinux/avc.h>
+ #include <selinux/context.h>
+ #include <selinux/label.h>
+ #include <selinux/selinux.h>
+@@ -32,6 +33,8 @@ DEFINE_TRIVIAL_CLEANUP_FUNC(context_t, context_free);
+ #define _cleanup_freecon_ _cleanup_(freeconp)
+ #define _cleanup_context_free_ _cleanup_(context_freep)
+ 
++static int mac_selinux_reload(int seqno);
++
+ static int cached_use = -1;
+ static struct selabel_handle *label_hnd = NULL;
+ 
+@@ -63,6 +66,8 @@ int mac_selinux_init(void) {
+         usec_t before_timestamp, after_timestamp;
+         struct mallinfo before_mallinfo, after_mallinfo;
+ 
++        selinux_set_callback(SELINUX_CB_POLICYLOAD, (union selinux_callback) mac_selinux_reload);
++
+         if (label_hnd)
+                 return 0;
+ 
+@@ -105,13 +110,12 @@ void mac_selinux_finish(void) {
+ #endif
+ }
+ 
+-void mac_selinux_reload(void) {
+-
+ #if HAVE_SELINUX
++static int mac_selinux_reload(int seqno) {
+         struct selabel_handle *backup_label_hnd;
+ 
+         if (!label_hnd)
+-                return;
++                return 0;
+ 
+         backup_label_hnd = TAKE_PTR(label_hnd);
+ 
+@@ -122,8 +126,10 @@ void mac_selinux_reload(void) {
+                 selabel_close(backup_label_hnd);
+         else
+                 label_hnd = backup_label_hnd;
+-#endif
++
++        return 0;
+ }
++#endif
+ 
+ int mac_selinux_fix(const char *path, LabelFixFlags flags) {
+ 
+@@ -152,6 +158,9 @@ int mac_selinux_fix(const char *path, LabelFixFlags flags) {
+         if (fstat(fd, &st) < 0)
+                 return -errno;
+ 
++        /* Check for policy reload so 'label_hnd' is kept up-to-date by callbacks */
++        (void) avc_netlink_check_nb();
++
+         if (selabel_lookup_raw(label_hnd, &fcon, path, st.st_mode) < 0) {
+                 r = -errno;
+ 
+@@ -345,6 +354,9 @@ static int selinux_create_file_prepare_abspath(const char *abspath, mode_t mode)
+         assert(abspath);
+         assert(path_is_absolute(abspath));
+ 
++        /* Check for policy reload so 'label_hnd' is kept up-to-date by callbacks */
++        (void) avc_netlink_check_nb();
++
+         r = selabel_lookup_raw(label_hnd, &filecon, abspath, mode);
+         if (r < 0) {
+                 /* No context specified by the policy? Proceed without setting it. */
+@@ -496,6 +508,9 @@ int mac_selinux_bind(int fd, const struct sockaddr *addr, socklen_t addrlen) {
+ 
+         path = strndupa(un->sun_path, addrlen - offsetof(struct sockaddr_un, sun_path));
+ 
++        /* Check for policy reload so 'label_hnd' is kept up-to-date by callbacks */
++        (void) avc_netlink_check_nb();
++
+         if (path_is_absolute(path))
+                 r = selabel_lookup_raw(label_hnd, &fcon, path, S_IFSOCK);
+         else {
+diff --git a/src/basic/selinux-util.h b/src/basic/selinux-util.h
+index 639c35b687..bd5207c318 100644
+--- a/src/basic/selinux-util.h
++++ b/src/basic/selinux-util.h
+@@ -13,7 +13,6 @@ void mac_selinux_retest(void);
+ 
+ int mac_selinux_init(void);
+ void mac_selinux_finish(void);
+-void mac_selinux_reload(void);
+ 
+ int mac_selinux_fix(const char *path, LabelFixFlags flags);
+ int mac_selinux_apply(const char *path, const char *label);
+diff --git a/src/core/main.c b/src/core/main.c
+index d5c41da0c4..d897155644 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -1682,8 +1682,6 @@ static int invoke_main_loop(
+                         saved_log_level = m->log_level_overridden ? log_get_max_level() : -1;
+                         saved_log_target = m->log_target_overridden ? log_get_target() : _LOG_TARGET_INVALID;
+ 
+-                        mac_selinux_reload();
+-
+                         (void) parse_configuration(saved_rlimit_nofile, saved_rlimit_memlock);
+ 
+                         set_manager_defaults(m);

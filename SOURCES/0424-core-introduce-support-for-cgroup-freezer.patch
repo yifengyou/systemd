@@ -1,0 +1,1146 @@
+From 046ea98539eb8d7cef93d8062035fa6d9f58efea Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Wed, 29 Apr 2020 17:53:43 +0200
+Subject: [PATCH] core: introduce support for cgroup freezer
+
+With cgroup v2 the cgroup freezer is implemented as a cgroup
+attribute called cgroup.freeze. cgroup can be frozen by writing "1"
+to the file and kernel will send us a notification through
+"cgroup.events" after the operation is finished and processes in the
+cgroup entered quiescent state, i.e. they are not scheduled to
+run. Writing "0" to the attribute file does the inverse and process
+execution is resumed.
+
+This commit exposes above low-level functionality through systemd's DBus
+API. Each unit type must provide specialized implementation for these
+methods, otherwise, we return an error. So far only service, scope, and
+slice unit types provide the support. It is possible to check if a
+given unit has the support using CanFreeze() DBus property.
+
+Note that DBus API has a synchronous behavior and we dispatch the reply
+to freeze/thaw requests only after the kernel has notified us that
+requested operation was completed.
+
+(cherry picked from commit d9e45bc3abb8adf5a1cb20816ba8f2d2aa65b17e)
+
+Resolves: #1830861
+---
+ man/systemctl.xml                         |  24 +++++
+ src/basic/cgroup-util.c                   |  18 +++-
+ src/basic/cgroup-util.h                   |   1 +
+ src/basic/unit-def.c                      |   9 ++
+ src/basic/unit-def.h                      |  12 +++
+ src/core/cgroup.c                         | 105 ++++++++++++++++--
+ src/core/cgroup.h                         |  12 +++
+ src/core/dbus-manager.c                   |  50 +++++++++
+ src/core/dbus-unit.c                      |  96 +++++++++++++++++
+ src/core/dbus-unit.h                      |   3 +
+ src/core/dbus.c                           |   7 +-
+ src/core/scope.c                          |   3 +
+ src/core/service.c                        |   3 +
+ src/core/slice.c                          |  80 ++++++++++++++
+ src/core/unit.c                           | 123 ++++++++++++++++++++++
+ src/core/unit.h                           |  20 ++++
+ src/libsystemd/sd-bus/bus-common-errors.h |   2 +
+ src/systemctl/systemctl.c                 | 105 +++++++++++++++++-
+ 18 files changed, 660 insertions(+), 13 deletions(-)
+
+diff --git a/man/systemctl.xml b/man/systemctl.xml
+index d95d3726af..6145486123 100644
+--- a/man/systemctl.xml
++++ b/man/systemctl.xml
+@@ -873,6 +873,30 @@ Sun 2017-02-26 20:57:49 EST  2h 3min left  Sun 2017-02-26 11:56:36 EST  6h ago
+             the signal to send.</para>
+           </listitem>
+         </varlistentry>
++        <varlistentry>
++          <term><command>freeze <replaceable>PATTERN</replaceable>…</command></term>
++
++          <listitem>
++            <para>Freeze one or more units specified on the
++            command line using cgroup freezer</para>
++
++            <para>Freezing the unit will cause all processes contained within the cgroup corresponding to the unit
++            to be suspended. Being suspended means that unit's processes won't be scheduled to run on CPU until thawed.
++            Note that this command is supported only on systems that use unified cgroup hierarchy. Unit is automatically
++            thawed just before we execute a job against the unit, e.g. before the unit is stopped.</para>
++          </listitem>
++        </varlistentry>
++        <varlistentry>
++          <term><command>thaw <replaceable>PATTERN</replaceable>…</command></term>
++
++          <listitem>
++            <para>Thaw (unfreeze) one or more units specified on the
++            command line.</para>
++
++            <para>This is the inverse operation to the <command>freeze</command> command and resumes the execution of
++            processes in the unit's cgroup.</para>
++          </listitem>
++        </varlistentry>
+         <varlistentry>
+           <term><command>is-active <replaceable>PATTERN</replaceable>…</command></term>
+ 
+diff --git a/src/basic/cgroup-util.c b/src/basic/cgroup-util.c
+index 4c0b73850d..992b12811a 100644
+--- a/src/basic/cgroup-util.c
++++ b/src/basic/cgroup-util.c
+@@ -137,6 +137,17 @@ bool cg_ns_supported(void) {
+         return enabled;
+ }
+ 
++bool cg_freezer_supported(void) {
++        static thread_local int supported = -1;
++
++        if (supported >= 0)
++                return supported;
++
++        supported = cg_all_unified() > 0 && access("/sys/fs/cgroup/init.scope/cgroup.freeze", F_OK) == 0;
++
++        return supported;
++}
++
+ int cg_enumerate_subgroups(const char *controller, const char *path, DIR **_d) {
+         _cleanup_free_ char *fs = NULL;
+         int r;
+@@ -2039,7 +2050,8 @@ int cg_get_keyed_attribute_full(
+          * all keys to retrieve. The 'ret_values' parameter should be passed as string size with the same number of
+          * entries as 'keys'. On success each entry will be set to the value of the matching key.
+          *
+-         * If the attribute file doesn't exist at all returns ENOENT, if any key is not found returns ENXIO. */
++         * If the attribute file doesn't exist at all returns ENOENT, if any key is not found returns ENXIO. If mode
++         * is set to GG_KEY_MODE_GRACEFUL we ignore missing keys and return those that were parsed successfully. */
+ 
+         r = cg_get_path(controller, path, attribute, &filename);
+         if (r < 0)
+@@ -2089,8 +2101,8 @@ int cg_get_keyed_attribute_full(
+ 
+         if (mode & CG_KEY_MODE_GRACEFUL)
+                 goto done;
+-        else
+-                r = -ENXIO;
++
++        r = -ENXIO;
+ 
+ fail:
+         for (i = 0; i < n; i++)
+diff --git a/src/basic/cgroup-util.h b/src/basic/cgroup-util.h
+index 0673f4b4ce..1210b38a83 100644
+--- a/src/basic/cgroup-util.h
++++ b/src/basic/cgroup-util.h
+@@ -250,6 +250,7 @@ int cg_mask_to_string(CGroupMask mask, char **ret);
+ int cg_kernel_controllers(Set **controllers);
+ 
+ bool cg_ns_supported(void);
++bool cg_freezer_supported(void);
+ 
+ int cg_all_unified(void);
+ int cg_hybrid_unified(void);
+diff --git a/src/basic/unit-def.c b/src/basic/unit-def.c
+index 46593f6e65..e79cc73dd3 100644
+--- a/src/basic/unit-def.c
++++ b/src/basic/unit-def.c
+@@ -107,6 +107,15 @@ static const char* const unit_active_state_table[_UNIT_ACTIVE_STATE_MAX] = {
+ 
+ DEFINE_STRING_TABLE_LOOKUP(unit_active_state, UnitActiveState);
+ 
++static const char* const freezer_state_table[_FREEZER_STATE_MAX] = {
++        [FREEZER_RUNNING] = "running",
++        [FREEZER_FREEZING] = "freezing",
++        [FREEZER_FROZEN] = "frozen",
++        [FREEZER_THAWING] = "thawing",
++};
++
++DEFINE_STRING_TABLE_LOOKUP(freezer_state, FreezerState);
++
+ static const char* const automount_state_table[_AUTOMOUNT_STATE_MAX] = {
+         [AUTOMOUNT_DEAD] = "dead",
+         [AUTOMOUNT_WAITING] = "waiting",
+diff --git a/src/basic/unit-def.h b/src/basic/unit-def.h
+index db397a31ed..8eea379a6d 100644
+--- a/src/basic/unit-def.h
++++ b/src/basic/unit-def.h
+@@ -44,6 +44,15 @@ typedef enum UnitActiveState {
+         _UNIT_ACTIVE_STATE_INVALID = -1
+ } UnitActiveState;
+ 
++typedef enum FreezerState {
++        FREEZER_RUNNING,
++        FREEZER_FREEZING,
++        FREEZER_FROZEN,
++        FREEZER_THAWING,
++        _FREEZER_STATE_MAX,
++        _FREEZER_STATE_INVALID = -1
++} FreezerState;
++
+ typedef enum AutomountState {
+         AUTOMOUNT_DEAD,
+         AUTOMOUNT_WAITING,
+@@ -245,6 +254,9 @@ UnitLoadState unit_load_state_from_string(const char *s) _pure_;
+ const char *unit_active_state_to_string(UnitActiveState i) _const_;
+ UnitActiveState unit_active_state_from_string(const char *s) _pure_;
+ 
++const char *freezer_state_to_string(FreezerState i) _const_;
++FreezerState freezer_state_from_string(const char *s) _pure_;
++
+ const char* automount_state_to_string(AutomountState i) _const_;
+ AutomountState automount_state_from_string(const char *s) _pure_;
+ 
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index 7a9857adad..e7ae9273a6 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -2279,6 +2279,51 @@ void unit_add_to_cgroup_empty_queue(Unit *u) {
+                 log_debug_errno(r, "Failed to enable cgroup empty event source: %m");
+ }
+ 
++static void unit_remove_from_cgroup_empty_queue(Unit *u) {
++        assert(u);
++
++        if (!u->in_cgroup_empty_queue)
++                return;
++
++        LIST_REMOVE(cgroup_empty_queue, u->manager->cgroup_empty_queue, u);
++        u->in_cgroup_empty_queue = false;
++}
++
++static int unit_check_cgroup_events(Unit *u) {
++        char *values[2] = {};
++        int r;
++
++        assert(u);
++
++        r = cg_get_keyed_attribute_graceful(SYSTEMD_CGROUP_CONTROLLER, u->cgroup_path, "cgroup.events",
++                                            STRV_MAKE("populated", "frozen"), values);
++        if (r < 0)
++                return r;
++
++        /* The cgroup.events notifications can be merged together so act as we saw the given state for the
++         * first time. The functions we call to handle given state are idempotent, which makes them
++         * effectively remember the previous state. */
++        if (values[0]) {
++                if (streq(values[0], "1"))
++                        unit_remove_from_cgroup_empty_queue(u);
++                else
++                        unit_add_to_cgroup_empty_queue(u);
++        }
++
++        /* Disregard freezer state changes due to operations not initiated by us */
++        if (values[1] && IN_SET(u->freezer_state, FREEZER_FREEZING, FREEZER_THAWING)) {
++                if (streq(values[1], "0"))
++                        unit_thawed(u);
++                else
++                        unit_frozen(u);
++        }
++
++        free(values[0]);
++        free(values[1]);
++
++        return 0;
++}
++
+ static int on_cgroup_inotify_event(sd_event_source *s, int fd, uint32_t revents, void *userdata) {
+         Manager *m = userdata;
+ 
+@@ -2310,15 +2355,12 @@ static int on_cgroup_inotify_event(sd_event_source *s, int fd, uint32_t revents,
+                                 /* The watch was just removed */
+                                 continue;
+ 
+-                        u = hashmap_get(m->cgroup_inotify_wd_unit, INT_TO_PTR(e->wd));
+-                        if (!u) /* Not that inotify might deliver
+-                                 * events for a watch even after it
+-                                 * was removed, because it was queued
+-                                 * before the removal. Let's ignore
+-                                 * this here safely. */
+-                                continue;
++                        /* Note that inotify might deliver events for a watch even after it was removed,
++                         * because it was queued before the removal. Let's ignore this here safely. */
+ 
+-                        unit_add_to_cgroup_empty_queue(u);
++                        u = hashmap_get(m->cgroup_inotify_wd_unit, INT_TO_PTR(e->wd));
++                        if (u)
++                                unit_check_cgroup_events(u);
+                 }
+         }
+ }
+@@ -2884,6 +2926,46 @@ void manager_invalidate_startup_units(Manager *m) {
+                 unit_invalidate_cgroup(u, CGROUP_MASK_CPU|CGROUP_MASK_IO|CGROUP_MASK_BLKIO);
+ }
+ 
++int unit_cgroup_freezer_action(Unit *u, FreezerAction action) {
++        _cleanup_free_ char *path = NULL;
++        FreezerState target, kernel = _FREEZER_STATE_INVALID;
++        int r;
++
++        assert(u);
++        assert(IN_SET(action, FREEZER_FREEZE, FREEZER_THAW));
++
++        if (!u->cgroup_realized)
++                return -EBUSY;
++
++        target = action == FREEZER_FREEZE ? FREEZER_FROZEN : FREEZER_RUNNING;
++
++        r = unit_freezer_state_kernel(u, &kernel);
++        if (r < 0)
++                log_unit_debug_errno(u, r, "Failed to obtain cgroup freezer state: %m");
++
++        if (target == kernel) {
++                u->freezer_state = target;
++                return 0;
++        }
++
++        r = cg_get_path(SYSTEMD_CGROUP_CONTROLLER, u->cgroup_path, "cgroup.freeze", &path);
++        if (r < 0)
++                return r;
++
++        log_unit_debug(u, "%s unit.", action == FREEZER_FREEZE ? "Freezing" : "Thawing");
++
++        if (action == FREEZER_FREEZE)
++                u->freezer_state = FREEZER_FREEZING;
++        else
++                u->freezer_state = FREEZER_THAWING;
++
++        r = write_string_file(path, one_zero(action == FREEZER_FREEZE), WRITE_STRING_FILE_DISABLE_BUFFER);
++        if (r < 0)
++                return r;
++
++        return 0;
++}
++
+ static const char* const cgroup_device_policy_table[_CGROUP_DEVICE_POLICY_MAX] = {
+         [CGROUP_AUTO] = "auto",
+         [CGROUP_CLOSED] = "closed",
+@@ -2919,3 +3001,10 @@ int unit_get_cpuset(Unit *u, CPUSet *cpus, const char *name) {
+ }
+ 
+ DEFINE_STRING_TABLE_LOOKUP(cgroup_device_policy, CGroupDevicePolicy);
++
++static const char* const freezer_action_table[_FREEZER_ACTION_MAX] = {
++        [FREEZER_FREEZE] = "freeze",
++        [FREEZER_THAW] = "thaw",
++};
++
++DEFINE_STRING_TABLE_LOOKUP(freezer_action, FreezerAction);
+diff --git a/src/core/cgroup.h b/src/core/cgroup.h
+index 976224336d..36ea77fdc5 100644
+--- a/src/core/cgroup.h
++++ b/src/core/cgroup.h
+@@ -33,6 +33,14 @@ typedef enum CGroupDevicePolicy {
+         _CGROUP_DEVICE_POLICY_INVALID = -1
+ } CGroupDevicePolicy;
+ 
++typedef enum FreezerAction {
++        FREEZER_FREEZE,
++        FREEZER_THAW,
++
++        _FREEZER_ACTION_MAX,
++        _FREEZER_ACTION_INVALID = -1,
++} FreezerAction;
++
+ struct CGroupDeviceAllow {
+         LIST_FIELDS(CGroupDeviceAllow, device_allow);
+         char *path;
+@@ -235,3 +243,7 @@ CGroupDevicePolicy cgroup_device_policy_from_string(const char *s) _pure_;
+ 
+ bool unit_cgroup_delegate(Unit *u);
+ int unit_get_cpuset(Unit *u, CPUSet *cpus, const char *name);
++int unit_cgroup_freezer_action(Unit *u, FreezerAction action);
++
++const char* freezer_action_to_string(FreezerAction a) _const_;
++FreezerAction freezer_action_from_string(const char *s) _pure_;
+diff --git a/src/core/dbus-manager.c b/src/core/dbus-manager.c
+index b3c011b0df..a0777f63d5 100644
+--- a/src/core/dbus-manager.c
++++ b/src/core/dbus-manager.c
+@@ -683,6 +683,54 @@ static int method_unref_unit(sd_bus_message *message, void *userdata, sd_bus_err
+         return bus_unit_method_unref(message, u, error);
+ }
+ 
++static int method_freeze_unit(sd_bus_message *message, void *userdata, sd_bus_error *error) {
++        Manager *m = userdata;
++        const char *name;
++        Unit *u;
++        int r;
++
++        assert(message);
++        assert(m);
++
++        r = sd_bus_message_read(message, "s", &name);
++        if (r < 0)
++                return r;
++
++        r = bus_load_unit_by_name(m, message, name, &u, error);
++        if (r < 0)
++                return r;
++
++        r = bus_unit_validate_load_state(u, error);
++        if (r < 0)
++                return r;
++
++        return bus_unit_method_freeze(message, u, error);
++}
++
++static int method_thaw_unit(sd_bus_message *message, void *userdata, sd_bus_error *error) {
++        Manager *m = userdata;
++        const char *name;
++        Unit *u;
++        int r;
++
++        assert(message);
++        assert(m);
++
++        r = sd_bus_message_read(message, "s", &name);
++        if (r < 0)
++                return r;
++
++        r = bus_load_unit_by_name(m, message, name, &u, error);
++        if (r < 0)
++                return r;
++
++        r = bus_unit_validate_load_state(u, error);
++        if (r < 0)
++                return r;
++
++        return bus_unit_method_thaw(message, u, error);
++}
++
+ static int reply_unit_info(sd_bus_message *reply, Unit *u) {
+         _cleanup_free_ char *unit_path = NULL, *job_path = NULL;
+         Unit *following;
+@@ -2500,6 +2548,8 @@ const sd_bus_vtable bus_manager_vtable[] = {
+         SD_BUS_METHOD("ReloadOrRestartUnit", "ss", "o", method_reload_or_restart_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("ReloadOrTryRestartUnit", "ss", "o", method_reload_or_try_restart_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("KillUnit", "ssi", NULL, method_kill_unit, SD_BUS_VTABLE_UNPRIVILEGED),
++        SD_BUS_METHOD("FreezeUnit", "s", NULL, method_freeze_unit, SD_BUS_VTABLE_UNPRIVILEGED),
++        SD_BUS_METHOD("ThawUnit", "s", NULL, method_thaw_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("ResetFailedUnit", "s", NULL, method_reset_failed_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("SetUnitProperties", "sba(sv)", NULL, method_set_unit_properties, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("RefUnit", "s", NULL, method_ref_unit, SD_BUS_VTABLE_UNPRIVILEGED),
+diff --git a/src/core/dbus-unit.c b/src/core/dbus-unit.c
+index aa15e47754..ce81103e92 100644
+--- a/src/core/dbus-unit.c
++++ b/src/core/dbus-unit.c
+@@ -42,12 +42,14 @@ static BUS_DEFINE_PROPERTY_GET_ENUM(property_get_job_mode, job_mode, JobMode);
+ static BUS_DEFINE_PROPERTY_GET_ENUM(property_get_emergency_action, emergency_action, EmergencyAction);
+ static BUS_DEFINE_PROPERTY_GET(property_get_description, "s", Unit, unit_description);
+ static BUS_DEFINE_PROPERTY_GET2(property_get_active_state, "s", Unit, unit_active_state, unit_active_state_to_string);
++static BUS_DEFINE_PROPERTY_GET2(property_get_freezer_state, "s", Unit, unit_freezer_state, freezer_state_to_string);
+ static BUS_DEFINE_PROPERTY_GET(property_get_sub_state, "s", Unit, unit_sub_state_to_string);
+ static BUS_DEFINE_PROPERTY_GET2(property_get_unit_file_state, "s", Unit, unit_get_unit_file_state, unit_file_state_to_string);
+ static BUS_DEFINE_PROPERTY_GET(property_get_can_reload, "b", Unit, unit_can_reload);
+ static BUS_DEFINE_PROPERTY_GET(property_get_can_start, "b", Unit, unit_can_start_refuse_manual);
+ static BUS_DEFINE_PROPERTY_GET(property_get_can_stop, "b", Unit, unit_can_stop_refuse_manual);
+ static BUS_DEFINE_PROPERTY_GET(property_get_can_isolate, "b", Unit, unit_can_isolate_refuse_manual);
++static BUS_DEFINE_PROPERTY_GET(property_get_can_freeze, "b", Unit, unit_can_freeze);
+ static BUS_DEFINE_PROPERTY_GET(property_get_need_daemon_reload, "b", Unit, unit_need_daemon_reload);
+ static BUS_DEFINE_PROPERTY_GET_GLOBAL(property_get_empty_strv, "as", 0);
+ 
+@@ -561,6 +563,79 @@ int bus_unit_method_unref(sd_bus_message *message, void *userdata, sd_bus_error
+         return sd_bus_reply_method_return(message, NULL);
+ }
+ 
++static int bus_unit_method_freezer_generic(sd_bus_message *message, void *userdata, sd_bus_error *error, FreezerAction action) {
++        const char* perm;
++        int (*method)(Unit*);
++        Unit *u = userdata;
++        bool reply_no_delay = false;
++        int r;
++
++        assert(message);
++        assert(u);
++        assert(IN_SET(action, FREEZER_FREEZE, FREEZER_THAW));
++
++        if (action == FREEZER_FREEZE) {
++                perm = "stop";
++                method = unit_freeze;
++        } else {
++                perm = "start";
++                method = unit_thaw;
++        }
++
++        r = mac_selinux_unit_access_check(u, message, perm, error);
++        if (r < 0)
++                return r;
++
++        r = bus_verify_manage_units_async_full(
++                        u,
++                        perm,
++                        CAP_SYS_ADMIN,
++                        N_("Authentication is required to freeze or thaw the processes of '$(unit)' unit."),
++                        true,
++                        message,
++                        error);
++        if (r < 0)
++                return r;
++        if (r == 0)
++                return 1; /* No authorization for now, but the async polkit stuff will call us again when it has it */
++
++        r = method(u);
++        if (r == -EOPNOTSUPP)
++                return sd_bus_error_setf(error, SD_BUS_ERROR_NOT_SUPPORTED, "Unit '%s' does not support freezing.", u->id);
++        if (r == -EBUSY)
++                return sd_bus_error_setf(error, BUS_ERROR_UNIT_BUSY, "Unit has a pending job.");
++        if (r == -EHOSTDOWN)
++                return sd_bus_error_setf(error, BUS_ERROR_UNIT_INACTIVE, "Unit is inactive.");
++        if (r == -EALREADY)
++                return sd_bus_error_setf(error, SD_BUS_ERROR_FAILED, "Previously requested freezer operation for unit '%s' is still in progress.", u->id);
++        if (r < 0)
++                return r;
++        if (r == 0)
++                reply_no_delay = true;
++
++        assert(!u->pending_freezer_message);
++
++        r = sd_bus_message_new_method_return(message, &u->pending_freezer_message);
++        if (r < 0)
++                return r;
++
++        if (reply_no_delay) {
++                r = bus_unit_send_pending_freezer_message(u);
++                if (r < 0)
++                        return r;
++        }
++
++        return 1;
++}
++
++int bus_unit_method_thaw(sd_bus_message *message, void *userdata, sd_bus_error *error) {
++        return bus_unit_method_freezer_generic(message, userdata, error, FREEZER_THAW);
++}
++
++int bus_unit_method_freeze(sd_bus_message *message, void *userdata, sd_bus_error *error) {
++        return bus_unit_method_freezer_generic(message, userdata, error, FREEZER_FREEZE);
++}
++
+ const sd_bus_vtable bus_unit_vtable[] = {
+         SD_BUS_VTABLE_START(0),
+ 
+@@ -592,6 +667,7 @@ const sd_bus_vtable bus_unit_vtable[] = {
+         SD_BUS_PROPERTY("Description", "s", property_get_description, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("LoadState", "s", property_get_load_state, offsetof(Unit, load_state), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("ActiveState", "s", property_get_active_state, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
++        SD_BUS_PROPERTY("FreezerState", "s", property_get_freezer_state, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+         SD_BUS_PROPERTY("SubState", "s", property_get_sub_state, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+         SD_BUS_PROPERTY("FragmentPath", "s", NULL, offsetof(Unit, fragment_path), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("SourcePath", "s", NULL, offsetof(Unit, source_path), SD_BUS_VTABLE_PROPERTY_CONST),
+@@ -607,6 +683,7 @@ const sd_bus_vtable bus_unit_vtable[] = {
+         SD_BUS_PROPERTY("CanStop", "b", property_get_can_stop, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("CanReload", "b", property_get_can_reload, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("CanIsolate", "b", property_get_can_isolate, 0, SD_BUS_VTABLE_PROPERTY_CONST),
++        SD_BUS_PROPERTY("CanFreeze", "b", property_get_can_freeze, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("Job", "(uo)", property_get_job, offsetof(Unit, job), SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+         SD_BUS_PROPERTY("StopWhenUnneeded", "b", bus_property_get_bool, offsetof(Unit, stop_when_unneeded), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("RefuseManualStart", "b", bus_property_get_bool, offsetof(Unit, refuse_manual_start), SD_BUS_VTABLE_PROPERTY_CONST),
+@@ -650,6 +727,8 @@ const sd_bus_vtable bus_unit_vtable[] = {
+         SD_BUS_METHOD("SetProperties", "ba(sv)", NULL, bus_unit_method_set_properties, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("Ref", NULL, NULL, bus_unit_method_ref, SD_BUS_VTABLE_UNPRIVILEGED),
+         SD_BUS_METHOD("Unref", NULL, NULL, bus_unit_method_unref, SD_BUS_VTABLE_UNPRIVILEGED),
++        SD_BUS_METHOD("Freeze", NULL, NULL, bus_unit_method_freeze, SD_BUS_VTABLE_UNPRIVILEGED),
++        SD_BUS_METHOD("Thaw", NULL, NULL, bus_unit_method_thaw, SD_BUS_VTABLE_UNPRIVILEGED),
+ 
+         /* For dependency types we don't support anymore always return an empty array */
+         SD_BUS_PROPERTY("RequiresOverridable", "as", property_get_empty_strv, 0, SD_BUS_VTABLE_HIDDEN),
+@@ -1209,6 +1288,23 @@ void bus_unit_send_change_signal(Unit *u) {
+         u->sent_dbus_new_signal = true;
+ }
+ 
++int bus_unit_send_pending_freezer_message(Unit *u) {
++        int r;
++
++        assert(u);
++
++        if (!u->pending_freezer_message)
++                return 0;
++
++        r = sd_bus_send(NULL, u->pending_freezer_message, NULL);
++        if (r < 0)
++                log_warning_errno(r, "Failed to send queued message, ignoring: %m");
++
++        u->pending_freezer_message = sd_bus_message_unref(u->pending_freezer_message);
++
++        return 0;
++}
++
+ static int send_removed_signal(sd_bus *bus, void *userdata) {
+         _cleanup_(sd_bus_message_unrefp) sd_bus_message *m = NULL;
+         _cleanup_free_ char *p = NULL;
+diff --git a/src/core/dbus-unit.h b/src/core/dbus-unit.h
+index 68eb621836..39aa1bb53c 100644
+--- a/src/core/dbus-unit.h
++++ b/src/core/dbus-unit.h
+@@ -11,6 +11,7 @@ extern const sd_bus_vtable bus_unit_vtable[];
+ extern const sd_bus_vtable bus_unit_cgroup_vtable[];
+ 
+ void bus_unit_send_change_signal(Unit *u);
++int bus_unit_send_pending_freezer_message(Unit *u);
+ void bus_unit_send_removed_signal(Unit *u);
+ 
+ int bus_unit_method_start_generic(sd_bus_message *message, Unit *u, JobType job_type, bool reload_if_possible, sd_bus_error *error);
+@@ -23,6 +24,8 @@ int bus_unit_method_get_processes(sd_bus_message *message, void *userdata, sd_bu
+ int bus_unit_method_attach_processes(sd_bus_message *message, void *userdata, sd_bus_error *error);
+ int bus_unit_method_ref(sd_bus_message *message, void *userdata, sd_bus_error *error);
+ int bus_unit_method_unref(sd_bus_message *message, void *userdata, sd_bus_error *error);
++int bus_unit_method_freeze(sd_bus_message *message, void *userdata, sd_bus_error *error);
++int bus_unit_method_thaw(sd_bus_message *message, void *userdata, sd_bus_error *error);
+ 
+ int bus_unit_queue_job(sd_bus_message *message, Unit *u, JobType type, JobMode mode, bool reload_if_possible, sd_bus_error *error);
+ int bus_unit_validate_load_state(Unit *u, sd_bus_error *error);
+diff --git a/src/core/dbus.c b/src/core/dbus.c
+index 346a440c5d..b69c11c519 100644
+--- a/src/core/dbus.c
++++ b/src/core/dbus.c
+@@ -1073,10 +1073,15 @@ static void destroy_bus(Manager *m, sd_bus **bus) {
+                 if (j->bus_track && sd_bus_track_get_bus(j->bus_track) == *bus)
+                         j->bus_track = sd_bus_track_unref(j->bus_track);
+ 
+-        HASHMAP_FOREACH(u, m->units, i)
++        HASHMAP_FOREACH(u, m->units, i) {
+                 if (u->bus_track && sd_bus_track_get_bus(u->bus_track) == *bus)
+                         u->bus_track = sd_bus_track_unref(u->bus_track);
+ 
++                /* Get rid of pending freezer messages on this bus */
++                if (u->pending_freezer_message && sd_bus_message_get_bus(u->pending_freezer_message) == *bus)
++                        u->pending_freezer_message = sd_bus_message_unref(u->pending_freezer_message);
++        }
++
+         /* Get rid of queued message on this bus */
+         if (m->pending_reload_message && sd_bus_message_get_bus(m->pending_reload_message) == *bus)
+                 m->pending_reload_message = sd_bus_message_unref(m->pending_reload_message);
+diff --git a/src/core/scope.c b/src/core/scope.c
+index a1a5363244..5a595c65a6 100644
+--- a/src/core/scope.c
++++ b/src/core/scope.c
+@@ -601,6 +601,9 @@ const UnitVTable scope_vtable = {
+ 
+         .kill = scope_kill,
+ 
++        .freeze = unit_freeze_vtable_common,
++        .thaw = unit_thaw_vtable_common,
++
+         .get_timeout = scope_get_timeout,
+ 
+         .serialize = scope_serialize,
+diff --git a/src/core/service.c b/src/core/service.c
+index 1d98ee37fd..89b41f6783 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -4143,6 +4143,9 @@ const UnitVTable service_vtable = {
+ 
+         .kill = service_kill,
+ 
++        .freeze = unit_freeze_vtable_common,
++        .thaw = unit_thaw_vtable_common,
++
+         .serialize = service_serialize,
+         .deserialize_item = service_deserialize_item,
+ 
+diff --git a/src/core/slice.c b/src/core/slice.c
+index 58f18a4dad..b5eb2f5c01 100644
+--- a/src/core/slice.c
++++ b/src/core/slice.c
+@@ -344,6 +344,82 @@ static void slice_enumerate_perpetual(Manager *m) {
+                 (void) slice_make_perpetual(m, SPECIAL_SYSTEM_SLICE, NULL);
+ }
+ 
++static bool slice_freezer_action_supported_by_children(Unit *s) {
++        Unit *member;
++        void *v;
++        Iterator i;
++
++        assert(s);
++
++        HASHMAP_FOREACH_KEY(v, member, s->dependencies[UNIT_BEFORE], i) {
++                int r;
++
++                if (UNIT_DEREF(member->slice) != s)
++                        continue;
++
++                if (member->type == UNIT_SLICE) {
++                        r = slice_freezer_action_supported_by_children(member);
++                        if (!r)
++                                return r;
++                }
++
++                if (!UNIT_VTABLE(member)->freeze)
++                        return false;
++        }
++
++        return true;
++}
++
++static int slice_freezer_action(Unit *s, FreezerAction action) {
++        Unit *member;
++        void *v;
++        Iterator i;
++        int r;
++
++        assert(s);
++        assert(IN_SET(action, FREEZER_FREEZE, FREEZER_THAW));
++
++        if (!slice_freezer_action_supported_by_children(s))
++                return log_unit_warning(s, "Requested freezer operation is not supported by all children of the slice");
++
++        HASHMAP_FOREACH_KEY(v, member, s->dependencies[UNIT_BEFORE], i) {
++                if (UNIT_DEREF(member->slice) != s)
++                        continue;
++
++                if (action == FREEZER_FREEZE)
++                        r = UNIT_VTABLE(member)->freeze(member);
++                else
++                        r = UNIT_VTABLE(member)->thaw(member);
++
++                if (r < 0)
++                        return r;
++        }
++
++        r = unit_cgroup_freezer_action(s, action);
++        if (r < 0)
++                return r;
++
++        return 0;
++}
++
++static int slice_freeze(Unit *s) {
++        assert(s);
++
++        return slice_freezer_action(s, FREEZER_FREEZE);
++}
++
++static int slice_thaw(Unit *s) {
++        assert(s);
++
++        return slice_freezer_action(s, FREEZER_THAW);
++}
++
++static bool slice_can_freeze(Unit *s) {
++        assert(s);
++
++        return slice_freezer_action_supported_by_children(s);
++}
++
+ const UnitVTable slice_vtable = {
+         .object_size = sizeof(Slice),
+         .cgroup_context_offset = offsetof(Slice, cgroup_context),
+@@ -368,6 +444,10 @@ const UnitVTable slice_vtable = {
+ 
+         .kill = slice_kill,
+ 
++        .freeze = slice_freeze,
++        .thaw = slice_thaw,
++        .can_freeze = slice_can_freeze,
++
+         .serialize = slice_serialize,
+         .deserialize_item = slice_deserialize_item,
+ 
+diff --git a/src/core/unit.c b/src/core/unit.c
+index f57260727f..29ce6c1fb7 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -583,6 +583,7 @@ void unit_free(Unit *u) {
+         sd_bus_slot_unref(u->match_bus_slot);
+         sd_bus_track_unref(u->bus_track);
+         u->deserialized_refs = strv_free(u->deserialized_refs);
++        u->pending_freezer_message = sd_bus_message_unref(u->pending_freezer_message);
+ 
+         unit_free_requires_mounts_for(u);
+ 
+@@ -685,6 +686,38 @@ void unit_free(Unit *u) {
+         free(u);
+ }
+ 
++FreezerState unit_freezer_state(Unit *u) {
++        assert(u);
++
++        return u->freezer_state;
++}
++
++int unit_freezer_state_kernel(Unit *u, FreezerState *ret) {
++        char *values[1] = {};
++        int r;
++
++        assert(u);
++
++        r = cg_get_keyed_attribute(SYSTEMD_CGROUP_CONTROLLER, u->cgroup_path, "cgroup.events",
++                                   STRV_MAKE("frozen"), values);
++        if (r < 0)
++                return r;
++
++        r = _FREEZER_STATE_INVALID;
++
++        if (values[0])  {
++                if (streq(values[0], "0"))
++                        r = FREEZER_RUNNING;
++                else if (streq(values[0], "1"))
++                        r = FREEZER_FROZEN;
++        }
++
++        free(values[0]);
++        *ret = r;
++
++        return 0;
++}
++
+ UnitActiveState unit_active_state(Unit *u) {
+         assert(u);
+ 
+@@ -1760,6 +1793,7 @@ int unit_start(Unit *u) {
+          * before it will start again. */
+ 
+         unit_add_to_dbus_queue(u);
++        unit_cgroup_freezer_action(u, FREEZER_THAW);
+ 
+         return UNIT_VTABLE(u)->start(u);
+ }
+@@ -1812,6 +1846,7 @@ int unit_stop(Unit *u) {
+                 return -EBADR;
+ 
+         unit_add_to_dbus_queue(u);
++        unit_cgroup_freezer_action(u, FREEZER_THAW);
+ 
+         return UNIT_VTABLE(u)->stop(u);
+ }
+@@ -1868,6 +1903,8 @@ int unit_reload(Unit *u) {
+                 return 0;
+         }
+ 
++        unit_cgroup_freezer_action(u, FREEZER_THAW);
++
+         return UNIT_VTABLE(u)->reload(u);
+ }
+ 
+@@ -3208,6 +3245,8 @@ int unit_serialize(Unit *u, FILE *f, FDSet *fds, bool serialize_jobs) {
+         if (!sd_id128_is_null(u->invocation_id))
+                 unit_serialize_item_format(u, f, "invocation-id", SD_ID128_FORMAT_STR, SD_ID128_FORMAT_VAL(u->invocation_id));
+ 
++        (void) unit_serialize_item_format(u, f, "freezer-state", "%s", freezer_state_to_string(unit_freezer_state(u)));
++
+         bus_track_serialize(u->bus_track, f, "ref");
+ 
+         for (m = 0; m < _CGROUP_IP_ACCOUNTING_METRIC_MAX; m++) {
+@@ -3574,6 +3613,16 @@ int unit_deserialize(Unit *u, FILE *f, FDSet *fds) {
+                                         log_unit_warning_errno(u, r, "Failed to set invocation ID for unit: %m");
+                         }
+ 
++                        continue;
++                } else if (streq(l, "freezer-state")) {
++                        FreezerState s;
++
++                        s = freezer_state_from_string(v);
++                        if (s < 0)
++                                log_unit_debug(u, "Failed to deserialize freezer-state '%s', ignoring.", v);
++                        else
++                                u->freezer_state = s;
++
+                         continue;
+                 }
+ 
+@@ -5507,6 +5556,80 @@ void unit_log_skip(Unit *u, const char *result) {
+                    "UNIT_RESULT=%s", result);
+ }
+ 
++bool unit_can_freeze(Unit *u) {
++        assert(u);
++
++        if (UNIT_VTABLE(u)->can_freeze)
++                return UNIT_VTABLE(u)->can_freeze(u);
++
++        return UNIT_VTABLE(u)->freeze;
++}
++
++void unit_frozen(Unit *u) {
++        assert(u);
++
++        u->freezer_state = FREEZER_FROZEN;
++
++        bus_unit_send_pending_freezer_message(u);
++}
++
++void unit_thawed(Unit *u) {
++        assert(u);
++
++        u->freezer_state = FREEZER_RUNNING;
++
++        bus_unit_send_pending_freezer_message(u);
++}
++
++static int unit_freezer_action(Unit *u, FreezerAction action) {
++        UnitActiveState s;
++        int (*method)(Unit*);
++        int r;
++
++        assert(u);
++        assert(IN_SET(action, FREEZER_FREEZE, FREEZER_THAW));
++
++        method = action == FREEZER_FREEZE ? UNIT_VTABLE(u)->freeze : UNIT_VTABLE(u)->thaw;
++        if (!method || !cg_freezer_supported())
++                return -EOPNOTSUPP;
++
++        if (u->job)
++                return -EBUSY;
++
++        if (u->load_state != UNIT_LOADED)
++                return -EHOSTDOWN;
++
++        s = unit_active_state(u);
++        if (s != UNIT_ACTIVE)
++                return -EHOSTDOWN;
++
++        if (IN_SET(u->freezer_state, FREEZER_FREEZING, FREEZER_THAWING))
++                return -EALREADY;
++
++        r = method(u);
++        if (r <= 0)
++                return r;
++
++        return 1;
++}
++
++int unit_freeze(Unit *u) {
++        return unit_freezer_action(u, FREEZER_FREEZE);
++}
++
++int unit_thaw(Unit *u) {
++        return unit_freezer_action(u, FREEZER_THAW);
++}
++
++/* Wrappers around low-level cgroup freezer operations common for service and scope units */
++int unit_freeze_vtable_common(Unit *u) {
++        return unit_cgroup_freezer_action(u, FREEZER_FREEZE);
++}
++
++int unit_thaw_vtable_common(Unit *u) {
++        return unit_cgroup_freezer_action(u, FREEZER_THAW);
++}
++
+ static const char* const collect_mode_table[_COLLECT_MODE_MAX] = {
+         [COLLECT_INACTIVE] = "inactive",
+         [COLLECT_INACTIVE_OR_FAILED] = "inactive-or-failed",
+diff --git a/src/core/unit.h b/src/core/unit.h
+index b40ff9b961..6e37fd6f5a 100644
+--- a/src/core/unit.h
++++ b/src/core/unit.h
+@@ -118,6 +118,9 @@ typedef struct Unit {
+         UnitLoadState load_state;
+         Unit *merged_into;
+ 
++        FreezerState freezer_state;
++        sd_bus_message *pending_freezer_message;
++
+         char *id; /* One name is special because we use it for identification. Points to an entry in the names set */
+         char *instance;
+ 
+@@ -456,6 +459,11 @@ typedef struct UnitVTable {
+ 
+         int (*kill)(Unit *u, KillWho w, int signo, sd_bus_error *error);
+ 
++        /* Freeze the unit */
++        int (*freeze)(Unit *u);
++        int (*thaw)(Unit *u);
++        bool (*can_freeze)(Unit *u);
++
+         bool (*can_reload)(Unit *u);
+ 
+         /* Write all data that cannot be restored from other sources
+@@ -641,6 +649,8 @@ const char *unit_description(Unit *u) _pure_;
+ bool unit_has_name(Unit *u, const char *name);
+ 
+ UnitActiveState unit_active_state(Unit *u);
++FreezerState unit_freezer_state(Unit *u);
++int unit_freezer_state_kernel(Unit *u, FreezerState *ret);
+ 
+ const char* unit_sub_state_to_string(Unit *u);
+ 
+@@ -814,6 +824,16 @@ void unit_log_failure(Unit *u, const char *result);
+  * after some execution, rather than succeeded or failed. */
+ void unit_log_skip(Unit *u, const char *result);
+ 
++bool unit_can_freeze(Unit *u);
++int unit_freeze(Unit *u);
++void unit_frozen(Unit *u);
++
++int unit_thaw(Unit *u);
++void unit_thawed(Unit *u);
++
++int unit_freeze_vtable_common(Unit *u);
++int unit_thaw_vtable_common(Unit *u);
++
+ /* Macros which append UNIT= or USER_UNIT= to the message */
+ 
+ #define log_unit_full(unit, level, error, ...)                          \
+diff --git a/src/libsystemd/sd-bus/bus-common-errors.h b/src/libsystemd/sd-bus/bus-common-errors.h
+index 3945c7f6ac..77da78d4d4 100644
+--- a/src/libsystemd/sd-bus/bus-common-errors.h
++++ b/src/libsystemd/sd-bus/bus-common-errors.h
+@@ -30,6 +30,8 @@
+ #define BUS_ERROR_NO_SUCH_DYNAMIC_USER "org.freedesktop.systemd1.NoSuchDynamicUser"
+ #define BUS_ERROR_NOT_REFERENCED "org.freedesktop.systemd1.NotReferenced"
+ #define BUS_ERROR_DISK_FULL "org.freedesktop.systemd1.DiskFull"
++#define BUS_ERROR_UNIT_BUSY "org.freedesktop.systemd1.UnitBusy"
++#define BUS_ERROR_UNIT_INACTIVE "org.freedesktop.systemd1.UnitInactive"
+ 
+ #define BUS_ERROR_NO_SUCH_MACHINE "org.freedesktop.machine1.NoSuchMachine"
+ #define BUS_ERROR_NO_SUCH_IMAGE "org.freedesktop.machine1.NoSuchImage"
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index e0db97e339..e963f19b0a 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -27,6 +27,7 @@
+ #include "bus-message.h"
+ #include "bus-unit-util.h"
+ #include "bus-util.h"
++#include "bus-wait-for-units.h"
+ #include "cgroup-show.h"
+ #include "cgroup-util.h"
+ #include "copy.h"
+@@ -3728,6 +3729,98 @@ static int kill_unit(int argc, char *argv[], void *userdata) {
+ 
+         return r;
+ }
++static int freeze_or_thaw_unit(int argc, char *argv[], void *userdata) {
++        _cleanup_(bus_wait_for_units_freep) BusWaitForUnits *w = NULL;
++        _cleanup_strv_free_ char **names = NULL;
++        int r, ret = EXIT_SUCCESS;
++        char **name;
++        const char *method;
++        sd_bus *bus;
++
++        r = acquire_bus(BUS_FULL, &bus);
++        if (r < 0)
++                return r;
++
++        polkit_agent_open_maybe();
++
++        r = expand_names(bus, strv_skip(argv, 1), NULL, &names);
++        if (r < 0)
++                return log_error_errno(r, "Failed to expand names: %m");
++
++        if (!arg_no_block) {
++                r = bus_wait_for_units_new(bus, &w);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to allocate unit waiter: %m");
++        }
++
++        if (streq(argv[0], "freeze"))
++                method = "FreezeUnit";
++        else if (streq(argv[0], "thaw"))
++                method = "ThawUnit";
++        else
++                assert_not_reached("Unhandled method");
++
++        STRV_FOREACH(name, names) {
++                _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
++                _cleanup_(sd_bus_message_unrefp) sd_bus_message *m = NULL;
++
++                if (w) {
++                        /* If we shall wait for the cleaning to complete, let's add a ref on the unit first */
++                        r = sd_bus_call_method(
++                                        bus,
++                                        "org.freedesktop.systemd1",
++                                        "/org/freedesktop/systemd1",
++                                        "org.freedesktop.systemd1.Manager",
++                                        "RefUnit",
++                                        &error,
++                                        NULL,
++                                        "s", *name);
++                        if (r < 0) {
++                                log_error_errno(r, "Failed to add reference to unit %s: %s", *name, bus_error_message(&error, r));
++                                if (ret == EXIT_SUCCESS)
++                                        ret = r;
++                                continue;
++                        }
++                }
++
++                r = sd_bus_message_new_method_call(
++                                bus,
++                                &m,
++                                "org.freedesktop.systemd1",
++                                "/org/freedesktop/systemd1",
++                                "org.freedesktop.systemd1.Manager",
++                                method);
++                if (r < 0)
++                        return bus_log_create_error(r);
++
++                r = sd_bus_message_append(m, "s", *name);
++                if (r < 0)
++                        return bus_log_create_error(r);
++
++                r = sd_bus_call(bus, m, 0, &error, NULL);
++                if (r < 0) {
++                        log_error_errno(r, "Failed to %s unit %s: %s", argv[0], *name, bus_error_message(&error, r));
++                        if (ret == EXIT_SUCCESS) {
++                                ret = r;
++                                continue;
++                        }
++                }
++
++                if (w) {
++                        r = bus_wait_for_units_add_unit(w, *name, BUS_WAIT_REFFED|BUS_WAIT_FOR_MAINTENANCE_END, NULL, NULL);
++                        if (r < 0)
++                                return log_error_errno(r, "Failed to watch unit %s: %m", *name);
++                }
++        }
++
++        r = bus_wait_for_units_run(w);
++        if (r < 0)
++                return log_error_errno(r, "Failed to wait for units: %m");
++        if (r == BUS_WAIT_FAILURE)
++                ret = EXIT_FAILURE;
++
++        return ret;
++}
+ 
+ typedef struct ExecStatusInfo {
+         char *name;
+@@ -3832,6 +3925,7 @@ typedef struct UnitStatusInfo {
+         const char *id;
+         const char *load_state;
+         const char *active_state;
++        const char *freezer_state;
+         const char *sub_state;
+         const char *unit_file_state;
+         const char *unit_file_preset;
+@@ -3949,7 +4043,7 @@ static void print_status_info(
+                 bool *ellipsized) {
+ 
+         char since1[FORMAT_TIMESTAMP_RELATIVE_MAX], since2[FORMAT_TIMESTAMP_MAX];
+-        const char *s1, *s2, *active_on, *active_off, *on, *off, *ss;
++        const char *s1, *s2, *active_on, *active_off, *on, *off, *ss, *fs;
+         _cleanup_free_ char *formatted_path = NULL;
+         ExecStatusInfo *p;
+         usec_t timestamp;
+@@ -4056,6 +4150,10 @@ static void print_status_info(
+                 printf("   Active: %s%s%s",
+                        active_on, strna(i->active_state), active_off);
+ 
++        fs = !isempty(i->freezer_state) && !streq(i->freezer_state, "running") ? i->freezer_state : NULL;
++        if (fs)
++                printf(" %s(%s)%s", ansi_highlight_yellow(), fs, active_off);
++
+         if (!isempty(i->result) && !streq(i->result, "success"))
+                 printf(" (Result: %s)", i->result);
+ 
+@@ -4985,6 +5083,7 @@ static int show_one(
+                 { "Id",                             "s",              NULL,           offsetof(UnitStatusInfo, id)                                },
+                 { "LoadState",                      "s",              NULL,           offsetof(UnitStatusInfo, load_state)                        },
+                 { "ActiveState",                    "s",              NULL,           offsetof(UnitStatusInfo, active_state)                      },
++                { "FreezerState",                   "s",              NULL,           offsetof(UnitStatusInfo, freezer_state)                     },
+                 { "SubState",                       "s",              NULL,           offsetof(UnitStatusInfo, sub_state)                         },
+                 { "UnitFileState",                  "s",              NULL,           offsetof(UnitStatusInfo, unit_file_state)                   },
+                 { "UnitFilePreset",                 "s",              NULL,           offsetof(UnitStatusInfo, unit_file_preset)                  },
+@@ -7139,6 +7238,8 @@ static void systemctl_help(void) {
+                "                                      if supported, otherwise restart\n"
+                "  isolate UNIT                        Start one unit and stop all others\n"
+                "  kill UNIT...                        Send signal to processes of a unit\n"
++               "  freeze PATTERN...                   Freeze execution of unit processes\n"
++               "  thaw PATTERN...                     Resume execution of a frozen unit\n"
+                "  is-active PATTERN...                Check whether units are active\n"
+                "  is-failed PATTERN...                Check whether units are failed\n"
+                "  status [PATTERN...|PID...]          Show runtime status of one or more units\n"
+@@ -8280,6 +8381,8 @@ static int systemctl_main(int argc, char *argv[]) {
+                 { "condrestart",           2,        VERB_ANY, VERB_ONLINE_ONLY, start_unit           }, /* For compatibility with RH */
+                 { "isolate",               2,        2,        VERB_ONLINE_ONLY, start_unit           },
+                 { "kill",                  2,        VERB_ANY, VERB_ONLINE_ONLY, kill_unit            },
++                { "freeze",                2,        VERB_ANY, VERB_ONLINE_ONLY, freeze_or_thaw_unit  },
++                { "thaw",                  2,        VERB_ANY, VERB_ONLINE_ONLY, freeze_or_thaw_unit  },
+                 { "is-active",             2,        VERB_ANY, VERB_ONLINE_ONLY, check_unit_active    },
+                 { "check",                 2,        VERB_ANY, VERB_ONLINE_ONLY, check_unit_active    }, /* deprecated alias of is-active */
+                 { "is-failed",             2,        VERB_ANY, VERB_ONLINE_ONLY, check_unit_failed    },

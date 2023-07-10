@@ -1,0 +1,114 @@
+From f057aa6bb604845fa10ad569bca306e5e1e8fe0d Mon Sep 17 00:00:00 2001
+From: Franck Bui <fbui@suse.com>
+Date: Mon, 18 Mar 2019 11:48:34 +0100
+Subject: [PATCH] process-util: introduce pid_is_my_child() helper
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+No functional changes.
+
+Thanks Renaud Métrich for backporting this to RHEL.
+Resolves: #1744972
+---
+ src/basic/process-util.c | 14 ++++++++++++++
+ src/basic/process-util.h |  1 +
+ src/core/cgroup.c        |  7 ++-----
+ src/core/service.c       |  8 ++------
+ 4 files changed, 19 insertions(+), 11 deletions(-)
+
+diff --git a/src/basic/process-util.c b/src/basic/process-util.c
+index aa3eff779a..6dbeee9dda 100644
+--- a/src/basic/process-util.c
++++ b/src/basic/process-util.c
+@@ -903,6 +903,20 @@ int getenv_for_pid(pid_t pid, const char *field, char **ret) {
+         return 0;
+ }
+ 
++int pid_is_my_child(pid_t pid) {
++        pid_t ppid;
++        int r;
++
++        if (pid <= 1)
++                return false;
++
++        r = get_process_ppid(pid, &ppid);
++        if (r < 0)
++                return r;
++
++        return ppid == getpid_cached();
++}
++
+ bool pid_is_unwaited(pid_t pid) {
+         /* Checks whether a PID is still valid at all, including a zombie */
+ 
+diff --git a/src/basic/process-util.h b/src/basic/process-util.h
+index a5bb072b25..a3bd2851b4 100644
+--- a/src/basic/process-util.h
++++ b/src/basic/process-util.h
+@@ -68,6 +68,7 @@ int getenv_for_pid(pid_t pid, const char *field, char **_value);
+ 
+ bool pid_is_alive(pid_t pid);
+ bool pid_is_unwaited(pid_t pid);
++int pid_is_my_child(pid_t pid);
+ int pid_from_same_root_fs(pid_t pid);
+ 
+ bool is_main_thread(void);
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index 62ab41a288..b7ed07e65b 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -1876,7 +1876,7 @@ void unit_prune_cgroup(Unit *u) {
+ 
+ int unit_search_main_pid(Unit *u, pid_t *ret) {
+         _cleanup_fclose_ FILE *f = NULL;
+-        pid_t pid = 0, npid, mypid;
++        pid_t pid = 0, npid;
+         int r;
+ 
+         assert(u);
+@@ -1889,15 +1889,12 @@ int unit_search_main_pid(Unit *u, pid_t *ret) {
+         if (r < 0)
+                 return r;
+ 
+-        mypid = getpid_cached();
+         while (cg_read_pid(f, &npid) > 0)  {
+-                pid_t ppid;
+ 
+                 if (npid == pid)
+                         continue;
+ 
+-                /* Ignore processes that aren't our kids */
+-                if (get_process_ppid(npid, &ppid) >= 0 && ppid != mypid)
++                if (pid_is_my_child(npid) == 0)
+                         continue;
+ 
+                 if (pid != 0)
+diff --git a/src/core/service.c b/src/core/service.c
+index 24f167572a..614ba05d89 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -139,8 +139,6 @@ static void service_unwatch_pid_file(Service *s) {
+ }
+ 
+ static int service_set_main_pid(Service *s, pid_t pid) {
+-        pid_t ppid;
+-
+         assert(s);
+ 
+         if (pid <= 1)
+@@ -159,12 +157,10 @@ static int service_set_main_pid(Service *s, pid_t pid) {
+ 
+         s->main_pid = pid;
+         s->main_pid_known = true;
++        s->main_pid_alien = pid_is_my_child(pid) == 0;
+ 
+-        if (get_process_ppid(pid, &ppid) >= 0 && ppid != getpid_cached()) {
++        if (s->main_pid_alien)
+                 log_unit_warning(UNIT(s), "Supervising process "PID_FMT" which is not our child. We'll most likely not notice when it exits.", pid);
+-                s->main_pid_alien = true;
+-        } else
+-                s->main_pid_alien = false;
+ 
+         return 0;
+ }

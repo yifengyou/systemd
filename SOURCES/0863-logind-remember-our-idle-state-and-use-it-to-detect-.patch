@@ -1,0 +1,70 @@
+From a55bdb007ca24900a704f72359305b04125d9e05 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Wed, 20 Apr 2022 10:13:43 +0200
+Subject: [PATCH] logind: remember our idle state and use it to detect idle
+ level transitions
+
+Fixes #16391
+
+(cherry picked from commit 4e2cfb778b9ed7f22ee98f48f28cf8678d25ad32)
+
+Resolved: #1866955
+---
+ src/login/logind.c | 23 +++++++++++++++++++----
+ src/login/logind.h |  1 +
+ 2 files changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/src/login/logind.c b/src/login/logind.c
+index 6b576dad0d..bb1d3f3523 100644
+--- a/src/login/logind.c
++++ b/src/login/logind.c
+@@ -1027,18 +1027,33 @@ static int manager_dispatch_idle_action(sd_event_source *s, uint64_t t, void *us
+         n = now(CLOCK_MONOTONIC);
+ 
+         r = manager_get_idle_hint(m, &since);
+-        if (r <= 0)
++        if (r <= 0) {
+                 /* Not idle. Let's check if after a timeout it might be idle then. */
+                 elapse = n + m->idle_action_usec;
+-        else {
++                m->was_idle = false;
++        } else {
++
+                 /* Idle! Let's see if it's time to do something, or if
+                  * we shall sleep for longer. */
+ 
+                 if (n >= since.monotonic + m->idle_action_usec &&
+                     (m->idle_action_not_before_usec <= 0 || n >= m->idle_action_not_before_usec + m->idle_action_usec)) {
+-                        log_info("System idle. Taking action.");
++                        bool is_edge = false;
++
++                        /* We weren't idle previously or some activity happened while we were sleeping, and now we are
++                         * idle. Let's remember that for the next time and make this an edge transition. */
++                        if (!m->was_idle || since.monotonic >= m->idle_action_not_before_usec) {
++                                is_edge = true;
++                                m->was_idle = true;
++                        }
++
++                        if (m->idle_action == HANDLE_LOCK && !is_edge)
++                                /* We are idle and we were before so we are actually not taking any action. */
++                                log_debug("System idle.");
++                        else
++                                log_info("System idle. Doing %s operation.", handle_action_to_string(m->idle_action));
+ 
+-                        manager_handle_action(m, 0, m->idle_action, false, false);
++                        manager_handle_action(m, 0, m->idle_action, false, is_edge);
+                         m->idle_action_not_before_usec = n;
+                 }
+ 
+diff --git a/src/login/logind.h b/src/login/logind.h
+index 606adf4fe6..b9b4a5113f 100644
+--- a/src/login/logind.h
++++ b/src/login/logind.h
+@@ -101,6 +101,7 @@ struct Manager {
+         usec_t idle_action_usec;
+         usec_t idle_action_not_before_usec;
+         HandleAction idle_action;
++        bool was_idle;
+ 
+         usec_t stop_idle_session_usec;
+ 

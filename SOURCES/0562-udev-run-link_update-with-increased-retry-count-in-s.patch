@@ -1,0 +1,44 @@
+From 1f3165bda13c8572c8c31d23c998835c4e2ad8f3 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Thu, 4 Mar 2021 17:35:22 +0100
+Subject: [PATCH] udev: run link_update() with increased retry count in second
+ invocation
+
+In PR #17431 we have introduced retry loop in link_update() in order to
+maximize the chance that we end up with correct target when there are
+multiple contenders for given symlink.
+
+Number of iterations in retry loop is either 1 or
+LINK_UPDATE_MAX_RETRIES, depending on the value of 'initialized' db
+flag. When device appears for the first time we need to set the
+flag before calling link_update() via update_devnode() for the second
+time to make sure we run the second invocation with higher retry loop
+counter.
+
+(cherry picked from commit 996c83903da5bf8b371314b4207ff97afeef65a4)
+
+Related: #1931947
+---
+ src/udev/udev-event.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/src/udev/udev-event.c b/src/udev/udev-event.c
+index 9004634f65..eaec05523b 100644
+--- a/src/udev/udev-event.c
++++ b/src/udev/udev-event.c
+@@ -934,14 +934,13 @@ void udev_event_execute_rules(struct udev_event *event,
+                 /* (re)write database file */
+                 udev_device_tag_index(dev, event->dev_db, true);
+                 udev_device_update_db(dev);
++                udev_device_set_is_initialized(dev);
+ 
+                 /* Yes, we run update_devnode() twice, because in the first invocation, that is before update of udev database,
+                  * it could happen that two contenders are replacing each other's symlink. Hence we run it again to make sure
+                  * symlinks point to devices that claim them with the highest priority. */
+                 update_devnode(event);
+ 
+-                udev_device_set_is_initialized(dev);
+-
+                 event->dev_db = udev_device_unref(event->dev_db);
+         }
+ }

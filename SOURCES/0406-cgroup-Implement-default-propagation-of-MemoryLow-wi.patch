@@ -1,0 +1,695 @@
+From f45cb6d6a2c247c7594d9965cbb745303adb61d6 Mon Sep 17 00:00:00 2001
+From: Chris Down <chris@chrisdown.name>
+Date: Thu, 28 Mar 2019 12:50:50 +0000
+Subject: [PATCH] cgroup: Implement default propagation of MemoryLow with
+ DefaultMemoryLow
+
+In cgroup v2 we have protection tunables -- currently MemoryLow and
+MemoryMin (there will be more in future for other resources, too). The
+design of these protection tunables requires not only intermediate
+cgroups to propagate protections, but also the units at the leaf of that
+resource's operation to accept it (by setting MemoryLow or MemoryMin).
+
+This makes sense from an low-level API design perspective, but it's a
+good idea to also have a higher-level abstraction that can, by default,
+propagate these resources to children recursively. In this patch, this
+happens by having descendants set memory.low to N if their ancestor has
+DefaultMemoryLow=N -- assuming they don't set a separate MemoryLow
+value.
+
+Any affected unit can opt out of this propagation by manually setting
+`MemoryLow` to some value in its unit configuration. A unit can also
+stop further propagation by setting `DefaultMemoryLow=` with no
+argument. This removes further propagation in the subtree, but has no
+effect on the unit itself (for that, use `MemoryLow=0`).
+
+Our use case in production is simplifying the configuration of machines
+which heavily rely on memory protection tunables, but currently require
+tweaking a huge number of unit files to make that a reality. This
+directive makes that significantly less fragile, and decreases the risk
+of misconfiguration.
+
+After this patch is merged, I will implement DefaultMemoryMin= using the
+same principles.
+
+(cherry picked from commit c52db42b78f6fbeb7792cc4eca27e2767a48b6ca)
+
+Related: #1763435
+---
+ doc/TRANSIENT-SETTINGS.md             |   1 +
+ man/systemd.resource-control.xml      |   4 +
+ src/core/cgroup.c                     |  58 +++++++++--
+ src/core/cgroup.h                     |   6 ++
+ src/core/dbus-cgroup.c                |   7 ++
+ src/core/load-fragment-gperf.gperf.m4 |   1 +
+ src/core/load-fragment.c              |  13 ++-
+ src/shared/bus-unit-util.c            |   2 +-
+ src/shared/bus-util.c                 |   2 +-
+ src/systemctl/systemctl.c             |   3 +
+ src/test/meson.build                  |   6 ++
+ src/test/test-cgroup-unit-default.c   | 145 ++++++++++++++++++++++++++
+ test/dml-discard-empty.service        |   7 ++
+ test/dml-discard-set-ml.service       |   8 ++
+ test/dml-discard.slice                |   5 +
+ test/dml-override-empty.service       |   7 ++
+ test/dml-override.slice               |   5 +
+ test/dml-passthrough-empty.service    |   7 ++
+ test/dml-passthrough-set-dml.service  |   8 ++
+ test/dml-passthrough-set-ml.service   |   8 ++
+ test/dml-passthrough.slice            |   5 +
+ test/dml.slice                        |   5 +
+ test/meson.build                      |  10 ++
+ 23 files changed, 310 insertions(+), 13 deletions(-)
+ create mode 100644 src/test/test-cgroup-unit-default.c
+ create mode 100644 test/dml-discard-empty.service
+ create mode 100644 test/dml-discard-set-ml.service
+ create mode 100644 test/dml-discard.slice
+ create mode 100644 test/dml-override-empty.service
+ create mode 100644 test/dml-override.slice
+ create mode 100644 test/dml-passthrough-empty.service
+ create mode 100644 test/dml-passthrough-set-dml.service
+ create mode 100644 test/dml-passthrough-set-ml.service
+ create mode 100644 test/dml-passthrough.slice
+ create mode 100644 test/dml.slice
+
+diff --git a/doc/TRANSIENT-SETTINGS.md b/doc/TRANSIENT-SETTINGS.md
+index 93865c0333..5a8fa0727e 100644
+--- a/doc/TRANSIENT-SETTINGS.md
++++ b/doc/TRANSIENT-SETTINGS.md
+@@ -223,6 +223,7 @@ All cgroup/resource control settings are available for transient units
+ ✓ AllowedMemoryNodes=
+ ✓ MemoryAccounting=
+ ✓ MemoryMin=
++✓ DefaultMemoryLow=
+ ✓ MemoryLow=
+ ✓ MemoryHigh=
+ ✓ MemoryMax=
+diff --git a/man/systemd.resource-control.xml b/man/systemd.resource-control.xml
+index 63a0c87565..27f16001dd 100644
+--- a/man/systemd.resource-control.xml
++++ b/man/systemd.resource-control.xml
+@@ -305,6 +305,10 @@
+ 
+           <para>This setting is supported only if the unified control group hierarchy is used and disables
+           <varname>MemoryLimit=</varname>.</para>
++
++          <para>Units may can have their children use a default <literal>memory.low</literal> value by specifying
++          <varname>DefaultMemoryLow=</varname>, which has the same usage as <varname>MemoryLow=</varname>. This setting
++          does not affect <literal>memory.low</literal> in the unit itself.</para>
+         </listitem>
+       </varlistentry>
+ 
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index a17b38f914..f804bf4727 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -220,6 +220,7 @@ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix) {
+                 "%sStartupIOWeight=%" PRIu64 "\n"
+                 "%sBlockIOWeight=%" PRIu64 "\n"
+                 "%sStartupBlockIOWeight=%" PRIu64 "\n"
++                "%sDefaultMemoryLow=%" PRIu64 "\n"
+                 "%sMemoryMin=%" PRIu64 "\n"
+                 "%sMemoryLow=%" PRIu64 "\n"
+                 "%sMemoryHigh=%" PRIu64 "\n"
+@@ -247,6 +248,7 @@ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix) {
+                 prefix, c->startup_io_weight,
+                 prefix, c->blockio_weight,
+                 prefix, c->startup_blockio_weight,
++                prefix, c->default_memory_low,
+                 prefix, c->memory_min,
+                 prefix, c->memory_low,
+                 prefix, c->memory_high,
+@@ -370,6 +372,32 @@ int cgroup_add_device_allow(CGroupContext *c, const char *dev, const char *mode)
+         return 0;
+ }
+ 
++uint64_t unit_get_ancestor_memory_low(Unit *u) {
++        CGroupContext *c;
++
++        /* 1. Is MemoryLow set in this unit? If so, use that.
++         * 2. Is DefaultMemoryLow set in any ancestor? If so, use that.
++         * 3. Otherwise, return CGROUP_LIMIT_MIN. */
++
++        assert(u);
++
++        c = unit_get_cgroup_context(u);
++
++        if (c->memory_low_set)
++                return c->memory_low;
++
++        while (UNIT_ISSET(u->slice)) {
++                u = UNIT_DEREF(u->slice);
++                c = unit_get_cgroup_context(u);
++
++                if (c->default_memory_low_set)
++                        return c->default_memory_low;
++        }
++
++        /* We've reached the root, but nobody had DefaultMemoryLow set, so set it to the kernel default. */
++        return CGROUP_LIMIT_MIN;
++}
++
+ static int lookup_block_device(const char *p, dev_t *ret) {
+         struct stat st;
+         int r;
+@@ -807,8 +835,17 @@ static void cgroup_apply_blkio_device_limit(Unit *u, const char *dev_path, uint6
+                               "Failed to set blkio.throttle.write_bps_device: %m");
+ }
+ 
+-static bool cgroup_context_has_unified_memory_config(CGroupContext *c) {
+-        return c->memory_min > 0 || c->memory_low > 0 || c->memory_high != CGROUP_LIMIT_MAX || c->memory_max != CGROUP_LIMIT_MAX || c->memory_swap_max != CGROUP_LIMIT_MAX;
++static bool unit_has_unified_memory_config(Unit *u) {
++        CGroupContext *c;
++
++        assert(u);
++
++        c = unit_get_cgroup_context(u);
++        assert(c);
++
++        return c->memory_min > 0 || unit_get_ancestor_memory_low(u) > 0 ||
++               c->memory_high != CGROUP_LIMIT_MAX || c->memory_max != CGROUP_LIMIT_MAX ||
++               c->memory_swap_max != CGROUP_LIMIT_MAX;
+ }
+ 
+ static void cgroup_apply_unified_memory_limit(Unit *u, const char *file, uint64_t v) {
+@@ -1056,7 +1093,7 @@ static void cgroup_context_apply(
+                 if (cg_all_unified() > 0) {
+                         uint64_t max, swap_max = CGROUP_LIMIT_MAX;
+ 
+-                        if (cgroup_context_has_unified_memory_config(c)) {
++                        if (unit_has_unified_memory_config(u)) {
+                                 max = c->memory_max;
+                                 swap_max = c->memory_swap_max;
+                         } else {
+@@ -1067,7 +1104,7 @@ static void cgroup_context_apply(
+                         }
+ 
+                         cgroup_apply_unified_memory_limit(u, "memory.min", c->memory_min);
+-                        cgroup_apply_unified_memory_limit(u, "memory.low", c->memory_low);
++                        cgroup_apply_unified_memory_limit(u, "memory.low", unit_get_ancestor_memory_low(u));
+                         cgroup_apply_unified_memory_limit(u, "memory.high", c->memory_high);
+                         cgroup_apply_unified_memory_limit(u, "memory.max", max);
+                         cgroup_apply_unified_memory_limit(u, "memory.swap.max", swap_max);
+@@ -1075,7 +1112,7 @@ static void cgroup_context_apply(
+                         char buf[DECIMAL_STR_MAX(uint64_t) + 1];
+                         uint64_t val;
+ 
+-                        if (cgroup_context_has_unified_memory_config(c)) {
++                        if (unit_has_unified_memory_config(u)) {
+                                 val = c->memory_max;
+                                 log_cgroup_compat(u, "Applying MemoryMax %" PRIi64 " as MemoryLimit", val);
+                         } else
+@@ -1204,8 +1241,13 @@ static void cgroup_context_apply(
+                 cgroup_apply_firewall(u);
+ }
+ 
+-CGroupMask cgroup_context_get_mask(CGroupContext *c) {
++static CGroupMask unit_get_cgroup_mask(Unit *u) {
+         CGroupMask mask = 0;
++        CGroupContext *c;
++
++        assert(u);
++
++        c = unit_get_cgroup_context(u);
+ 
+         /* Figure out which controllers we need */
+ 
+@@ -1223,7 +1265,7 @@ CGroupMask cgroup_context_get_mask(CGroupContext *c) {
+ 
+         if (c->memory_accounting ||
+             c->memory_limit != CGROUP_LIMIT_MAX ||
+-            cgroup_context_has_unified_memory_config(c))
++            unit_has_unified_memory_config(u))
+                 mask |= CGROUP_MASK_MEMORY;
+ 
+         if (c->device_allow ||
+@@ -1246,7 +1288,7 @@ CGroupMask unit_get_own_mask(Unit *u) {
+         if (!c)
+                 return 0;
+ 
+-        return cgroup_context_get_mask(c) | unit_get_delegate_mask(u);
++        return unit_get_cgroup_mask(u) | unit_get_delegate_mask(u);
+ }
+ 
+ CGroupMask unit_get_delegate_mask(Unit *u) {
+diff --git a/src/core/cgroup.h b/src/core/cgroup.h
+index 8102b442b8..a263d6a169 100644
+--- a/src/core/cgroup.h
++++ b/src/core/cgroup.h
+@@ -95,12 +95,16 @@ struct CGroupContext {
+         LIST_HEAD(CGroupIODeviceLimit, io_device_limits);
+         LIST_HEAD(CGroupIODeviceLatency, io_device_latencies);
+ 
++        uint64_t default_memory_low;
+         uint64_t memory_min;
+         uint64_t memory_low;
+         uint64_t memory_high;
+         uint64_t memory_max;
+         uint64_t memory_swap_max;
+ 
++        bool default_memory_low_set;
++        bool memory_low_set;
++
+         LIST_HEAD(IPAddressAccessItem, ip_address_allow);
+         LIST_HEAD(IPAddressAccessItem, ip_address_deny);
+ 
+@@ -191,6 +195,8 @@ Unit *manager_get_unit_by_cgroup(Manager *m, const char *cgroup);
+ Unit *manager_get_unit_by_pid_cgroup(Manager *m, pid_t pid);
+ Unit* manager_get_unit_by_pid(Manager *m, pid_t pid);
+ 
++uint64_t unit_get_ancestor_memory_low(Unit *u);
++
+ int unit_search_main_pid(Unit *u, pid_t *ret);
+ int unit_watch_all_pids(Unit *u);
+ 
+diff --git a/src/core/dbus-cgroup.c b/src/core/dbus-cgroup.c
+index 6ce5984a02..2115d43b0c 100644
+--- a/src/core/dbus-cgroup.c
++++ b/src/core/dbus-cgroup.c
+@@ -353,6 +353,7 @@ const sd_bus_vtable bus_cgroup_vtable[] = {
+         SD_BUS_PROPERTY("BlockIOReadBandwidth", "a(st)", property_get_blockio_device_bandwidths, 0, 0),
+         SD_BUS_PROPERTY("BlockIOWriteBandwidth", "a(st)", property_get_blockio_device_bandwidths, 0, 0),
+         SD_BUS_PROPERTY("MemoryAccounting", "b", bus_property_get_bool, offsetof(CGroupContext, memory_accounting), 0),
++        SD_BUS_PROPERTY("DefaultMemoryLow", "t", NULL, offsetof(CGroupContext, default_memory_low), 0),
+         SD_BUS_PROPERTY("MemoryMin", "t", NULL, offsetof(CGroupContext, memory_min), 0),
+         SD_BUS_PROPERTY("MemoryLow", "t", NULL, offsetof(CGroupContext, memory_low), 0),
+         SD_BUS_PROPERTY("MemoryHigh", "t", NULL, offsetof(CGroupContext, memory_high), 0),
+@@ -668,6 +669,9 @@ int bus_cgroup_set_property(
+         if (streq(name, "MemoryLow"))
+                 return bus_cgroup_set_memory(u, name, &c->memory_low, message, flags, error);
+ 
++        if (streq(name, "DefaultMemoryLow"))
++                return bus_cgroup_set_memory(u, name, &c->default_memory_low, message, flags, error);
++
+         if (streq(name, "MemoryHigh"))
+                 return bus_cgroup_set_memory(u, name, &c->memory_high, message, flags, error);
+ 
+@@ -686,6 +690,9 @@ int bus_cgroup_set_property(
+         if (streq(name, "MemoryLowScale"))
+                 return bus_cgroup_set_memory_scale(u, name, &c->memory_low, message, flags, error);
+ 
++        if (streq(name, "DefaultMemoryLowScale"))
++                return bus_cgroup_set_memory_scale(u, name, &c->default_memory_low, message, flags, error);
++
+         if (streq(name, "MemoryHighScale"))
+                 return bus_cgroup_set_memory_scale(u, name, &c->memory_high, message, flags, error);
+ 
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index 1c6e539f30..43cc78fdea 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -172,6 +172,7 @@ $1.CPUQuota,                     config_parse_cpu_quota,             0,
+ $1.CPUQuotaPeriodSec,            config_parse_sec_def_infinity,      0,                             offsetof($1, cgroup_context.cpu_quota_period_usec)
+ $1.MemoryAccounting,             config_parse_bool,                  0,                             offsetof($1, cgroup_context.memory_accounting)
+ $1.MemoryMin,                    config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
++$1.DefaultMemoryLow,             config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+ $1.MemoryLow,                    config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+ $1.MemoryHigh,                   config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+ $1.MemoryMax,                    config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index 89a3457acc..20faed02ad 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -3096,11 +3096,18 @@ int config_parse_memory_limit(
+                 }
+         }
+ 
+-        if (streq(lvalue, "MemoryMin"))
++        if (streq(lvalue, "DefaultMemoryLow")) {
++                c->default_memory_low_set = true;
++                if (isempty(rvalue))
++                        c->default_memory_low = CGROUP_LIMIT_MIN;
++                else
++                        c->default_memory_low = bytes;
++        } else if (streq(lvalue, "MemoryMin"))
+                 c->memory_min = bytes;
+-        else if (streq(lvalue, "MemoryLow"))
++        else if (streq(lvalue, "MemoryLow")) {
+                 c->memory_low = bytes;
+-        else if (streq(lvalue, "MemoryHigh"))
++                c->memory_low_set = true;
++        } else if (streq(lvalue, "MemoryHigh"))
+                 c->memory_high = bytes;
+         else if (streq(lvalue, "MemoryMax"))
+                 c->memory_max = bytes;
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index 203c068d02..f88730a85d 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -429,7 +429,7 @@ static int bus_append_cgroup_property(sd_bus_message *m, const char *field, cons
+                 return 1;
+         }
+ 
+-        if (STR_IN_SET(field, "MemoryMin", "MemoryLow", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemoryLimit", "TasksMax")) {
++        if (STR_IN_SET(field, "MemoryMin", "DefaultMemoryLow", "MemoryLow", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemoryLimit", "TasksMax")) {
+ 
+                 if (isempty(eq) || streq(eq, "infinity")) {
+                         r = sd_bus_message_append(m, "(sv)", field, "t", CGROUP_LIMIT_MAX);
+diff --git a/src/shared/bus-util.c b/src/shared/bus-util.c
+index 5ed68429be..0ba2712deb 100644
+--- a/src/shared/bus-util.c
++++ b/src/shared/bus-util.c
+@@ -774,7 +774,7 @@ int bus_print_property(const char *name, sd_bus_message *m, bool value, bool all
+ 
+                         print_property(name, "%s", "[not set]");
+ 
+-                else if ((STR_IN_SET(name, "MemoryLow", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemoryLimit") && u == CGROUP_LIMIT_MAX) ||
++                else if ((STR_IN_SET(name, "DefaultMemoryLow", "MemoryLow", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemoryLimit") && u == CGROUP_LIMIT_MAX) ||
+                          (STR_IN_SET(name, "TasksMax", "DefaultTasksMax") && u == (uint64_t) -1) ||
+                          (startswith(name, "Limit") && u == (uint64_t) -1) ||
+                          (startswith(name, "DefaultLimit") && u == (uint64_t) -1))
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index 35ad20f510..763ca0c6b7 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -3918,6 +3918,8 @@ typedef struct UnitStatusInfo {
+         uint64_t ip_ingress_bytes;
+         uint64_t ip_egress_bytes;
+ 
++        uint64_t default_memory_low;
++
+         LIST_HEAD(ExecStatusInfo, exec);
+ } UnitStatusInfo;
+ 
+@@ -5028,6 +5030,7 @@ static int show_one(
+                 { "Where",                          "s",              NULL,           offsetof(UnitStatusInfo, where)                             },
+                 { "What",                           "s",              NULL,           offsetof(UnitStatusInfo, what)                              },
+                 { "MemoryCurrent",                  "t",              NULL,           offsetof(UnitStatusInfo, memory_current)                    },
++                { "DefaultMemoryLow",               "t",              NULL,           offsetof(UnitStatusInfo, default_memory_low)                },
+                 { "MemoryMin",                      "t",              NULL,           offsetof(UnitStatusInfo, memory_min)                        },
+                 { "MemoryLow",                      "t",              NULL,           offsetof(UnitStatusInfo, memory_low)                        },
+                 { "MemoryHigh",                     "t",              NULL,           offsetof(UnitStatusInfo, memory_high)                       },
+diff --git a/src/test/meson.build b/src/test/meson.build
+index 22264d034c..7b310d4ec7 100644
+--- a/src/test/meson.build
++++ b/src/test/meson.build
+@@ -518,6 +518,12 @@ tests += [
+           libshared],
+          []],
+ 
++        [['src/test/test-cgroup-unit-default.c',
++          'src/test/test-helper.c'],
++         [libcore,
++          libshared],
++         []],
++
+         [['src/test/test-cgroup-mask.c',
+           'src/test/test-helper.c'],
+          [libcore,
+diff --git a/src/test/test-cgroup-unit-default.c b/src/test/test-cgroup-unit-default.c
+new file mode 100644
+index 0000000000..54f7d50c45
+--- /dev/null
++++ b/src/test/test-cgroup-unit-default.c
+@@ -0,0 +1,145 @@
++/* SPDX-License-Identifier: LGPL-2.1+ */
++
++#include <stdio.h>
++
++#include "cgroup.h"
++#include "manager.h"
++#include "rm-rf.h"
++#include "test-helper.h"
++#include "tests.h"
++#include "unit.h"
++
++static int test_default_memory_low(void) {
++        _cleanup_(rm_rf_physical_and_freep) char *runtime_dir = NULL;
++        _cleanup_(manager_freep) Manager *m = NULL;
++        Unit *root, *dml,
++             *dml_passthrough, *dml_passthrough_empty, *dml_passthrough_set_dml, *dml_passthrough_set_ml,
++             *dml_override, *dml_override_empty,
++             *dml_discard, *dml_discard_empty, *dml_discard_set_ml;
++        uint64_t dml_tree_default;
++        int r;
++
++        r = enter_cgroup_subroot();
++        if (r == -ENOMEDIUM)
++                return EXIT_TEST_SKIP;
++
++        assert_se(set_unit_path(get_testdata_dir()) >= 0);
++        assert_se(runtime_dir = setup_fake_runtime_dir());
++        r = manager_new(UNIT_FILE_USER, MANAGER_TEST_RUN_BASIC, &m);
++        if (IN_SET(r, -EPERM, -EACCES)) {
++                log_error_errno(r, "manager_new: %m");
++                return EXIT_TEST_SKIP;
++        }
++
++        assert_se(r >= 0);
++        assert_se(manager_startup(m, NULL, NULL) >= 0);
++
++        /* dml.slice has DefaultMemoryLow=50. Beyond that, individual subhierarchies look like this:
++         *
++         * 1. dml-passthrough.slice sets MemoryLow=100. This should not affect its children, as only
++         *    DefaultMemoryLow is propagated, not MemoryLow. As such, all leaf services should end up with
++         *    memory.low as 50, inherited from dml.slice, *except* for dml-passthrough-set-ml.service, which
++         *    should have the value of 25, as it has MemoryLow explicitly set.
++         *
++         *                                                  ┌───────────┐
++         *                                                  │ dml.slice │
++         *                                                  └─────┬─────┘
++         *                                                  MemoryLow=100
++         *                                            ┌───────────┴───────────┐
++         *                                            │ dml-passthrough.slice │
++         *                                            └───────────┬───────────┘
++         *                    ┌───────────────────────────────────┼───────────────────────────────────┐
++         *             no new settings                   DefaultMemoryLow=15                     MemoryLow=25
++         *    ┌───────────────┴───────────────┐  ┌────────────────┴────────────────┐  ┌───────────────┴────────────────┐
++         *    │ dml-passthrough-empty.service │  │ dml-passthrough-set-dml.service │  │ dml-passthrough-set-ml.service │
++         *    └───────────────────────────────┘  └─────────────────────────────────┘  └────────────────────────────────┘
++         *
++         * 2. dml-override.slice sets DefaultMemoryLow=10. As such, dml-override-empty.service should also
++         *    end up with a memory.low of 10. dml-override.slice should still have a memory.low of 50.
++         *
++         *            ┌───────────┐
++         *            │ dml.slice │
++         *            └─────┬─────┘
++         *         DefaultMemoryLow=10
++         *        ┌─────────┴──────────┐
++         *        │ dml-override.slice │
++         *        └─────────┬──────────┘
++         *           no new settings
++         *    ┌─────────────┴──────────────┐
++         *    │ dml-override-empty.service │
++         *    └────────────────────────────┘
++         *
++         * 3. dml-discard.slice sets DefaultMemoryLow= with no rvalue. As such,
++         *    dml-discard-empty.service should end up with a value of 0.
++         *    dml-discard-explicit-ml.service sets MemoryLow=70, and as such should have that override the
++         *    reset DefaultMemoryLow value. dml-discard.slice should still have an eventual memory.low of 50.
++         *
++         *                           ┌───────────┐
++         *                           │ dml.slice │
++         *                           └─────┬─────┘
++         *                         DefaultMemoryLow=
++         *                       ┌─────────┴─────────┐
++         *                       │ dml-discard.slice │
++         *                       └─────────┬─────────┘
++         *                  ┌──────────────┴───────────────┐
++         *           no new settings                  MemoryLow=15
++         *    ┌─────────────┴─────────────┐  ┌─────────────┴──────────────┐
++         *    │ dml-discard-empty.service │  │ dml-discard-set-ml.service │
++         *    └───────────────────────────┘  └────────────────────────────┘
++         */
++        assert_se(manager_load_startable_unit_or_warn(m, "dml.slice", NULL, &dml) >= 0);
++
++        assert_se(manager_load_startable_unit_or_warn(m, "dml-passthrough.slice", NULL, &dml_passthrough) >= 0);
++        assert_se(UNIT_DEREF(dml_passthrough->slice) == dml);
++        assert_se(manager_load_startable_unit_or_warn(m, "dml-passthrough-empty.service", NULL, &dml_passthrough_empty) >= 0);
++        assert_se(UNIT_DEREF(dml_passthrough_empty->slice) == dml_passthrough);
++        assert_se(manager_load_startable_unit_or_warn(m, "dml-passthrough-set-dml.service", NULL, &dml_passthrough_set_dml) >= 0);
++        assert_se(UNIT_DEREF(dml_passthrough_set_dml->slice) == dml_passthrough);
++        assert_se(manager_load_startable_unit_or_warn(m, "dml-passthrough-set-ml.service", NULL, &dml_passthrough_set_ml) >= 0);
++        assert_se(UNIT_DEREF(dml_passthrough_set_ml->slice) == dml_passthrough);
++
++        assert_se(manager_load_startable_unit_or_warn(m, "dml-override.slice", NULL, &dml_override) >= 0);
++        assert_se(UNIT_DEREF(dml_override->slice) == dml);
++        assert_se(manager_load_startable_unit_or_warn(m, "dml-override-empty.service", NULL, &dml_override_empty) >= 0);
++        assert_se(UNIT_DEREF(dml_override_empty->slice) == dml_override);
++
++        assert_se(manager_load_startable_unit_or_warn(m, "dml-discard.slice", NULL, &dml_discard) >= 0);
++        assert_se(UNIT_DEREF(dml_discard->slice) == dml);
++        assert_se(manager_load_startable_unit_or_warn(m, "dml-discard-empty.service", NULL, &dml_discard_empty) >= 0);
++        assert_se(UNIT_DEREF(dml_discard_empty->slice) == dml_discard);
++        assert_se(manager_load_startable_unit_or_warn(m, "dml-discard-set-ml.service", NULL, &dml_discard_set_ml) >= 0);
++        assert_se(UNIT_DEREF(dml_discard_set_ml->slice) == dml_discard);
++
++        root = UNIT_DEREF(dml->slice);
++        assert_se(!UNIT_ISSET(root->slice));
++
++        assert_se(unit_get_ancestor_memory_low(root) == CGROUP_LIMIT_MIN);
++
++        assert_se(unit_get_ancestor_memory_low(dml) == CGROUP_LIMIT_MIN);
++        dml_tree_default = unit_get_cgroup_context(dml)->default_memory_low;
++        assert_se(dml_tree_default == 50);
++
++        assert_se(unit_get_ancestor_memory_low(dml_passthrough) == 100);
++        assert_se(unit_get_ancestor_memory_low(dml_passthrough_empty) == dml_tree_default);
++        assert_se(unit_get_ancestor_memory_low(dml_passthrough_set_dml) == 50);
++        assert_se(unit_get_ancestor_memory_low(dml_passthrough_set_ml) == 25);
++
++        assert_se(unit_get_ancestor_memory_low(dml_override) == dml_tree_default);
++        assert_se(unit_get_ancestor_memory_low(dml_override_empty) == 10);
++
++        assert_se(unit_get_ancestor_memory_low(dml_discard) == dml_tree_default);
++        assert_se(unit_get_ancestor_memory_low(dml_discard_empty) == CGROUP_LIMIT_MIN);
++        assert_se(unit_get_ancestor_memory_low(dml_discard_set_ml) == 15);
++
++        return 0;
++}
++
++int main(int argc, char* argv[]) {
++        int rc = EXIT_SUCCESS;
++
++        test_setup_logging(LOG_DEBUG);
++
++        TEST_REQ_RUNNING_SYSTEMD(rc = test_default_memory_low());
++
++        return rc;
++}
+diff --git a/test/dml-discard-empty.service b/test/dml-discard-empty.service
+new file mode 100644
+index 0000000000..75228f6470
+--- /dev/null
++++ b/test/dml-discard-empty.service
+@@ -0,0 +1,7 @@
++[Unit]
++Description=DML discard empty service
++
++[Service]
++Slice=dml-discard.slice
++Type=oneshot
++ExecStart=/bin/true
+diff --git a/test/dml-discard-set-ml.service b/test/dml-discard-set-ml.service
+new file mode 100644
+index 0000000000..591c99270c
+--- /dev/null
++++ b/test/dml-discard-set-ml.service
+@@ -0,0 +1,8 @@
++[Unit]
++Description=DML discard set ml service
++
++[Service]
++Slice=dml-discard.slice
++Type=oneshot
++ExecStart=/bin/true
++MemoryLow=15
+diff --git a/test/dml-discard.slice b/test/dml-discard.slice
+new file mode 100644
+index 0000000000..e26d86846c
+--- /dev/null
++++ b/test/dml-discard.slice
+@@ -0,0 +1,5 @@
++[Unit]
++Description=DML discard slice
++
++[Slice]
++DefaultMemoryLow=
+diff --git a/test/dml-override-empty.service b/test/dml-override-empty.service
+new file mode 100644
+index 0000000000..142c98720c
+--- /dev/null
++++ b/test/dml-override-empty.service
+@@ -0,0 +1,7 @@
++[Unit]
++Description=DML override empty service
++
++[Service]
++Slice=dml-override.slice
++Type=oneshot
++ExecStart=/bin/true
+diff --git a/test/dml-override.slice b/test/dml-override.slice
+new file mode 100644
+index 0000000000..feb6773e39
+--- /dev/null
++++ b/test/dml-override.slice
+@@ -0,0 +1,5 @@
++[Unit]
++Description=DML override slice
++
++[Slice]
++DefaultMemoryLow=10
+diff --git a/test/dml-passthrough-empty.service b/test/dml-passthrough-empty.service
+new file mode 100644
+index 0000000000..34832de491
+--- /dev/null
++++ b/test/dml-passthrough-empty.service
+@@ -0,0 +1,7 @@
++[Unit]
++Description=DML passthrough empty service
++
++[Service]
++Slice=dml-passthrough.slice
++Type=oneshot
++ExecStart=/bin/true
+diff --git a/test/dml-passthrough-set-dml.service b/test/dml-passthrough-set-dml.service
+new file mode 100644
+index 0000000000..5bdf4ed4b7
+--- /dev/null
++++ b/test/dml-passthrough-set-dml.service
+@@ -0,0 +1,8 @@
++[Unit]
++Description=DML passthrough set DML service
++
++[Service]
++Slice=dml-passthrough.slice
++Type=oneshot
++ExecStart=/bin/true
++DefaultMemoryLow=15
+diff --git a/test/dml-passthrough-set-ml.service b/test/dml-passthrough-set-ml.service
+new file mode 100644
+index 0000000000..2abd591389
+--- /dev/null
++++ b/test/dml-passthrough-set-ml.service
+@@ -0,0 +1,8 @@
++[Unit]
++Description=DML passthrough set ML service
++
++[Service]
++Slice=dml-passthrough.slice
++Type=oneshot
++ExecStart=/bin/true
++MemoryLow=25
+diff --git a/test/dml-passthrough.slice b/test/dml-passthrough.slice
+new file mode 100644
+index 0000000000..1b1a848edb
+--- /dev/null
++++ b/test/dml-passthrough.slice
+@@ -0,0 +1,5 @@
++[Unit]
++Description=DML passthrough slice
++
++[Slice]
++MemoryLow=100
+diff --git a/test/dml.slice b/test/dml.slice
+new file mode 100644
+index 0000000000..84e333ef04
+--- /dev/null
++++ b/test/dml.slice
+@@ -0,0 +1,5 @@
++[Unit]
++Description=DML slice
++
++[Slice]
++DefaultMemoryLow=50
+diff --git a/test/meson.build b/test/meson.build
+index 070731c4a9..52e4fa2e3c 100644
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -7,6 +7,16 @@ test_data_files = '''
+         c.service
+         d.service
+         daughter.service
++        dml.slice
++        dml-passthrough.slice
++        dml-passthrough-empty.service
++        dml-passthrough-set-dml.service
++        dml-passthrough-set-ml.service
++        dml-override.slice
++        dml-override-empty.service
++        dml-discard.slice
++        dml-discard-empty.service
++        dml-discard-set-ml.service
+         e.service
+         end.service
+         f.service

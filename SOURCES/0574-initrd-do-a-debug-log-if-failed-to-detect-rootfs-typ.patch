@@ -1,0 +1,35 @@
+From 3299c855c6e65596ff9d8635dcbd45ff6818499a Mon Sep 17 00:00:00 2001
+From: Kairui Song <kasong@redhat.com>
+Date: Thu, 14 Jan 2021 00:39:10 +0800
+Subject: [PATCH] initrd: do a debug log if failed to detect rootfs type
+
+(cherry picked from commit 3377c740d9121f38385e70d6a380b5e4bd8c672a)
+
+Related: #1959339
+---
+ src/basic/util.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/src/basic/util.c b/src/basic/util.c
+index 59bcf7b00c..fef52ad5ff 100644
+--- a/src/basic/util.c
++++ b/src/basic/util.c
+@@ -166,8 +166,16 @@ bool in_initrd(void) {
+                 }
+         }
+ 
+-        saved_in_initrd = (lenient || path_is_temporary_fs("/") > 0) &&
+-                          access("/etc/initrd-release", F_OK) >= 0;
++        if (!lenient) {
++                r = path_is_temporary_fs("/");
++                if (r < 0)
++                        log_debug_errno(r, "Couldn't determine if / is a temporary file system: %m");
++
++                saved_in_initrd = r > 0;
++        }
++
++        if (saved_in_initrd != 0)
++                saved_in_initrd = access("/etc/initrd-release", F_OK) >= 0;
+ 
+         return saved_in_initrd;
+ }

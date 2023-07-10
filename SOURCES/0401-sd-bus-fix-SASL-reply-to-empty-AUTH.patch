@@ -1,0 +1,55 @@
+From badb16c481cf592a1761ad20dd0a84614d2bbd5b Mon Sep 17 00:00:00 2001
+From: David Rheinsberg <david.rheinsberg@gmail.com>
+Date: Thu, 14 Mar 2019 13:33:28 +0100
+Subject: [PATCH] sd-bus: fix SASL reply to empty AUTH
+
+The correct way to reply to "AUTH <protocol>" without any payload is to
+send "DATA" rather than "OK". The "DATA" reply triggers the client to
+respond with the requested payload.
+
+In fact, adding the data as hex-encoded argument like
+"AUTH <protocol> <hex-data>" is an optimization that skips the "DATA"
+roundtrip. The standard way to perform an authentication is to send the
+"DATA" line.
+
+This commit fixes sd-bus to properly send the "DATA" line. Surprisingly
+no existing implementation depends on this, as they all pass the data
+directly as argument to "AUTH". This will not work if we want to pass
+an empty argument, though.
+
+Signed-off-by: David Rheinsberg <david.rheinsberg@gmail.com>
+(cherry picked from commit 2010873b4b49b223e0cc07d28205b09c693ef005)
+
+Related: #1838081
+---
+ src/libsystemd/sd-bus/bus-socket.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/libsystemd/sd-bus/bus-socket.c b/src/libsystemd/sd-bus/bus-socket.c
+index 1c8b331b48..e505d43c6b 100644
+--- a/src/libsystemd/sd-bus/bus-socket.c
++++ b/src/libsystemd/sd-bus/bus-socket.c
+@@ -399,7 +399,10 @@ static int bus_socket_auth_verify_server(sd_bus *b) {
+                                 r = bus_socket_auth_write(b, "REJECTED\r\n");
+                         else {
+                                 b->auth = BUS_AUTH_ANONYMOUS;
+-                                r = bus_socket_auth_write_ok(b);
++                                if (l <= strlen("AUTH ANONYMOUS"))
++                                        r = bus_socket_auth_write(b, "DATA\r\n");
++                                else
++                                        r = bus_socket_auth_write_ok(b);
+                         }
+ 
+                 } else if (line_begins(line, l, "AUTH EXTERNAL")) {
+@@ -413,7 +416,10 @@ static int bus_socket_auth_verify_server(sd_bus *b) {
+                                 r = bus_socket_auth_write(b, "REJECTED\r\n");
+                         else {
+                                 b->auth = BUS_AUTH_EXTERNAL;
+-                                r = bus_socket_auth_write_ok(b);
++                                if (l <= strlen("AUTH EXTERNAL"))
++                                        r = bus_socket_auth_write(b, "DATA\r\n");
++                                else
++                                        r = bus_socket_auth_write_ok(b);
+                         }
+ 
+                 } else if (line_begins(line, l, "AUTH"))

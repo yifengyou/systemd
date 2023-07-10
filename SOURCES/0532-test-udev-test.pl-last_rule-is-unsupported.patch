@@ -1,0 +1,35 @@
+From 2d0b828715e67f7accda6f73481deb74febebcb6 Mon Sep 17 00:00:00 2001
+From: Martin Wilck <mwilck@suse.com>
+Date: Tue, 24 Apr 2018 18:08:18 +0200
+Subject: [PATCH] test/udev-test.pl: last_rule is unsupported
+
+the "last_rule" option hasn't been supported for some time.
+Therefore this test fails if a "not_exp_links" attribute is added,
+as it should be. Mark it appropriately.
+
+(cherry picked from commit 17cce031531a5d3f38a27374c99d1bdba5959dbd)
+
+Related: #1642728
+---
+ test/udev-test.pl | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index d5d0e130e3..a9c2dd95f1 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1373,11 +1373,14 @@ SUBSYSTEMS=="scsi", KERNEL=="sda1", SYMLINK+="start-%r-end"
+ EOF
+         },
+         {
++                # This is not supported any more
+                 desc            => "last_rule option",
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda1",
+                                 exp_links       => ["last"],
++                                not_exp_links   => ["very-last"],
++                                exp_nodev_error => "yes",
+                         }],
+                 rules           => <<EOF
+ SUBSYSTEMS=="scsi", KERNEL=="sda1", SYMLINK+="last", OPTIONS="last_rule"

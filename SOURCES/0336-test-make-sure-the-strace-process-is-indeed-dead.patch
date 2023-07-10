@@ -1,0 +1,50 @@
+From 60813b55f9b5b44b14f38bbc1b8c0d2b30e3f6c7 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Mon, 1 Jul 2019 19:53:45 +0200
+Subject: [PATCH] test: make sure the strace process is indeed dead
+
+It may take a few moments for the strace process to properly terminate
+and write all logs to the backing storage
+
+(cherry picked from commit 56425e54a2140f47b4560b51c5db08aa2de199a6)
+
+Related: #1808940
+---
+ test/TEST-36-NUMAPOLICY/test.sh      | 2 +-
+ test/TEST-36-NUMAPOLICY/testsuite.sh | 3 +++
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/test/TEST-36-NUMAPOLICY/test.sh b/test/TEST-36-NUMAPOLICY/test.sh
+index a0d8623e8e..f0a321e7a1 100755
+--- a/test/TEST-36-NUMAPOLICY/test.sh
++++ b/test/TEST-36-NUMAPOLICY/test.sh
+@@ -16,7 +16,7 @@ test_setup() {
+         eval $(udevadm info --export --query=env --name=${LOOPDEV}p2)
+ 
+         setup_basic_environment
+-        inst_binary mktemp
++        dracut_install mktemp
+ 
+         # mask some services that we do not want to run in these tests
+         ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
+diff --git a/test/TEST-36-NUMAPOLICY/testsuite.sh b/test/TEST-36-NUMAPOLICY/testsuite.sh
+index a4134bdeca..daed8fcc1c 100755
+--- a/test/TEST-36-NUMAPOLICY/testsuite.sh
++++ b/test/TEST-36-NUMAPOLICY/testsuite.sh
+@@ -38,6 +38,8 @@ startStrace() {
+ 
+ stopStrace() {
+     kill -s TERM $COPROC_PID
++    # Make sure the strace process is indeed dead
++    while kill -0 $COPROC_PID 2>/dev/null; do sleep 0.1; done
+ }
+ 
+ startJournalctl() {
+@@ -80,6 +82,7 @@ writeTestUnitNUMAPolicy() {
+ pid1ReloadWithStrace() {
+     startStrace
+     systemctl daemon-reload
++    sleep $sleepAfterStart
+     stopStrace
+ }
+ 

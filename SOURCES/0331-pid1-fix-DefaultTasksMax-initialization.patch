@@ -1,0 +1,38 @@
+From e809564cfa5af01a26075682d49f81a987c41dd8 Mon Sep 17 00:00:00 2001
+From: Franck Bui <fbui@suse.com>
+Date: Wed, 2 Oct 2019 11:58:16 +0200
+Subject: [PATCH] pid1: fix DefaultTasksMax initialization
+
+Otherwise DefaultTasksMax is always set to "inifinity".
+
+This was broken by fb39af4ce42.
+
+(cherry picked from commit c0000de87d2c7934cb1f4ba66a533a85277600ff)
+
+Resolves: #1809037
+---
+ src/core/main.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/src/core/main.c b/src/core/main.c
+index d6550ea161..45d09b1e11 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -2088,7 +2088,7 @@ static void reset_arguments(void) {
+         arg_default_blockio_accounting = false;
+         arg_default_memory_accounting = MEMORY_ACCOUNTING_DEFAULT;
+         arg_default_tasks_accounting = true;
+-        arg_default_tasks_max = UINT64_MAX;
++        arg_default_tasks_max = system_tasks_max_scale(DEFAULT_TASKS_MAX_PERCENTAGE, 100U);
+         arg_machine_id = (sd_id128_t) {};
+         arg_cad_burst_action = EMERGENCY_ACTION_REBOOT_FORCE;
+ 
+@@ -2103,8 +2103,6 @@ static int parse_configuration(const struct rlimit *saved_rlimit_nofile,
+         assert(saved_rlimit_nofile);
+         assert(saved_rlimit_memlock);
+ 
+-        arg_default_tasks_max = system_tasks_max_scale(DEFAULT_TASKS_MAX_PERCENTAGE, 100U);
+-
+         /* Assign configuration defaults */
+         reset_arguments();
+ 

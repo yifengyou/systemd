@@ -1,0 +1,67 @@
+From 6240d78097c6f828aa2ca3b50ac322b41dc41fd1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Fri, 23 Aug 2019 11:34:45 +0200
+Subject: [PATCH] kernel-install: do not require non-empty kernel cmdline
+
+When booting with Fedora-Server-dvd-x86_64-30-20190411.n.0.iso,
+/proc/cmdline is empty (libvirt, qemu host with bios, not sure if that
+matters), after installation to disk, anaconda would "crash" in kernel-core
+%posttrans, after calling kernel-install, because dracut would fail
+with
+
+> Could not determine the kernel command line parameters.
+> Please specify the kernel command line in /etc/kernel/cmdline!
+
+I guess it's legitimate, even if unusual, to have no cmdline parameters.
+Two changes are done in this patch:
+
+1. do not fail if the cmdline is empty.
+2. if /usr/lib/kernel/cmdline or /etc/kernel/cmdline are present, but
+   empty, ignore /proc/cmdline. If there's explicit configuration to
+   have empty cmdline, don't ignore it.
+
+The same change was done in dracut:
+https://github.com/dracutdevs/dracut/pull/561.
+
+(cherry picked from commit 88e1306af6380794842fb31108ba67895799fab4)
+
+Resolves: #1701454
+---
+ src/kernel-install/90-loaderentry.install | 14 ++++----------
+ 1 file changed, 4 insertions(+), 10 deletions(-)
+
+diff --git a/src/kernel-install/90-loaderentry.install b/src/kernel-install/90-loaderentry.install
+index a271cdb8a0..1619301536 100644
+--- a/src/kernel-install/90-loaderentry.install
++++ b/src/kernel-install/90-loaderentry.install
+@@ -43,13 +43,13 @@ if ! [[ $PRETTY_NAME ]]; then
+     PRETTY_NAME="Linux $KERNEL_VERSION"
+ fi
+ 
+-declare -a BOOT_OPTIONS
+-
+ if [[ -f /etc/kernel/cmdline ]]; then
+     read -r -d '' -a BOOT_OPTIONS < /etc/kernel/cmdline
+-fi
++elif [[ -f /usr/lib/kernel/cmdline ]]; then
++    read -r -d '' -a BOOT_OPTIONS < /usr/lib/kernel/cmdline
++else
++    declare -a BOOT_OPTIONS
+ 
+-if ! [[ ${BOOT_OPTIONS[*]} ]]; then
+     read -r -d '' -a line < /proc/cmdline
+     for i in "${line[@]}"; do
+         [[ "${i#initrd=*}" != "$i" ]] && continue
+@@ -57,12 +57,6 @@ if ! [[ ${BOOT_OPTIONS[*]} ]]; then
+     done
+ fi
+ 
+-if ! [[ ${BOOT_OPTIONS[*]} ]]; then
+-    echo "Could not determine the kernel command line parameters." >&2
+-    echo "Please specify the kernel command line in /etc/kernel/cmdline!" >&2
+-    exit 1
+-fi
+-
+ cp "$KERNEL_IMAGE" "$BOOT_DIR_ABS/linux" &&
+    chown root:root "$BOOT_DIR_ABS/linux" &&
+    chmod 0644 "$BOOT_DIR_ABS/linux" || {

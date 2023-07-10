@@ -1,0 +1,98 @@
+From e6cd875a767ba23b218cdca395307ac6fb7fd882 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Mon, 30 May 2022 14:50:05 +0200
+Subject: [PATCH] tests: make sure we delay running mount start jobs when
+ /p/s/mountinfo is rate limited
+
+(cherry picked from commit 9e15be6c8d55abd800bf33f9776dd0e307ed37bc)
+
+Related: #2095744
+---
+ test/TEST-60-MOUNT-RATELIMIT/testsuite.sh | 53 +++++++++++++++++++++++
+ test/test-functions                       |  2 +-
+ 2 files changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/test/TEST-60-MOUNT-RATELIMIT/testsuite.sh b/test/TEST-60-MOUNT-RATELIMIT/testsuite.sh
+index 6211050faf..84fe9640e1 100755
+--- a/test/TEST-60-MOUNT-RATELIMIT/testsuite.sh
++++ b/test/TEST-60-MOUNT-RATELIMIT/testsuite.sh
+@@ -2,6 +2,56 @@
+ set -eux
+ set -o pipefail
+ 
++test_issue_20329() {
++    local tmpdir unit
++    tmpdir="$(mktemp -d)"
++    unit=$(systemd-escape --suffix mount --path "$tmpdir")
++
++    # Set up test mount unit
++    cat > /run/systemd/system/"$unit" <<EOF
++[Mount]
++What=tmpfs
++Where=$tmpdir
++Type=tmpfs
++Options=defaults,nofail
++EOF
++
++    # Start the unit
++    systemctl daemon-reload
++    systemctl start "$unit"
++
++    [[ "$(systemctl show --property SubState --value "$unit")" = "mounted" ]] || {
++        echo >&2 "Test mount \"$unit\" unit isn't mounted"
++        return 1
++    }
++    mountpoint -q "$tmpdir"
++
++    trap 'systemctl stop $unit' RETURN
++
++    # Trigger the mount ratelimiting
++    cd "$(mktemp -d)"
++    mkdir foo
++    for ((i=0;i<50;++i)); do
++        mount --bind foo foo
++        umount foo
++    done
++
++    # Unmount the test mount and start it immediately again via systemd
++    umount "$tmpdir"
++    systemctl start "$unit"
++
++    # Make sure it is seen as mounted by systemd and it actually is mounted
++    [[ "$(systemctl show --property SubState --value "$unit")" = "mounted" ]] || {
++        echo >&2 "Test mount \"$unit\" unit isn't in \"mounted\" state"
++        return 1
++    }
++
++    mountpoint -q "$tmpdir" || {
++        echo >&2 "Test mount \"$unit\" is in \"mounted\" state, actually is not mounted"
++        return 1
++    }
++}
++
+ systemd-analyze log-level debug
+ systemd-analyze log-target journal
+ 
+@@ -85,6 +135,9 @@ if systemctl list-units -t mount tmp-meow* | grep -q tmp-meow; then
+     exit 42
+ fi
+ 
++# test that handling of mount start jobs is delayed when /proc/self/mouninfo monitor is rate limited
++test_issue_20329
++
+ systemd-analyze log-level info
+ 
+ echo OK >/testok
+diff --git a/test/test-functions b/test/test-functions
+index 4d7832b1fb..ed8ab98173 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -23,7 +23,7 @@ fi
+ 
+ PATH_TO_INIT=$ROOTLIBDIR/systemd
+ 
+-BASICTOOLS="test sh bash setsid loadkeys setfont login sulogin gzip sleep echo mount umount cryptsetup date dmsetup modprobe sed cmp tee rm true false chmod chown ln xargs env"
++BASICTOOLS="test sh bash setsid loadkeys setfont login sulogin gzip sleep echo mount umount cryptsetup date dmsetup modprobe sed cmp tee rm true false chmod chown ln xargs env mktemp mountpoint"
+ DEBUGTOOLS="df free ls stty cat ps ln ip route dmesg dhclient mkdir cp ping dhclient strace less grep id tty touch du sort hostname find"
+ 
+ STATEDIR="${BUILD_DIR:-.}/test/$(basename $(dirname $(realpath $0)))"

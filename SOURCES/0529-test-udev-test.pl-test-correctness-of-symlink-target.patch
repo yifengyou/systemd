@@ -1,0 +1,61 @@
+From 8ee1cc626f616a2022d641a464fbde9108dd8ad9 Mon Sep 17 00:00:00 2001
+From: Martin Wilck <mwilck@suse.com>
+Date: Tue, 24 Apr 2018 10:50:24 +0200
+Subject: [PATCH] test/udev-test.pl: test correctness of symlink targets
+
+Test if symlinks are created correctly by comparing the symlink
+targets to the devnode path. This implies (for the symlink) that
+major/minor numbers and permissions are correct, as we have tested
+that on the devnode already.
+
+(cherry picked from commit 997683c8f152e1c139a7ce537de81a0aeae4627f)
+
+Related: #1642728
+---
+ test/udev-test.pl | 23 ++++++++++++++++++-----
+ 1 file changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index aa9a8dc2ff..2e3089c5e0 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -22,6 +22,7 @@ use POSIX qw(WIFEXITED WEXITSTATUS);
+ use IPC::SysV qw(IPC_PRIVATE S_IRUSR S_IWUSR IPC_CREAT);
+ use IPC::Semaphore;
+ use Time::HiRes qw(usleep);
++use Cwd qw(getcwd abs_path);
+ 
+ my $udev_bin            = "./test-udev";
+ my $valgrind            = 0;
+@@ -2243,14 +2244,26 @@ sub check_add {
+ 
+         my $devnode = check_devnode($device);
+ 
+-        print "device \'$device->{devpath}\' expecting node/link \'$device->{exp_name}\'\n";
+         return if (!defined($device->{exp_name}));
+ 
+-        if ((-e "$udev_dev/$device->{exp_name}") ||
+-            (-l "$udev_dev/$device->{exp_name}")) {
+-                print "add $device->{devpath}:         ok\n";
++        my @st = lstat("$udev_dev/$device->{exp_name}");
++        if (-l _) {
++                my $cwd = getcwd();
++                my $dir = "$udev_dev/$device->{exp_name}";
++                $dir =~ s!/[^/]*$!!;
++                my $tgt = readlink("$udev_dev/$device->{exp_name}");
++                $tgt = abs_path("$dir/$tgt");
++                $tgt =~ s!^$cwd/!!;
++
++                if ($tgt ne $devnode) {
++                        print "symlink $device->{exp_name}:         error, found -> $tgt\n";
++                        $error++;
++                        system("tree", "$udev_dev");
++                } else {
++                        print "symlink $device->{exp_name}:         ok\n";
++                }
+         } else {
+-                print "add  $device->{devpath}:         error";
++                print "symlink $device->{exp_name}:         error";
+                 if ($device->{exp_add_error}) {
+                         print " as expected\n";
+                 } else {

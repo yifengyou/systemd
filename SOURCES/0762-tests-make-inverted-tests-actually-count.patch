@@ -1,0 +1,34 @@
+From f784cdd269ccba28e3e14b24ecd33ab9db148403 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 7 Apr 2021 23:24:25 +0200
+Subject: [PATCH] tests: make inverted tests actually count
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+"! test ..." does not cause the script to fail, even with set -e.
+IIUC, bash treats this command as part of an expression line, as it
+would if 'test ... && ...' was used. Failing expression lines do not
+terminate the script.
+
+This fixes the obvious cases by changing '! test' → 'test !'.
+Then the inversion happens internally in test and bash will propagate
+the failure.
+
+(cherry picked from commit ffa328f060f437f3e1f0f0cb13513ee3dd9c3da5)
+
+Related: #2087152
+---
+ test/TEST-22-TMPFILES/test-01.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/TEST-22-TMPFILES/test-01.sh b/test/TEST-22-TMPFILES/test-01.sh
+index d233e37fb2..b10b5aaa1a 100755
+--- a/test/TEST-22-TMPFILES/test-01.sh
++++ b/test/TEST-22-TMPFILES/test-01.sh
+@@ -10,4 +10,4 @@ rm -fr /tmp/test
+ 
+ echo "e /tmp/test - root root 1d" | systemd-tmpfiles --create -
+ 
+-! test -e /tmp/test
++test ! -e /tmp/test

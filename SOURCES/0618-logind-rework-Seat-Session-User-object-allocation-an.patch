@@ -1,0 +1,341 @@
+From 019b3a5d7530c51aa8f7f1e5f5cb5eb81113d4db Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 3 Aug 2018 18:53:09 +0200
+Subject: [PATCH] logind: rework Seat/Session/User object allocation and
+ freeing a bit
+
+Let's update things a bit to follow current practices:
+
+- User structure initialization rather than zero-initialized allocation
+
+- Always propagate proper errors from allocation functions
+
+- Use _cleanup_ for freeing objects when allocation fails half-way
+
+- Make destructors return NULL
+
+(cherry picked from commit 8c29a4570993105fecc12288596d2ee77c7f82b8)
+
+Related: #1642460
+---
+ src/login/logind-core.c    | 14 ++++++----
+ src/login/logind-seat.c    | 38 +++++++++++++++----------
+ src/login/logind-seat.h    |  6 ++--
+ src/login/logind-session.c | 57 +++++++++++++++++++++-----------------
+ src/login/logind-session.h |  7 +++--
+ src/login/logind-user.c    | 21 +++++++-------
+ 6 files changed, 83 insertions(+), 60 deletions(-)
+
+diff --git a/src/login/logind-core.c b/src/login/logind-core.c
+index cff5536ac0..f598bbaa1c 100644
+--- a/src/login/logind-core.c
++++ b/src/login/logind-core.c
+@@ -88,15 +88,16 @@ int manager_add_device(Manager *m, const char *sysfs, bool master, Device **_dev
+ 
+ int manager_add_seat(Manager *m, const char *id, Seat **_seat) {
+         Seat *s;
++        int r;
+ 
+         assert(m);
+         assert(id);
+ 
+         s = hashmap_get(m->seats, id);
+         if (!s) {
+-                s = seat_new(m, id);
+-                if (!s)
+-                        return -ENOMEM;
++                r = seat_new(&s, m, id);
++                if (r < 0)
++                        return r;
+         }
+ 
+         if (_seat)
+@@ -107,15 +108,16 @@ int manager_add_seat(Manager *m, const char *id, Seat **_seat) {
+ 
+ int manager_add_session(Manager *m, const char *id, Session **_session) {
+         Session *s;
++        int r;
+ 
+         assert(m);
+         assert(id);
+ 
+         s = hashmap_get(m->sessions, id);
+         if (!s) {
+-                s = session_new(m, id);
+-                if (!s)
+-                        return -ENOMEM;
++                r = session_new(&s, m, id);
++                if (r < 0)
++                        return r;
+         }
+ 
+         if (_session)
+diff --git a/src/login/logind-seat.c b/src/login/logind-seat.c
+index 63253db5bf..f68fc0ceaa 100644
+--- a/src/login/logind-seat.c
++++ b/src/login/logind-seat.c
+@@ -21,33 +21,42 @@
+ #include "terminal-util.h"
+ #include "util.h"
+ 
+-Seat *seat_new(Manager *m, const char *id) {
+-        Seat *s;
++int seat_new(Seat** ret, Manager *m, const char *id) {
++        _cleanup_(seat_freep) Seat *s = NULL;
++        int r;
+ 
++        assert(ret);
+         assert(m);
+         assert(id);
+ 
+-        s = new0(Seat, 1);
++        if (!seat_name_is_valid(id))
++                return -EINVAL;
++
++        s = new(Seat, 1);
+         if (!s)
+-                return NULL;
++                return -ENOMEM;
++
++        *s = (Seat) {
++                .manager = m,
++        };
+ 
+         s->state_file = strappend("/run/systemd/seats/", id);
+         if (!s->state_file)
+-                return mfree(s);
++                return -ENOMEM;
+ 
+         s->id = basename(s->state_file);
+-        s->manager = m;
+ 
+-        if (hashmap_put(m->seats, s->id, s) < 0) {
+-                free(s->state_file);
+-                return mfree(s);
+-        }
++        r = hashmap_put(m->seats, s->id, s);
++        if (r < 0)
++                return r;
+ 
+-        return s;
++        *ret = TAKE_PTR(s);
++        return 0;
+ }
+ 
+-void seat_free(Seat *s) {
+-        assert(s);
++Seat* seat_free(Seat *s) {
++        if (!s)
++                return NULL;
+ 
+         if (s->in_gc_queue)
+                 LIST_REMOVE(gc_queue, s->manager->seat_gc_queue, s);
+@@ -64,7 +73,8 @@ void seat_free(Seat *s) {
+ 
+         free(s->positions);
+         free(s->state_file);
+-        free(s);
++
++        return mfree(s);
+ }
+ 
+ int seat_save(Seat *s) {
+diff --git a/src/login/logind-seat.h b/src/login/logind-seat.h
+index 70878bbe52..51cd468e26 100644
+--- a/src/login/logind-seat.h
++++ b/src/login/logind-seat.h
+@@ -27,8 +27,10 @@ struct Seat {
+         LIST_FIELDS(Seat, gc_queue);
+ };
+ 
+-Seat *seat_new(Manager *m, const char *id);
+-void seat_free(Seat *s);
++int seat_new(Seat **ret, Manager *m, const char *id);
++Seat* seat_free(Seat *s);
++
++DEFINE_TRIVIAL_CLEANUP_FUNC(Seat *, seat_free);
+ 
+ int seat_save(Seat *s);
+ int seat_load(Seat *s);
+diff --git a/src/login/logind-session.c b/src/login/logind-session.c
+index 69d5a10319..5621d59a41 100644
+--- a/src/login/logind-session.c
++++ b/src/login/logind-session.c
+@@ -24,57 +24,61 @@
+ #include "mkdir.h"
+ #include "parse-util.h"
+ #include "path-util.h"
++#include "process-util.h"
+ #include "string-table.h"
+ #include "terminal-util.h"
+ #include "user-util.h"
+ #include "util.h"
+-#include "process-util.h"
+ 
+ #define RELEASE_USEC (20*USEC_PER_SEC)
+ 
+ static void session_remove_fifo(Session *s);
+ 
+-Session* session_new(Manager *m, const char *id) {
+-        Session *s;
++int session_new(Session **ret, Manager *m, const char *id) {
++        _cleanup_(session_freep) Session *s = NULL;
++        int r;
+ 
++        assert(ret);
+         assert(m);
+         assert(id);
+-        assert(session_id_valid(id));
+ 
+-        s = new0(Session, 1);
++        if (!session_id_valid(id))
++                return -EINVAL;
++
++        s = new(Session, 1);
+         if (!s)
+-                return NULL;
++                return -ENOMEM;
++
++        *s = (Session) {
++                .manager = m,
++                .fifo_fd = -1,
++                .vtfd = -1,
++                .audit_id = AUDIT_SESSION_INVALID,
++        };
+ 
+         s->state_file = strappend("/run/systemd/sessions/", id);
+         if (!s->state_file)
+-                return mfree(s);
+-
+-        s->devices = hashmap_new(&devt_hash_ops);
+-        if (!s->devices) {
+-                free(s->state_file);
+-                return mfree(s);
+-        }
++                return -ENOMEM;
+ 
+         s->id = basename(s->state_file);
+ 
+-        if (hashmap_put(m->sessions, s->id, s) < 0) {
+-                hashmap_free(s->devices);
+-                free(s->state_file);
+-                return mfree(s);
+-        }
++        s->devices = hashmap_new(&devt_hash_ops);
++        if (!s->devices)
++                return -ENOMEM;
+ 
+-        s->manager = m;
+-        s->fifo_fd = -1;
+-        s->vtfd = -1;
+-        s->audit_id = AUDIT_SESSION_INVALID;
++        r = hashmap_put(m->sessions, s->id, s);
++        if (r < 0)
++                return r;
+ 
+-        return s;
++        *ret = TAKE_PTR(s);
++        return 0;
+ }
+ 
+-void session_free(Session *s) {
++Session* session_free(Session *s) {
+         SessionDevice *sd;
+ 
+-        assert(s);
++        if (!s)
++                return NULL;
+ 
+         if (s->in_gc_queue)
+                 LIST_REMOVE(gc_queue, s->manager->session_gc_queue, s);
+@@ -126,7 +130,8 @@ void session_free(Session *s) {
+         hashmap_remove(s->manager->sessions, s->id);
+ 
+         free(s->state_file);
+-        free(s);
++
++        return mfree(s);
+ }
+ 
+ void session_set_user(Session *s, User *u) {
+diff --git a/src/login/logind-session.h b/src/login/logind-session.h
+index 29ca399daf..572f2545c1 100644
+--- a/src/login/logind-session.h
++++ b/src/login/logind-session.h
+@@ -109,8 +109,11 @@ struct Session {
+         LIST_FIELDS(Session, gc_queue);
+ };
+ 
+-Session *session_new(Manager *m, const char *id);
+-void session_free(Session *s);
++int session_new(Session **ret, Manager *m, const char *id);
++Session* session_free(Session *s);
++
++DEFINE_TRIVIAL_CLEANUP_FUNC(Session *, session_free);
++
+ void session_set_user(Session *s, User *u);
+ bool session_may_gc(Session *s, bool drop_not_started);
+ void session_add_to_gc_queue(Session *s);
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index 56b8066f12..60ccd62abb 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -30,23 +30,24 @@
+ #include "user-util.h"
+ #include "util.h"
+ 
+-int user_new(User **out, Manager *m, uid_t uid, gid_t gid, const char *name) {
++int user_new(User **ret, Manager *m, uid_t uid, gid_t gid, const char *name) {
+         _cleanup_(user_freep) User *u = NULL;
+         char lu[DECIMAL_STR_MAX(uid_t) + 1];
+         int r;
+ 
+-        assert(out);
++        assert(ret);
+         assert(m);
+         assert(name);
+ 
+-        u = new0(User, 1);
++        u = new(User, 1);
+         if (!u)
+                 return -ENOMEM;
+ 
+-        u->manager = m;
+-        u->uid = uid;
+-        u->gid = gid;
+-        xsprintf(lu, UID_FMT, uid);
++        *u = (User) {
++                .manager = m,
++                .uid = uid,
++                .gid = gid,
++        };
+ 
+         u->name = strdup(name);
+         if (!u->name)
+@@ -58,6 +59,7 @@ int user_new(User **out, Manager *m, uid_t uid, gid_t gid, const char *name) {
+         if (asprintf(&u->runtime_path, "/run/user/"UID_FMT, uid) < 0)
+                 return -ENOMEM;
+ 
++        xsprintf(lu, UID_FMT, uid);
+         r = slice_build_subslice(SPECIAL_USER_SLICE, lu, &u->slice);
+         if (r < 0)
+                 return r;
+@@ -78,8 +80,7 @@ int user_new(User **out, Manager *m, uid_t uid, gid_t gid, const char *name) {
+         if (r < 0)
+                 return r;
+ 
+-        *out = TAKE_PTR(u);
+-
++        *ret = TAKE_PTR(u);
+         return 0;
+ }
+ 
+@@ -272,7 +273,7 @@ int user_save(User *u) {
+         if (!u->started)
+                 return 0;
+ 
+-        return user_save_internal (u);
++        return user_save_internal(u);
+ }
+ 
+ int user_load(User *u) {

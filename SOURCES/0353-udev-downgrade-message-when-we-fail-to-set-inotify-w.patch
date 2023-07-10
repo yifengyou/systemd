@@ -1,0 +1,43 @@
+From 38532765172a4e60624b9c24b8d081b34d9f7b86 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 13 Nov 2018 14:53:04 +0100
+Subject: [PATCH] udev: downgrade message when we fail to set inotify watch up
+
+My logs are full of:
+
+systemd-udevd[6586]: seq 13515 queued, 'add' 'block'
+systemd-udevd[6586]: seq 13516 queued, 'change' 'block'
+systemd-udevd[6586]: seq 13517 queued, 'change' 'block'
+systemd-udevd[6586]: seq 13518 queued, 'remove' 'bdi'
+systemd-udevd[6586]: seq 13519 queued, 'remove' 'block'
+systemd-udevd[9865]: seq 13514 processed
+systemd-udevd[9865]: seq 13515 running
+systemd-udevd[9865]: GROUP 6 /usr/lib/udev/rules.d/50-udev-default.rules:59
+systemd-udevd[9865]: IMPORT builtin 'blkid' /usr/lib/udev/rules.d/60-persistent-storage.rules:95
+systemd-udevd[9865]: IMPORT builtin 'blkid' fails: No such file or directory
+systemd-udevd[9865]: loop4: Failed to add device '/dev/loop4' to watch: No such file or directory
+(the last line is at error level).
+If we are too slow to set up a watch and the device is already gone by the time
+we try, this is not an error.
+
+(cherry picked from commit 7fe0d0d5c0ad5aa3f069bb282868938d414d7ad1)
+
+Resolves: #1808051
+---
+ src/udev/udev-watch.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/udev/udev-watch.c b/src/udev/udev-watch.c
+index 7864f57aa5..9c82196add 100644
+--- a/src/udev/udev-watch.c
++++ b/src/udev/udev-watch.c
+@@ -87,7 +87,8 @@ void udev_watch_begin(struct udev *udev, struct udev_device *dev) {
+         log_debug("adding watch on '%s'", udev_device_get_devnode(dev));
+         wd = inotify_add_watch(inotify_fd, udev_device_get_devnode(dev), IN_CLOSE_WRITE);
+         if (wd < 0) {
+-                log_error_errno(errno, "inotify_add_watch(%d, %s, %o) failed: %m",
++                log_full_errno(errno == ENOENT ? LOG_DEBUG : LOG_ERR,
++                               errno, "inotify_add_watch(%d, %s, %o) failed: %m",
+                                 inotify_fd, udev_device_get_devnode(dev), IN_CLOSE_WRITE);
+                 return;
+         }

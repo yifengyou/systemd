@@ -1,0 +1,59 @@
+From 22eb8fbdab14e5b1b11a4d84c83bef97317e1d2a Mon Sep 17 00:00:00 2001
+From: Jan Macku <jamacku@redhat.com>
+Date: Thu, 2 Sep 2021 16:37:13 +0200
+Subject: [PATCH] core: Add new DBUS properties UnitsReloadStartTimestamp and
+ UnitsLoadTimestampMontonic
+
+(cherry picked from commit 49fbe940a429c3d8807bacdfce03af834275257c)
+
+Related: #2136869
+---
+ src/core/dbus-manager.c | 1 +
+ src/core/manager.c      | 2 ++
+ src/core/manager.h      | 1 +
+ 3 files changed, 4 insertions(+)
+
+diff --git a/src/core/dbus-manager.c b/src/core/dbus-manager.c
+index 5b1ed3646e..8a41eda4a6 100644
+--- a/src/core/dbus-manager.c
++++ b/src/core/dbus-manager.c
+@@ -2486,6 +2486,7 @@ const sd_bus_vtable bus_manager_vtable[] = {
+         BUS_PROPERTY_DUAL_TIMESTAMP("GeneratorsFinishTimestamp", offsetof(Manager, timestamps[MANAGER_TIMESTAMP_GENERATORS_FINISH]), SD_BUS_VTABLE_PROPERTY_CONST),
+         BUS_PROPERTY_DUAL_TIMESTAMP("UnitsLoadStartTimestamp", offsetof(Manager, timestamps[MANAGER_TIMESTAMP_UNITS_LOAD_START]), SD_BUS_VTABLE_PROPERTY_CONST),
+         BUS_PROPERTY_DUAL_TIMESTAMP("UnitsLoadFinishTimestamp", offsetof(Manager, timestamps[MANAGER_TIMESTAMP_UNITS_LOAD_FINISH]), SD_BUS_VTABLE_PROPERTY_CONST),
++        BUS_PROPERTY_DUAL_TIMESTAMP("UnitsLoadTimestamp", offsetof(Manager, timestamps[MANAGER_TIMESTAMP_UNITS_LOAD]), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_WRITABLE_PROPERTY("LogLevel", "s", property_get_log_level, property_set_log_level, 0, 0),
+         SD_BUS_WRITABLE_PROPERTY("LogTarget", "s", property_get_log_target, property_set_log_target, 0, 0),
+         SD_BUS_PROPERTY("NNames", "u", property_get_hashmap_size, offsetof(Manager, units), 0),
+diff --git a/src/core/manager.c b/src/core/manager.c
+index f923cbce37..8aa398cac8 100644
+--- a/src/core/manager.c
++++ b/src/core/manager.c
+@@ -1580,6 +1580,7 @@ static void manager_preset_all(Manager *m) {
+ 
+ void manager_reloading_start(Manager *m) {
+         m->n_reloading++;
++        dual_timestamp_get(m->timestamps + MANAGER_TIMESTAMP_UNITS_LOAD);
+ }
+ 
+ int manager_startup(Manager *m, FILE *serialization, FDSet *fds) {
+@@ -4622,6 +4623,7 @@ static const char *const manager_timestamp_table[_MANAGER_TIMESTAMP_MAX] = {
+         [MANAGER_TIMESTAMP_GENERATORS_FINISH] = "generators-finish",
+         [MANAGER_TIMESTAMP_UNITS_LOAD_START] = "units-load-start",
+         [MANAGER_TIMESTAMP_UNITS_LOAD_FINISH] = "units-load-finish",
++        [MANAGER_TIMESTAMP_UNITS_LOAD]               = "units-load",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP(manager_timestamp, ManagerTimestamp);
+diff --git a/src/core/manager.h b/src/core/manager.h
+index adbbb518cb..98d381bc5b 100644
+--- a/src/core/manager.h
++++ b/src/core/manager.h
+@@ -67,6 +67,7 @@ typedef enum ManagerTimestamp {
+         MANAGER_TIMESTAMP_GENERATORS_FINISH,
+         MANAGER_TIMESTAMP_UNITS_LOAD_START,
+         MANAGER_TIMESTAMP_UNITS_LOAD_FINISH,
++        MANAGER_TIMESTAMP_UNITS_LOAD,
+         _MANAGER_TIMESTAMP_MAX,
+         _MANAGER_TIMESTAMP_INVALID = -1,
+ } ManagerTimestamp;

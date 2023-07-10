@@ -1,0 +1,95 @@
+From 32e39fd249737c77248c32d064021426a2ec7a52 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Sun, 15 Dec 2019 20:57:51 +0900
+Subject: [PATCH] sd-netlink: support IFLA_PROP_LIST and IFLA_ALT_IFNAME
+ attributes
+
+(cherry picked from commit ffeb16f5d832b1c65b8c8a1dd9bdd028bd76fc72)
+
+Related: #2005008
+---
+ src/libsystemd/sd-netlink/netlink-message.c |  2 +-
+ src/libsystemd/sd-netlink/netlink-types.c   | 13 +++++++++++++
+ src/libsystemd/sd-netlink/netlink-util.h    |  4 +++-
+ src/libsystemd/sd-netlink/rtnl-message.c    |  2 ++
+ 4 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/src/libsystemd/sd-netlink/netlink-message.c b/src/libsystemd/sd-netlink/netlink-message.c
+index 23907c8224..db9101c163 100644
+--- a/src/libsystemd/sd-netlink/netlink-message.c
++++ b/src/libsystemd/sd-netlink/netlink-message.c
+@@ -89,7 +89,7 @@ int sd_netlink_message_request_dump(sd_netlink_message *m, int dump) {
+         assert_return(m, -EINVAL);
+         assert_return(m->hdr, -EINVAL);
+ 
+-        assert_return(IN_SET(m->hdr->nlmsg_type, RTM_GETLINK, RTM_GETADDR, RTM_GETROUTE, RTM_GETNEIGH, RTM_GETRULE, RTM_GETADDRLABEL), -EINVAL);
++        assert_return(IN_SET(m->hdr->nlmsg_type, RTM_GETLINK, RTM_GETLINKPROP, RTM_GETADDR, RTM_GETROUTE, RTM_GETNEIGH, RTM_GETRULE, RTM_GETADDRLABEL), -EINVAL);
+ 
+         SET_FLAG(m->hdr->nlmsg_flags, NLM_F_DUMP, dump);
+ 
+diff --git a/src/libsystemd/sd-netlink/netlink-types.c b/src/libsystemd/sd-netlink/netlink-types.c
+index c93fe9cb4c..47d9c7f1c4 100644
+--- a/src/libsystemd/sd-netlink/netlink-types.c
++++ b/src/libsystemd/sd-netlink/netlink-types.c
+@@ -451,6 +451,15 @@ static const NLTypeSystem rtnl_af_spec_type_system = {
+         .types = rtnl_af_spec_types,
+ };
+ 
++static const NLType rtnl_prop_list_types[] = {
++        [IFLA_ALT_IFNAME]       = { .type = NETLINK_TYPE_STRING, .size = ALTIFNAMSIZ - 1 },
++};
++
++static const NLTypeSystem rtnl_prop_list_type_system = {
++        .count = ELEMENTSOF(rtnl_prop_list_types),
++        .types = rtnl_prop_list_types,
++};
++
+ static const NLType rtnl_link_types[] = {
+         [IFLA_ADDRESS]          = { .type = NETLINK_TYPE_ETHER_ADDR },
+         [IFLA_BROADCAST]        = { .type = NETLINK_TYPE_ETHER_ADDR },
+@@ -501,6 +510,7 @@ static const NLType rtnl_link_types[] = {
+ /*
+         [IFLA_PHYS_PORT_ID]     = { .type = NETLINK_TYPE_BINARY, .len = MAX_PHYS_PORT_ID_LEN },
+ */
++        [IFLA_PROP_LIST]        = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_prop_list_type_system },
+ };
+ 
+ static const NLTypeSystem rtnl_link_type_system = {
+@@ -643,6 +653,9 @@ static const NLType rtnl_types[] = {
+         [RTM_DELLINK]      = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_link_type_system, .size = sizeof(struct ifinfomsg) },
+         [RTM_GETLINK]      = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_link_type_system, .size = sizeof(struct ifinfomsg) },
+         [RTM_SETLINK]      = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_link_type_system, .size = sizeof(struct ifinfomsg) },
++        [RTM_NEWLINKPROP]  = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_link_type_system, .size = sizeof(struct ifinfomsg) },
++        [RTM_DELLINKPROP]  = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_link_type_system, .size = sizeof(struct ifinfomsg) },
++        [RTM_GETLINKPROP]  = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_link_type_system, .size = sizeof(struct ifinfomsg) },
+         [RTM_NEWADDR]      = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_address_type_system, .size = sizeof(struct ifaddrmsg) },
+         [RTM_DELADDR]      = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_address_type_system, .size = sizeof(struct ifaddrmsg) },
+         [RTM_GETADDR]      = { .type = NETLINK_TYPE_NESTED, .type_system = &rtnl_address_type_system, .size = sizeof(struct ifaddrmsg) },
+diff --git a/src/libsystemd/sd-netlink/netlink-util.h b/src/libsystemd/sd-netlink/netlink-util.h
+index 7c35a2cfa7..882a616310 100644
+--- a/src/libsystemd/sd-netlink/netlink-util.h
++++ b/src/libsystemd/sd-netlink/netlink-util.h
+@@ -19,7 +19,9 @@ static inline bool rtnl_message_type_is_route(uint16_t type) {
+ }
+ 
+ static inline bool rtnl_message_type_is_link(uint16_t type) {
+-        return IN_SET(type, RTM_NEWLINK, RTM_SETLINK, RTM_GETLINK, RTM_DELLINK);
++        return IN_SET(type,
++                      RTM_NEWLINK, RTM_SETLINK, RTM_GETLINK, RTM_DELLINK,
++                      RTM_NEWLINKPROP, RTM_DELLINKPROP, RTM_GETLINKPROP);
+ }
+ 
+ static inline bool rtnl_message_type_is_addr(uint16_t type) {
+diff --git a/src/libsystemd/sd-netlink/rtnl-message.c b/src/libsystemd/sd-netlink/rtnl-message.c
+index 4416e1720c..369c402986 100644
+--- a/src/libsystemd/sd-netlink/rtnl-message.c
++++ b/src/libsystemd/sd-netlink/rtnl-message.c
+@@ -449,6 +449,8 @@ int sd_rtnl_message_new_link(sd_netlink *rtnl, sd_netlink_message **ret,
+ 
+         if (nlmsg_type == RTM_NEWLINK)
+                 (*ret)->hdr->nlmsg_flags |= NLM_F_CREATE | NLM_F_EXCL;
++        else if (nlmsg_type == RTM_NEWLINK)
++                (*ret)->hdr->nlmsg_flags |= NLM_F_EXCL | NLM_F_CREATE | NLM_F_APPEND;
+ 
+         ifi = NLMSG_DATA((*ret)->hdr);
+ 

@@ -1,0 +1,53 @@
+From fb1244ef318e9f54628a7c13db9e2ffbc712dd38 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Wed, 22 May 2019 17:14:21 +0200
+Subject: [PATCH] systemctl: present CPUAffinity mask as a list of CPU index
+ ranges
+
+(cherry picked from commit a047f4f10ed2f922d6079c033d24a443b0e95f38)
+
+Related: #1734787
+---
+ src/systemctl/systemctl.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index f072ad0c31..0154b300a3 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -30,6 +30,7 @@
+ #include "cgroup-show.h"
+ #include "cgroup-util.h"
+ #include "copy.h"
++#include "cpu-set-util.h"
+ #include "dropin.h"
+ #include "efivars.h"
+ #include "env-util.h"
+@@ -4876,6 +4877,27 @@ static int print_property(const char *name, sd_bus_message *m, bool value, bool
+ 
+                         print_prop(name, "%s", h);
+ 
++                        return 1;
++                } else if (contents[0] == SD_BUS_TYPE_BYTE && streq(name, "CPUAffinity")) {
++                        _cleanup_free_ char *affinity = NULL;
++                        _cleanup_(cpu_set_reset) CPUSet set = {};
++                        const void *a;
++                        size_t n;
++
++                        r = sd_bus_message_read_array(m, 'y', &a, &n);
++                        if (r < 0)
++                                return bus_log_parse_error(r);
++
++                        r = cpu_set_from_dbus(a, n, &set);
++                        if (r < 0)
++                                return log_error_errno(r, "Failed to deserialize CPUAffinity: %m");
++
++                        affinity = cpu_set_to_range_string(&set);
++                        if (!affinity)
++                                return log_oom();
++
++                        print_prop(name, "%s", affinity);
++
+                         return 1;
+                 }
+ 

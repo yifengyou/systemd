@@ -1,0 +1,32 @@
+From 2fe9fb3e844d7991105c40d4363eed9069a6837d Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Fri, 18 Nov 2022 16:16:36 +0100
+Subject: [PATCH] basic: recognize pdfs filesystem as a network filesystem
+
+Fujitsu advises their users to always use _netdev mount option with pdfs
+mounts. Hence it makes sense to simply consider pdfs mounts as network
+filesystem mounts.
+
+https://software.fujitsu.com/jp/manual/manualfiles/m130027/j2ul1563/02enz200/j1563-02-06-02-02.html
+
+RHEL-only
+
+Resolves: #2094661
+---
+ src/basic/mount-util.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/basic/mount-util.c b/src/basic/mount-util.c
+index e7f9e514c2..983566b46b 100644
+--- a/src/basic/mount-util.c
++++ b/src/basic/mount-util.c
+@@ -634,7 +634,8 @@ bool fstype_is_network(const char *fstype) {
+                           "glusterfs",
+                           "pvfs2", /* OrangeFS */
+                           "ocfs2",
+-                          "lustre");
++                          "lustre",
++                          "pdfs");
+ }
+ 
+ bool fstype_is_api_vfs(const char *fstype) {

@@ -1,0 +1,203 @@
+From 93777a6dd8c12d5cba094694bf7ed6e8c06c2d6d Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Thu, 23 May 2019 14:27:18 +0200
+Subject: [PATCH] shared/cpu-set-util: introduce cpu_set_to_range()
+
+(cherry picked from commit 71b28519b55b496237146f9bcb5a627455f15f7e)
+
+Related: #1734787
+---
+ src/basic/cpu-set-util.c     | 37 ++++++++++++++++++++++++++
+ src/basic/cpu-set-util.h     |  2 ++
+ src/test/test-cpu-set-util.c | 50 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 89 insertions(+)
+
+diff --git a/src/basic/cpu-set-util.c b/src/basic/cpu-set-util.c
+index 74e35e57dd..bff39ec143 100644
+--- a/src/basic/cpu-set-util.c
++++ b/src/basic/cpu-set-util.c
+@@ -37,6 +37,43 @@ char* cpu_set_to_string(const CPUSet *a) {
+         return TAKE_PTR(str) ?: strdup("");
+ }
+ 
++char *cpu_set_to_range_string(const CPUSet *set) {
++        unsigned range_start = 0, range_end;
++        _cleanup_free_ char *str = NULL;
++        size_t allocated = 0, len = 0;
++        bool in_range = false;
++        int r;
++
++        for (unsigned i = 0; i < set->allocated * 8; i++)
++                if (CPU_ISSET_S(i, set->allocated, set->set)) {
++                        if (in_range)
++                                range_end++;
++                        else {
++                                range_start = range_end = i;
++                                in_range = true;
++                        }
++                } else if (in_range) {
++                        in_range = false;
++
++                        if (!GREEDY_REALLOC(str, allocated, len + 2 + 2 * DECIMAL_STR_MAX(unsigned)))
++                                return NULL;
++
++                        r = sprintf(str + len, len > 0 ? " %d-%d" : "%d-%d", range_start, range_end);
++                        assert_se(r > 0);
++                        len += r;
++                }
++
++        if (in_range) {
++                if (!GREEDY_REALLOC(str, allocated, len + 2 + 2 * DECIMAL_STR_MAX(int)))
++                        return NULL;
++
++                r = sprintf(str + len, len > 0 ? " %d-%d" : "%d-%d", range_start, range_end);
++                assert_se(r > 0);
++        }
++
++        return TAKE_PTR(str) ?: strdup("");
++}
++
+ int cpu_set_realloc(CPUSet *cpu_set, unsigned ncpus) {
+         size_t need;
+ 
+diff --git a/src/basic/cpu-set-util.h b/src/basic/cpu-set-util.h
+index 415c6ca295..ec640b2ec9 100644
+--- a/src/basic/cpu-set-util.h
++++ b/src/basic/cpu-set-util.h
+@@ -25,7 +25,9 @@ static inline void cpu_set_reset(CPUSet *a) {
+ int cpu_set_add_all(CPUSet *a, const CPUSet *b);
+ 
+ char* cpu_set_to_string(const CPUSet *a);
++char *cpu_set_to_range_string(const CPUSet *a);
+ int cpu_set_realloc(CPUSet *cpu_set, unsigned ncpus);
++
+ int parse_cpu_set_full(
+                 const char *rvalue,
+                 CPUSet *cpu_set,
+diff --git a/src/test/test-cpu-set-util.c b/src/test/test-cpu-set-util.c
+index cae51ad7d9..0d2741cd43 100644
+--- a/src/test/test-cpu-set-util.c
++++ b/src/test/test-cpu-set-util.c
+@@ -4,6 +4,7 @@
+ 
+ #include "alloc-util.h"
+ #include "cpu-set-util.h"
++#include "string-util.h"
+ #include "macro.h"
+ 
+ static void test_parse_cpu_set(void) {
+@@ -13,6 +14,22 @@ static void test_parse_cpu_set(void) {
+ 
+         log_info("/* %s */", __func__);
+ 
++        /* Single value */
++        assert_se(parse_cpu_set_full("0", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.set);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_ISSET_S(0, c.allocated, c.set));
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 1);
++
++        assert_se(str = cpu_set_to_string(&c));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
++        assert_se(str = cpu_set_to_range_string(&c));
++        log_info("cpu_set_to_range_string: %s", str);
++        assert_se(streq(str, "0-0"));
++        str = mfree(str);
++        cpu_set_reset(&c);
++
+         /* Simple range (from CPUAffinity example) */
+         assert_se(parse_cpu_set_full("1 2", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
+         assert_se(c.set);
+@@ -24,6 +41,10 @@ static void test_parse_cpu_set(void) {
+         assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
++        assert_se(str = cpu_set_to_range_string(&c));
++        log_info("cpu_set_to_range_string: %s", str);
++        assert_se(streq(str, "1-2"));
++        str = mfree(str);
+         cpu_set_reset(&c);
+ 
+         /* A more interesting range */
+@@ -34,9 +55,14 @@ static void test_parse_cpu_set(void) {
+                 assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
+         for (cpu = 8; cpu < 12; cpu++)
+                 assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
++
+         assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
++        assert_se(str = cpu_set_to_range_string(&c));
++        log_info("cpu_set_to_range_string: %s", str);
++        assert_se(streq(str, "0-3 8-11"));
++        str = mfree(str);
+         cpu_set_reset(&c);
+ 
+         /* Quoted strings */
+@@ -48,6 +74,10 @@ static void test_parse_cpu_set(void) {
+         assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
++        assert_se(str = cpu_set_to_range_string(&c));
++        log_info("cpu_set_to_range_string: %s", str);
++        assert_se(streq(str, "8-11"));
++        str = mfree(str);
+         cpu_set_reset(&c);
+ 
+         /* Use commas as separators */
+@@ -72,6 +102,10 @@ static void test_parse_cpu_set(void) {
+         assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
++        assert_se(str = cpu_set_to_range_string(&c));
++        log_info("cpu_set_to_range_string: %s", str);
++        assert_se(streq(str, "0-7"));
++        str = mfree(str);
+         cpu_set_reset(&c);
+ 
+         /* Ranges */
+@@ -98,6 +132,10 @@ static void test_parse_cpu_set(void) {
+         assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
++        assert_se(str = cpu_set_to_range_string(&c));
++        log_info("cpu_set_to_range_string: %s", str);
++        assert_se(streq(str, "0-3 8-11"));
++        str = mfree(str);
+         cpu_set_reset(&c);
+ 
+         /* Negative range (returns empty cpu_set) */
+@@ -115,6 +153,10 @@ static void test_parse_cpu_set(void) {
+         assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
++        assert_se(str = cpu_set_to_range_string(&c));
++        log_info("cpu_set_to_range_string: %s", str);
++        assert_se(streq(str, "0-11"));
++        str = mfree(str);
+         cpu_set_reset(&c);
+ 
+         /* Mix ranges and individual CPUs */
+@@ -128,6 +170,10 @@ static void test_parse_cpu_set(void) {
+         assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
++        assert_se(str = cpu_set_to_range_string(&c));
++        log_info("cpu_set_to_range_string: %s", str);
++        assert_se(streq(str, "0-1 4-11"));
++        str = mfree(str);
+         cpu_set_reset(&c);
+ 
+         /* Garbage */
+@@ -156,6 +202,10 @@ static void test_parse_cpu_set(void) {
+         assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
++        assert_se(str = cpu_set_to_range_string(&c));
++        log_info("cpu_set_to_range_string: %s", str);
++        assert_se(streq(str, "8000-8191"));
++        str = mfree(str);
+         cpu_set_reset(&c);
+ }
+ 

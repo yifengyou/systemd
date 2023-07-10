@@ -1,0 +1,116 @@
+From 0314e68fe961cec941b1b0eb1cbcca4546cfdfdb Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 3 Aug 2018 19:04:35 +0200
+Subject: [PATCH] logind: fix serialization/deserialization of user's "display
+ session"
+
+Previously this was serialized as part of the user object. This didn't
+work however, as we load users first, and sessions seconds and hence
+referencing a session from the user load logic cannot work.
+
+Fix this by storing an IS_DISPLAY property along with each session, and
+make the session with this set display session when it is loaded.
+
+(cherry picked from commit 1c8280fd47b6561d35b15b3b6d49bdeacf891bfd)
+
+Related: #1642460
+---
+ src/login/logind-session.c | 18 +++++++++++++++++-
+ src/login/logind-user.c    | 18 ++++--------------
+ 2 files changed, 21 insertions(+), 15 deletions(-)
+
+diff --git a/src/login/logind-session.c b/src/login/logind-session.c
+index 5621d59a41..0afb065b2b 100644
+--- a/src/login/logind-session.c
++++ b/src/login/logind-session.c
+@@ -184,11 +184,13 @@ int session_save(Session *s) {
+                 "UID="UID_FMT"\n"
+                 "USER=%s\n"
+                 "ACTIVE=%i\n"
++                "IS_DISPLAY=%i\n"
+                 "STATE=%s\n"
+                 "REMOTE=%i\n",
+                 s->user->uid,
+                 s->user->name,
+                 session_is_active(s),
++                s->user->display == s,
+                 session_state_to_string(session_get_state(s)),
+                 s->remote);
+ 
+@@ -359,7 +361,8 @@ int session_load(Session *s) {
+                 *monotonic = NULL,
+                 *controller = NULL,
+                 *active = NULL,
+-                *devices = NULL;
++                *devices = NULL,
++                *is_display = NULL;
+ 
+         int k, r;
+ 
+@@ -389,6 +392,7 @@ int session_load(Session *s) {
+                            "CONTROLLER",     &controller,
+                            "ACTIVE",         &active,
+                            "DEVICES",        &devices,
++                           "IS_DISPLAY",     &is_display,
+                            NULL);
+ 
+         if (r < 0)
+@@ -496,6 +500,18 @@ int session_load(Session *s) {
+                         s->was_active = k;
+         }
+ 
++        if (is_display) {
++                /* Note that when enumerating users are loaded before sessions, hence the display session to use is
++                 * something we have to store along with the session and not the user, as in that case we couldn't
++                 * apply it at the time we load the user. */
++
++                k = parse_boolean(is_display);
++                if (k < 0)
++                        log_warning_errno(k, "Failed to parse IS_DISPLAY session property: %m");
++                else if (k > 0)
++                        s->user->display = s;
++        }
++
+         if (controller) {
+                 if (bus_name_has_owner(s->manager->bus, controller, NULL) > 0) {
+                         session_set_controller(s, controller, false, false);
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index 60ccd62abb..17ed361411 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -277,8 +277,7 @@ int user_save(User *u) {
+ }
+ 
+ int user_load(User *u) {
+-        _cleanup_free_ char *display = NULL, *realtime = NULL, *monotonic = NULL;
+-        Session *s = NULL;
++        _cleanup_free_ char *realtime = NULL, *monotonic = NULL;
+         int r;
+ 
+         assert(u);
+@@ -286,22 +285,13 @@ int user_load(User *u) {
+         r = parse_env_file(NULL, u->state_file, NEWLINE,
+                            "SERVICE_JOB", &u->service_job,
+                            "SLICE_JOB",   &u->slice_job,
+-                           "DISPLAY",     &display,
+                            "REALTIME",    &realtime,
+                            "MONOTONIC",   &monotonic,
+                            NULL);
+-        if (r < 0) {
+-                if (r == -ENOENT)
+-                        return 0;
+-
++        if (r == -ENOENT)
++                return 0;
++        if (r < 0)
+                 return log_error_errno(r, "Failed to read %s: %m", u->state_file);
+-        }
+-
+-        if (display)
+-                s = hashmap_get(u->manager->sessions, display);
+-
+-        if (s && s->display && display_is_local(s->display))
+-                u->display = s;
+ 
+         if (realtime)
+                 timestamp_deserialize(realtime, &u->timestamp.realtime);

@@ -1,0 +1,25 @@
+From 5d7e8cb0e12e4642a760cf00cbb6caf4c07b9cd9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Sun, 19 May 2019 16:05:02 +0200
+Subject: [PATCH] core/dbus-execute: remove unnecessary initialization
+
+(cherry picked from commit bd0abfaea1514bdd7cb60228d7a3f94c17ba916d)
+
+Related: #1734787
+---
+ src/core/dbus-execute.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index 33a91c012e..5379545d57 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -1552,7 +1552,7 @@ int bus_exec_context_set_transient_property(
+ #endif
+         if (streq(name, "CPUAffinity")) {
+                 const void *a;
+-                size_t n = 0;
++                size_t n;
+ 
+                 r = sd_bus_message_read_array(message, 'y', &a, &n);
+                 if (r < 0)

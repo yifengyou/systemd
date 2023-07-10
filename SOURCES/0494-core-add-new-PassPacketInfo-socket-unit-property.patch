@@ -1,0 +1,156 @@
+From 905a97ce65352d80af7260d34b74fd8342792c35 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 27 May 2020 19:36:56 +0200
+Subject: [PATCH] core: add new PassPacketInfo= socket unit property
+
+(cherry picked from commit a3d19f5d99c44940831a33df8b5bece4aaf749f7)
+
+Resolves: #1887181
+---
+ doc/TRANSIENT-SETTINGS.md                   | 1 +
+ man/systemd.socket.xml                      | 9 +++++++++
+ src/core/dbus-socket.c                      | 4 ++++
+ src/core/load-fragment-gperf.gperf.m4       | 1 +
+ src/core/socket.c                           | 8 ++++++++
+ src/core/socket.h                           | 1 +
+ src/shared/bus-unit-util.c                  | 3 +--
+ test/fuzz/fuzz-unit-file/directives.service | 1 +
+ 8 files changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/doc/TRANSIENT-SETTINGS.md b/doc/TRANSIENT-SETTINGS.md
+index 995b8797ef..de0ef9cc49 100644
+--- a/doc/TRANSIENT-SETTINGS.md
++++ b/doc/TRANSIENT-SETTINGS.md
+@@ -410,6 +410,7 @@ Most socket unit settings are available to transient units.
+ ✓ Broadcast=
+ ✓ PassCredentials=
+ ✓ PassSecurity=
++✓ PassPacketInfo=
+ ✓ TCPCongestion=
+ ✓ ReusePort=
+ ✓ MessageQueueMaxMessages=
+diff --git a/man/systemd.socket.xml b/man/systemd.socket.xml
+index 8676b4e03f..a908d5b6d8 100644
+--- a/man/systemd.socket.xml
++++ b/man/systemd.socket.xml
+@@ -712,6 +712,15 @@
+         Defaults to <option>false</option>.</para></listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>PassPacketInfo=</varname></term>
++        <listitem><para>Takes a boolean value. This controls the <constant>IP_PKTINFO</constant>,
++        <constant>IPV6_RECVPKTINFO</constant> and <constant>NETLINK_PKTINFO</constant> socket options, which
++        enable reception of additional per-packet metadata as ancillary message, on
++        <constant>AF_INET</constant>, <constant>AF_INET6</constant> and <constant>AF_UNIX</constant> sockets.
++        Defaults to <option>false</option>.</para></listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>TCPCongestion=</varname></term>
+         <listitem><para>Takes a string value. Controls the TCP
+diff --git a/src/core/dbus-socket.c b/src/core/dbus-socket.c
+index fa6bbe2c6f..17494b80c8 100644
+--- a/src/core/dbus-socket.c
++++ b/src/core/dbus-socket.c
+@@ -104,6 +104,7 @@ const sd_bus_vtable bus_socket_vtable[] = {
+         SD_BUS_PROPERTY("Broadcast", "b", bus_property_get_bool, offsetof(Socket, broadcast), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("PassCredentials", "b", bus_property_get_bool, offsetof(Socket, pass_cred), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("PassSecurity", "b", bus_property_get_bool, offsetof(Socket, pass_sec), SD_BUS_VTABLE_PROPERTY_CONST),
++        SD_BUS_PROPERTY("PassPacketInfo", "b", bus_property_get_bool, offsetof(Socket, pass_pktinfo), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("RemoveOnStop", "b", bus_property_get_bool, offsetof(Socket, remove_on_stop), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("Listen", "a(ss)", property_get_listen, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("Symlinks", "as", NULL, offsetof(Socket, symlinks), SD_BUS_VTABLE_PROPERTY_CONST),
+@@ -205,6 +206,9 @@ static int bus_socket_set_transient_property(
+         if (streq(name, "PassSecurity"))
+                 return bus_set_transient_bool(u, name, &s->pass_sec, message, flags, error);
+ 
++        if (streq(name, "PassPacketInfo"))
++                return bus_set_transient_bool(u, name, &s->pass_pktinfo, message, flags, error);
++
+         if (streq(name, "ReusePort"))
+                 return bus_set_transient_bool(u, name, &s->reuse_port, message, flags, error);
+ 
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index 156a4d0a6d..7d683cc84b 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -381,6 +381,7 @@ Socket.Transparent,              config_parse_bool,                  0,
+ Socket.Broadcast,                config_parse_bool,                  0,                             offsetof(Socket, broadcast)
+ Socket.PassCredentials,          config_parse_bool,                  0,                             offsetof(Socket, pass_cred)
+ Socket.PassSecurity,             config_parse_bool,                  0,                             offsetof(Socket, pass_sec)
++Socket.PassPacketInfo,           config_parse_bool,                  0,                             offsetof(Socket, pass_pktinfo)
+ Socket.TCPCongestion,            config_parse_string,                0,                             offsetof(Socket, tcp_congestion)
+ Socket.ReusePort,                config_parse_bool,                  0,                             offsetof(Socket, reuse_port)
+ Socket.MessageQueueMaxMessages,  config_parse_long,                  0,                             offsetof(Socket, mq_maxmsg)
+diff --git a/src/core/socket.c b/src/core/socket.c
+index 97c3a7fc9a..50c32ed8f4 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -660,6 +660,7 @@ static void socket_dump(Unit *u, FILE *f, const char *prefix) {
+                 "%sBroadcast: %s\n"
+                 "%sPassCredentials: %s\n"
+                 "%sPassSecurity: %s\n"
++                "%sPassPacketInfo: %s\n"
+                 "%sTCPCongestion: %s\n"
+                 "%sRemoveOnStop: %s\n"
+                 "%sWritable: %s\n"
+@@ -678,6 +679,7 @@ static void socket_dump(Unit *u, FILE *f, const char *prefix) {
+                 prefix, yes_no(s->broadcast),
+                 prefix, yes_no(s->pass_cred),
+                 prefix, yes_no(s->pass_sec),
++                prefix, yes_no(s->pass_pktinfo),
+                 prefix, strna(s->tcp_congestion),
+                 prefix, yes_no(s->remove_on_stop),
+                 prefix, yes_no(s->writable),
+@@ -1099,6 +1101,12 @@ static void socket_apply_socket_options(Socket *s, int fd) {
+                         log_unit_warning_errno(UNIT(s), errno, "SO_PASSSEC failed: %m");
+         }
+ 
++        if (s->pass_pktinfo) {
++                r = socket_pass_pktinfo(fd, true);
++                if (r < 0)
++                        log_unit_warning_errno(UNIT(s), r, "Failed to enable packet info socket option: %m");
++        }
++
+         if (s->priority >= 0)
+                 if (setsockopt(fd, SOL_SOCKET, SO_PRIORITY, &s->priority, sizeof(s->priority)) < 0)
+                         log_unit_warning_errno(UNIT(s), errno, "SO_PRIORITY failed: %m");
+diff --git a/src/core/socket.h b/src/core/socket.h
+index b7a25d91fd..2409dbf2a0 100644
+--- a/src/core/socket.h
++++ b/src/core/socket.h
+@@ -121,6 +121,7 @@ struct Socket {
+         bool broadcast;
+         bool pass_cred;
+         bool pass_sec;
++        bool pass_pktinfo;
+ 
+         /* Only for INET6 sockets: issue IPV6_V6ONLY sockopt */
+         SocketAddressBindIPv6Only bind_ipv6_only;
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index daa2c2dce5..9010448aaf 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -1478,8 +1478,7 @@ static int bus_append_socket_property(sd_bus_message *m, const char *field, cons
+         if (STR_IN_SET(field,
+                        "Accept", "Writable", "KeepAlive", "NoDelay", "FreeBind", "Transparent", "Broadcast",
+                        "PassCredentials", "PassSecurity", "ReusePort", "RemoveOnStop", "SELinuxContextFromNet",
+-                       "FlushPending"))
+-
++                       "FlushPending", "PassPacketInfo"))
+                 return bus_append_parse_boolean(m, field, eq);
+ 
+         if (STR_IN_SET(field, "Priority", "IPTTL", "Mark"))
+diff --git a/test/fuzz/fuzz-unit-file/directives.service b/test/fuzz/fuzz-unit-file/directives.service
+index 9d0530df72..8fde27fc90 100644
+--- a/test/fuzz/fuzz-unit-file/directives.service
++++ b/test/fuzz/fuzz-unit-file/directives.service
+@@ -161,6 +161,7 @@ PIDFile=
+ PartOf=
+ PassCredentials=
+ PassSecurity=
++PassPacketInfo=
+ PathChanged=
+ PathExists=
+ PathExistsGlob=

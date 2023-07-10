@@ -1,0 +1,46 @@
+From aec8473f69877c353b9e788b2a7329e290ae14f9 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Fri, 17 Jul 2020 21:36:05 +0900
+Subject: [PATCH] udev: do not try to reassign alternative names
+
+Setting alternative names may fail if some of them are already assigned.
+
+(cherry picked from commit 97fdae33dfe8e7e0a4e5230564f6cdebc4450eec)
+
+Related: #2005008
+---
+ src/udev/net/link-config.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/src/udev/net/link-config.c b/src/udev/net/link-config.c
+index 8bd374d352..5220f247f0 100644
+--- a/src/udev/net/link-config.c
++++ b/src/udev/net/link-config.c
+@@ -350,7 +350,7 @@ static int get_mac(struct udev_device *device, bool want_random,
+ 
+ int link_config_apply(link_config_ctx *ctx, link_config *config,
+                       struct udev_device *device, const char **name) {
+-        _cleanup_strv_free_ char **altnames = NULL;
++        _cleanup_strv_free_ char **altnames = NULL, **current_altnames = NULL;
+         bool respect_predictable = false;
+         struct ether_addr generated_mac;
+         struct ether_addr *mac = NULL;
+@@ -514,9 +514,17 @@ int link_config_apply(link_config_ctx *ctx, link_config *config,
+         if (new_name)
+                 strv_remove(altnames, new_name);
+         strv_remove(altnames, old_name);
++
++        r = rtnl_get_link_alternative_names(&ctx->rtnl, ifindex, &current_altnames);
++        if (r < 0)
++                log_debug_errno(r, "Failed to get alternative names on %s, ignoring: %m", old_name);
++
++        char **p;
++        STRV_FOREACH(p, current_altnames)
++                strv_remove(altnames, *p);
++
+         strv_uniq(altnames);
+         strv_sort(altnames);
+-
+         r = rtnl_set_link_alternative_names(&ctx->rtnl, ifindex, altnames);
+         if (r == -EOPNOTSUPP)
+                 log_debug_errno(r, "Could not set AlternativeName= or apply AlternativeNamesPolicy= on %s, ignoring: %m", old_name);

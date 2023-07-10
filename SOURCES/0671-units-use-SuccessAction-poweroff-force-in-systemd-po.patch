@@ -1,0 +1,56 @@
+From 7e84234d9953f7ffacf7fff82679c9c9c3b78b7e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 15:34:57 +0200
+Subject: [PATCH] units: use SuccessAction=poweroff-force in
+ systemd-poweroff.service
+
+Explicit systemctl calls remain in systemd-halt.service and the system
+systemd-exit.service. To convert systemd-halt, we'd need to add
+SuccessAction=halt-force. Halting doesn't make much sense, so let's just
+leave that is. systemd-exit.service will be converted in the next commit.
+
+(cherry picked from commit afa6206583dfbc93e29981cb5d713841e4ca2865)
+
+Related: #1860899
+---
+ units/meson.build                                            | 2 +-
+ ...{systemd-poweroff.service.in => systemd-poweroff.service} | 5 +----
+ 2 files changed, 2 insertions(+), 5 deletions(-)
+ rename units/{systemd-poweroff.service.in => systemd-poweroff.service} (89%)
+
+diff --git a/units/meson.build b/units/meson.build
+index b482431a10..6fa804148b 100644
+--- a/units/meson.build
++++ b/units/meson.build
+@@ -97,6 +97,7 @@ units = [
+          'sockets.target.wants/'],
+         ['systemd-networkd.socket',             'ENABLE_NETWORKD',
+          join_paths(pkgsysconfdir, 'system/sockets.target.wants/')],
++        ['systemd-poweroff.service',             ''],
+         ['systemd-reboot.service',               ''],
+         ['systemd-rfkill.socket',               'ENABLE_RFKILL'],
+         ['systemd-tmpfiles-clean.timer',        '',
+@@ -179,7 +180,6 @@ in_units = [
+         ['systemd-nspawn@.service',              ''],
+         ['systemd-portabled.service',            'ENABLE_PORTABLED',
+          'dbus-org.freedesktop.portable1.service'],
+-        ['systemd-poweroff.service',             ''],
+         ['systemd-quotacheck.service',           'ENABLE_QUOTACHECK'],
+         ['systemd-random-seed.service',          'ENABLE_RANDOMSEED',
+          'sysinit.target.wants/'],
+diff --git a/units/systemd-poweroff.service.in b/units/systemd-poweroff.service
+similarity index 89%
+rename from units/systemd-poweroff.service.in
+rename to units/systemd-poweroff.service
+index e9fd655508..8d1d54389b 100644
+--- a/units/systemd-poweroff.service.in
++++ b/units/systemd-poweroff.service
+@@ -13,7 +13,4 @@ Documentation=man:systemd-halt.service(8)
+ DefaultDependencies=no
+ Requires=shutdown.target umount.target final.target
+ After=shutdown.target umount.target final.target
+-
+-[Service]
+-Type=oneshot
+-ExecStart=@SYSTEMCTL@ --force poweroff
++SuccessAction=poweroff-force

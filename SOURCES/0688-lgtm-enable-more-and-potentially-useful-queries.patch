@@ -1,0 +1,48 @@
+From 842c676a36abab0d92f1e68de2c8881fd00fdf4b Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Tue, 30 Nov 2021 23:40:28 +0100
+Subject: [PATCH] lgtm: enable more (and potentially useful) queries
+
+Not all available queries on LGTM are enabled by default, but some of
+the excluded ones might come in handy, hence let's enable them
+explicitly.
+
+(cherry picked from commit 38f36b9f3443b4d2085799c772e901a402b84af3)
+
+Related: #2017033
+---
+ .lgtm.yml | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/.lgtm.yml b/.lgtm.yml
+index 5948d8c2bc..fe93957b67 100644
+--- a/.lgtm.yml
++++ b/.lgtm.yml
+@@ -1,3 +1,27 @@
++---
++# vi: ts=2 sw=2 et:
++
++# Explicitly enable certain checks which are hidden by default
++queries:
++  - include: cpp/bad-strncpy-size
++  - include: cpp/declaration-hides-variable
++  - include: cpp/inconsistent-null-check
++  - include: cpp/mistyped-function-arguments
++  - include: cpp/nested-loops-with-same-variable
++  - include: cpp/sizeof-side-effect
++  - include: cpp/suspicious-pointer-scaling
++  - include: cpp/suspicious-pointer-scaling-void
++  - include: cpp/suspicious-sizeof
++  - include: cpp/unsafe-strcat
++  - include: cpp/unsafe-strncat
++  - include: cpp/unsigned-difference-expression-compared-zero
++  - include: cpp/unused-local-variable
++  - include:
++      tags:
++        - "security"
++        - "correctness"
++      severity: "error"
++
+ extraction:
+   cpp:
+     prepare:

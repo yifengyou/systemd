@@ -1,0 +1,36 @@
+From ad3e4a0f010c9497b01d89de54213af982f8afd2 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Tue, 2 Jul 2019 09:52:45 +0200
+Subject: [PATCH] test: skip the test on systems without NUMA support
+
+(cherry picked from commit b030847163e9bd63d3dd6eec6ac7f336411faba6)
+
+Related: #1808940
+---
+ test/TEST-36-NUMAPOLICY/testsuite.sh | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/test/TEST-36-NUMAPOLICY/testsuite.sh b/test/TEST-36-NUMAPOLICY/testsuite.sh
+index daed8fcc1c..4b715d305a 100755
+--- a/test/TEST-36-NUMAPOLICY/testsuite.sh
++++ b/test/TEST-36-NUMAPOLICY/testsuite.sh
+@@ -123,7 +123,18 @@ systemctlCheckNUMAProperties() {
+     fi
+ }
+ 
+-checkNUMA
++if ! checkNUMA; then
++    echo >&2 "NUMA is not supported on this machine, skipping the test"
++
++    # FIXME: add some sanity checks to verify systemd behaves correctly with
++    #        NUMA disabled together with NUMAPolicy= and NUMAMask=
++
++    systemd-analyze log-level info
++    echo OK > /testok
++
++    exit 0
++fi
++
+ writeTestUnit
+ 
+ # Create systemd config drop-in directory

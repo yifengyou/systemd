@@ -1,0 +1,59 @@
+From 5f69ba3919d32ed93c68bb6b8b70a516f2bb56a8 Mon Sep 17 00:00:00 2001
+From: Jan Macku <jamacku@redhat.com>
+Date: Tue, 16 Aug 2022 14:34:49 +0200
+Subject: [PATCH] ci(lint): add shell linter - Differential ShellCheck
+
+It performs differential ShellCheck scans and report results directly in
+pull request.
+
+documentation:
+https://github.com/redhat-plumbers-in-action/differential-shellcheck
+
+(inspired by commit
+ https://github.com/systemd/systemd/commit/3f3c718e79abdac698ae90de5cd4c0560a0a75d4)
+
+RHEL-only
+
+Related: #2122499
+---
+ .github/workflows/differential-shellcheck.yml | 31 +++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+ create mode 100644 .github/workflows/differential-shellcheck.yml
+
+diff --git a/.github/workflows/differential-shellcheck.yml b/.github/workflows/differential-shellcheck.yml
+new file mode 100644
+index 0000000000..fa94679b51
+--- /dev/null
++++ b/.github/workflows/differential-shellcheck.yml
+@@ -0,0 +1,31 @@
++---
++# https://github.com/redhat-plumbers-in-action/differential-shellcheck#readme
++
++name: Differential ShellCheck
++on:
++  pull_request:
++    branches:
++      - master
++      - rhel-8.*.0
++
++permissions:
++  contents: read
++
++jobs:
++  lint:
++    runs-on: ubuntu-latest
++
++    permissions:
++      security-events: write
++      pull-requests: write
++
++    steps:
++      - name: Repository checkout
++        uses: actions/checkout@v3
++        with:
++          fetch-depth: 0
++
++      - name: Differential ShellCheck
++        uses: redhat-plumbers-in-action/differential-shellcheck@v3
++        with:
++          token: ${{ secrets.GITHUB_TOKEN }}

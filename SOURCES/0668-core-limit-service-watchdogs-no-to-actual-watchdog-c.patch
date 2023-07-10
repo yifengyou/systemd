@@ -1,0 +1,120 @@
+From b8358d4edf1896a821c9370c9ba31c2bb07c277a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 15:24:44 +0200
+Subject: [PATCH] core: limit service-watchdogs=no to actual "watchdog"
+ commands
+
+The setting is now only looked at when considering an action for a job timeout
+or unit start limit. It is ignored for ctrl-alt-del, SuccessAction, SuccessFailure.
+
+v2: turn the parameter into a flag field
+v3: rename Options to Flags
+(cherry picked from commit 1710d4beff6329cf6ae0767953cad09593517b2a)
+
+Related: #1860899
+---
+ src/core/emergency-action.c | 3 ++-
+ src/core/emergency-action.h | 8 +++++++-
+ src/core/job.c              | 3 ++-
+ src/core/manager.c          | 2 +-
+ src/core/unit.c             | 9 ++++++---
+ 5 files changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/src/core/emergency-action.c b/src/core/emergency-action.c
+index 00f5996317..e9e757dfa3 100644
+--- a/src/core/emergency-action.c
++++ b/src/core/emergency-action.c
+@@ -24,6 +24,7 @@ static void log_and_status(Manager *m, const char *message, const char *reason)
+ int emergency_action(
+                 Manager *m,
+                 EmergencyAction action,
++                EmergencyActionFlags options,
+                 const char *reboot_arg,
+                 const char *reason) {
+ 
+@@ -34,7 +35,7 @@ int emergency_action(
+         if (action == EMERGENCY_ACTION_NONE)
+                 return -ECANCELED;
+ 
+-        if (!m->service_watchdogs) {
++        if (FLAGS_SET(options, EMERGENCY_ACTION_IS_WATCHDOG) && !m->service_watchdogs) {
+                 log_warning("Watchdog disabled! Not acting on: %s", reason);
+                 return -ECANCELED;
+         }
+diff --git a/src/core/emergency-action.h b/src/core/emergency-action.h
+index 646ccc4e6b..efbfaf6c6a 100644
+--- a/src/core/emergency-action.h
++++ b/src/core/emergency-action.h
+@@ -20,10 +20,16 @@ typedef enum EmergencyAction {
+         _EMERGENCY_ACTION_INVALID = -1
+ } EmergencyAction;
+ 
++typedef enum EmergencyActionFlags {
++        EMERGENCY_ACTION_IS_WATCHDOG = 1 << 0,
++} EmergencyActionFlags;
++
+ #include "macro.h"
+ #include "manager.h"
+ 
+-int emergency_action(Manager *m, EmergencyAction action, const char *reboot_arg, const char *reason);
++int emergency_action(Manager *m,
++                     EmergencyAction action, EmergencyActionFlags options,
++                     const char *reboot_arg, const char *reason);
+ 
+ const char* emergency_action_to_string(EmergencyAction i) _const_;
+ EmergencyAction emergency_action_from_string(const char *s) _pure_;
+diff --git a/src/core/job.c b/src/core/job.c
+index 870ec0a387..d647aac42d 100644
+--- a/src/core/job.c
++++ b/src/core/job.c
+@@ -1076,7 +1076,8 @@ static int job_dispatch_timer(sd_event_source *s, uint64_t monotonic, void *user
+         u = j->unit;
+         job_finish_and_invalidate(j, JOB_TIMEOUT, true, false);
+ 
+-        emergency_action(u->manager, u->job_timeout_action, u->job_timeout_reboot_arg, "job timed out");
++        emergency_action(u->manager, u->job_timeout_action, EMERGENCY_ACTION_IS_WATCHDOG,
++                         u->job_timeout_reboot_arg, "job timed out");
+ 
+         return 0;
+ }
+diff --git a/src/core/manager.c b/src/core/manager.c
+index 3c44ad3dbc..ac1b198b21 100644
+--- a/src/core/manager.c
++++ b/src/core/manager.c
+@@ -2528,7 +2528,7 @@ static void manager_handle_ctrl_alt_del(Manager *m) {
+         if (ratelimit_below(&m->ctrl_alt_del_ratelimit) || m->cad_burst_action == EMERGENCY_ACTION_NONE)
+                 manager_start_target(m, SPECIAL_CTRL_ALT_DEL_TARGET, JOB_REPLACE_IRREVERSIBLY);
+         else
+-                emergency_action(m, m->cad_burst_action, NULL,
++                emergency_action(m, m->cad_burst_action, 0, NULL, 
+                                 "Ctrl-Alt-Del was pressed more than 7 times within 2s");
+ }
+ 
+diff --git a/src/core/unit.c b/src/core/unit.c
+index 152a860d08..dc5c89c195 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -1669,7 +1669,8 @@ int unit_start_limit_test(Unit *u) {
+         log_unit_warning(u, "Start request repeated too quickly.");
+         u->start_limit_hit = true;
+ 
+-        return emergency_action(u->manager, u->start_limit_action, u->reboot_arg, "unit failed");
++        return emergency_action(u->manager, u->start_limit_action, EMERGENCY_ACTION_IS_WATCHDOG,
++                                u->reboot_arg, "unit failed");
+ }
+ 
+ bool unit_shall_confirm_spawn(Unit *u) {
+@@ -2469,9 +2470,11 @@ void unit_notify(Unit *u, UnitActiveState os, UnitActiveState ns, UnitNotifyFlag
+                 unit_check_binds_to(u);
+ 
+                 if (os != UNIT_FAILED && ns == UNIT_FAILED)
+-                        (void) emergency_action(u->manager, u->failure_action, u->reboot_arg, "unit failed");
++                        (void) emergency_action(u->manager, u->failure_action, 0,
++                                                u->reboot_arg, "unit failed");
+                 else if (!UNIT_IS_INACTIVE_OR_FAILED(os) && ns == UNIT_INACTIVE)
+-                        (void) emergency_action(u->manager, u->success_action, u->reboot_arg, "unit succeeded");
++                        (void) emergency_action(u->manager, u->success_action, 0,
++                                                u->reboot_arg, "unit succeeded");
+         }
+ 
+         unit_add_to_dbus_queue(u);

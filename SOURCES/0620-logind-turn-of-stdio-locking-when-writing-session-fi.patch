@@ -1,0 +1,39 @@
+From 3eab0f1b64477792bd01ca52c3eb26ce64c5c7ba Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 3 Aug 2018 20:18:55 +0200
+Subject: [PATCH] logind: turn of stdio locking when writing session files too
+
+This just copies what we already do for user and seat files to session
+files.
+
+(cherry picked from commit 44176400138e18d9087e0864ca97041416a90d47)
+
+Related: #1642460
+---
+ src/login/logind-session.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/login/logind-session.c b/src/login/logind-session.c
+index 0afb065b2b..960a24d1a7 100644
+--- a/src/login/logind-session.c
++++ b/src/login/logind-session.c
+@@ -5,6 +5,7 @@
+ #include <linux/kd.h>
+ #include <linux/vt.h>
+ #include <signal.h>
++#include <stdio_ext.h>
+ #include <string.h>
+ #include <sys/ioctl.h>
+ #include <unistd.h>
+@@ -175,9 +176,8 @@ int session_save(Session *s) {
+         if (r < 0)
+                 goto fail;
+ 
+-        assert(s->user);
+-
+-        fchmod(fileno(f), 0644);
++        (void) __fsetlocking(f, FSETLOCKING_BYCALLER);
++        (void) fchmod(fileno(f), 0644);
+ 
+         fprintf(f,
+                 "# This is private data. Do not parse.\n"

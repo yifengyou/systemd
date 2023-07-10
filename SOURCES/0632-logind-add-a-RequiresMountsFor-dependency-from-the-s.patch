@@ -1,0 +1,210 @@
+From e9a187ea6abf1e7034ee3113355b282743a98f39 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 8 Aug 2018 15:27:49 +0200
+Subject: [PATCH] logind: add a RequiresMountsFor= dependency from the session
+ scope unit to the home directory of the user
+
+This is useful so that during shutdown scope units are always terminated
+before the mounts necessary for the home directory.
+
+(Ideally we'd also add a similar dependency from the user@.service
+instance to the home directory, but this isn't as easy as that service
+is defined statically and not dynamically, and hence not easy to modify
+dynamically, in particular when it comes to deps)
+
+(cherry picked from commit d5ac9d060267820aabdf9af509a54a1830b27b7d)
+
+Related: #1642460
+---
+ src/login/logind-core.c    | 24 ++++++++++++++++++------
+ src/login/logind-dbus.c    |  7 +++++++
+ src/login/logind-session.c |  1 +
+ src/login/logind-user.c    | 13 ++++++++++++-
+ src/login/logind-user.h    |  3 ++-
+ src/login/logind.h         |  4 ++--
+ 6 files changed, 42 insertions(+), 10 deletions(-)
+
+diff --git a/src/login/logind-core.c b/src/login/logind-core.c
+index 678c708df1..0ed812a2c8 100644
+--- a/src/login/logind-core.c
++++ b/src/login/logind-core.c
+@@ -128,7 +128,14 @@ int manager_add_session(Manager *m, const char *id, Session **_session) {
+         return 0;
+ }
+ 
+-int manager_add_user(Manager *m, uid_t uid, gid_t gid, const char *name, User **_user) {
++int manager_add_user(
++                Manager *m,
++                uid_t uid,
++                gid_t gid,
++                const char *name,
++                const char *home,
++                User **_user) {
++
+         User *u;
+         int r;
+ 
+@@ -137,7 +144,7 @@ int manager_add_user(Manager *m, uid_t uid, gid_t gid, const char *name, User **
+ 
+         u = hashmap_get(m->users, UID_TO_PTR(uid));
+         if (!u) {
+-                r = user_new(&u, m, uid, gid, name);
++                r = user_new(&u, m, uid, gid, name, home);
+                 if (r < 0)
+                         return r;
+         }
+@@ -148,7 +155,12 @@ int manager_add_user(Manager *m, uid_t uid, gid_t gid, const char *name, User **
+         return 0;
+ }
+ 
+-int manager_add_user_by_name(Manager *m, const char *name, User **_user) {
++int manager_add_user_by_name(
++                Manager *m,
++                const char *name,
++                User **_user) {
++
++        const char *home = NULL;
+         uid_t uid;
+         gid_t gid;
+         int r;
+@@ -156,11 +168,11 @@ int manager_add_user_by_name(Manager *m, const char *name, User **_user) {
+         assert(m);
+         assert(name);
+ 
+-        r = get_user_creds(&name, &uid, &gid, NULL, NULL);
++        r = get_user_creds(&name, &uid, &gid, &home, NULL);
+         if (r < 0)
+                 return r;
+ 
+-        return manager_add_user(m, uid, gid, name, _user);
++        return manager_add_user(m, uid, gid, name, home, _user);
+ }
+ 
+ int manager_add_user_by_uid(Manager *m, uid_t uid, User **_user) {
+@@ -173,7 +185,7 @@ int manager_add_user_by_uid(Manager *m, uid_t uid, User **_user) {
+         if (!p)
+                 return errno > 0 ? -errno : -ENOENT;
+ 
+-        return manager_add_user(m, uid, p->pw_gid, p->pw_name, _user);
++        return manager_add_user(m, uid, p->pw_gid, p->pw_name, p->pw_dir, _user);
+ }
+ 
+ int manager_add_inhibitor(Manager *m, const char* id, Inhibitor **_inhibitor) {
+diff --git a/src/login/logind-dbus.c b/src/login/logind-dbus.c
+index 6586280269..1bb152bc20 100644
+--- a/src/login/logind-dbus.c
++++ b/src/login/logind-dbus.c
+@@ -3313,6 +3313,7 @@ int manager_start_scope(
+                 const char *description,
+                 char **wants,
+                 char **after,
++                const char *requires_mounts_for,
+                 sd_bus_message *more_properties,
+                 sd_bus_error *error,
+                 char **job) {
+@@ -3368,6 +3369,12 @@ int manager_start_scope(
+                         return r;
+         }
+ 
++        if (!empty_or_root(requires_mounts_for)) {
++                r = sd_bus_message_append(m, "(sv)", "RequiresMountsFor", "as", 1, requires_mounts_for);
++                if (r < 0)
++                        return r;
++        }
++
+         /* Make sure that the session shells are terminated with SIGHUP since bash and friends tend to ignore
+          * SIGTERM */
+         r = sd_bus_message_append(m, "(sv)", "SendSIGHUP", "b", true);
+diff --git a/src/login/logind-session.c b/src/login/logind-session.c
+index dd4ac9482a..e4c8bb36f6 100644
+--- a/src/login/logind-session.c
++++ b/src/login/logind-session.c
+@@ -591,6 +591,7 @@ static int session_start_scope(Session *s, sd_bus_message *properties, sd_bus_er
+                                 description,
+                                 STRV_MAKE(s->user->runtime_dir_service, s->user->service), /* These two have StopWhenUnneeded= set, hence add a dep towards them */
+                                 STRV_MAKE("systemd-logind.service", "systemd-user-sessions.service", s->user->runtime_dir_service, s->user->service), /* And order us after some more */
++                                s->user->home,
+                                 properties,
+                                 error,
+                                 &s->scope_job);
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index f23fcbe674..70f5eb9d59 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -30,7 +30,13 @@
+ #include "user-util.h"
+ #include "util.h"
+ 
+-int user_new(User **ret, Manager *m, uid_t uid, gid_t gid, const char *name) {
++int user_new(User **ret,
++             Manager *m,
++             uid_t uid,
++             gid_t gid,
++             const char *name,
++             const char *home) {
++
+         _cleanup_(user_freep) User *u = NULL;
+         char lu[DECIMAL_STR_MAX(uid_t) + 1];
+         int r;
+@@ -54,6 +60,10 @@ int user_new(User **ret, Manager *m, uid_t uid, gid_t gid, const char *name) {
+         if (!u->name)
+                 return -ENOMEM;
+ 
++        u->home = strdup(home);
++        if (!u->home)
++                return -ENOMEM;
++
+         if (asprintf(&u->state_file, "/run/systemd/users/"UID_FMT, uid) < 0)
+                 return -ENOMEM;
+ 
+@@ -124,6 +134,7 @@ User *user_free(User *u) {
+         u->runtime_path = mfree(u->runtime_path);
+         u->state_file = mfree(u->state_file);
+         u->name = mfree(u->name);
++        u->home = mfree(u->home);
+ 
+         return mfree(u);
+ }
+diff --git a/src/login/logind-user.h b/src/login/logind-user.h
+index e05646adc9..c41973e27d 100644
+--- a/src/login/logind-user.h
++++ b/src/login/logind-user.h
+@@ -23,6 +23,7 @@ struct User {
+         uid_t uid;
+         gid_t gid;
+         char *name;
++        char *home;
+         char *state_file;
+         char *runtime_path;
+ 
+@@ -49,7 +50,7 @@ struct User {
+         LIST_FIELDS(User, gc_queue);
+ };
+ 
+-int user_new(User **out, Manager *m, uid_t uid, gid_t gid, const char *name);
++int user_new(User **out, Manager *m, uid_t uid, gid_t gid, const char *name, const char *home);
+ User *user_free(User *u);
+ 
+ DEFINE_TRIVIAL_CLEANUP_FUNC(User *, user_free);
+diff --git a/src/login/logind.h b/src/login/logind.h
+index 7288dd7445..d29b01c75b 100644
+--- a/src/login/logind.h
++++ b/src/login/logind.h
+@@ -129,7 +129,7 @@ int manager_add_device(Manager *m, const char *sysfs, bool master, Device **_dev
+ int manager_add_button(Manager *m, const char *name, Button **_button);
+ int manager_add_seat(Manager *m, const char *id, Seat **_seat);
+ int manager_add_session(Manager *m, const char *id, Session **_session);
+-int manager_add_user(Manager *m, uid_t uid, gid_t gid, const char *name, User **_user);
++int manager_add_user(Manager *m, uid_t uid, gid_t gid, const char *name, const char *home, User **_user);
+ int manager_add_user_by_name(Manager *m, const char *name, User **_user);
+ int manager_add_user_by_uid(Manager *m, uid_t uid, User **_user);
+ int manager_add_inhibitor(Manager *m, const char* id, Inhibitor **_inhibitor);
+@@ -162,7 +162,7 @@ int bus_manager_shutdown_or_sleep_now_or_later(Manager *m, const char *unit_name
+ 
+ int manager_send_changed(Manager *manager, const char *property, ...) _sentinel_;
+ 
+-int manager_start_scope(Manager *manager, const char *scope, pid_t pid, const char *slice, const char *description, char **wants, char **after, sd_bus_message *more_properties, sd_bus_error *error, char **job);
++int manager_start_scope(Manager *manager, const char *scope, pid_t pid, const char *slice, const char *description, char **wants, char **after, const char *requires_mounts_for, sd_bus_message *more_properties, sd_bus_error *error, char **job);
+ int manager_start_unit(Manager *manager, const char *unit, sd_bus_error *error, char **job);
+ int manager_stop_unit(Manager *manager, const char *unit, sd_bus_error *error, char **job);
+ int manager_abandon_scope(Manager *manager, const char *scope, sd_bus_error *error);

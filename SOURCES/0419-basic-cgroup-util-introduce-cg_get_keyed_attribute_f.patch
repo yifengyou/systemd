@@ -1,0 +1,144 @@
+From 5aefc153b25b42a80942e5c367ce143817551870 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Wed, 29 Apr 2020 17:40:22 +0200
+Subject: [PATCH] basic/cgroup-util: introduce cg_get_keyed_attribute_full()
+
+Callers of cg_get_keyed_attribute_full() can now specify via the flag whether the
+missing keyes in cgroup attribute file are OK or not. Also the wrappers for both
+strict and graceful version are provided.
+
+(cherry picked from commit 25a1f04c682260bb9b96e25bdf33665d6172db98)
+
+Related: #1830861
+---
+ src/basic/cgroup-util.c     | 13 ++++++++++---
+ src/basic/cgroup-util.h     | 24 +++++++++++++++++++++++-
+ src/test/test-cgroup-util.c | 20 ++++++++++++++++++++
+ 3 files changed, 53 insertions(+), 4 deletions(-)
+
+diff --git a/src/basic/cgroup-util.c b/src/basic/cgroup-util.c
+index 92bc1f2543..4c0b73850d 100644
+--- a/src/basic/cgroup-util.c
++++ b/src/basic/cgroup-util.c
+@@ -2021,12 +2021,13 @@ int cg_get_attribute(const char *controller, const char *path, const char *attri
+         return read_one_line_file(p, ret);
+ }
+ 
+-int cg_get_keyed_attribute(
++int cg_get_keyed_attribute_full(
+                 const char *controller,
+                 const char *path,
+                 const char *attribute,
+                 char **keys,
+-                char **ret_values) {
++                char **ret_values,
++                CGroupKeyMode mode) {
+ 
+         _cleanup_free_ char *filename = NULL, *contents = NULL;
+         const char *p;
+@@ -2086,7 +2087,10 @@ int cg_get_keyed_attribute(
+                 p += strspn(p, NEWLINE);
+         }
+ 
+-        r = -ENXIO;
++        if (mode & CG_KEY_MODE_GRACEFUL)
++                goto done;
++        else
++                r = -ENXIO;
+ 
+ fail:
+         for (i = 0; i < n; i++)
+@@ -2096,6 +2100,9 @@ fail:
+ 
+ done:
+         memcpy(ret_values, v, sizeof(char*) * n);
++        if (mode & CG_KEY_MODE_GRACEFUL)
++                return n_done;
++
+         return 0;
+ 
+ }
+diff --git a/src/basic/cgroup-util.h b/src/basic/cgroup-util.h
+index b414600dca..0673f4b4ce 100644
+--- a/src/basic/cgroup-util.h
++++ b/src/basic/cgroup-util.h
+@@ -167,9 +167,31 @@ int cg_attach(const char *controller, const char *path, pid_t pid);
+ int cg_attach_fallback(const char *controller, const char *path, pid_t pid);
+ int cg_create_and_attach(const char *controller, const char *path, pid_t pid);
+ 
++typedef enum  {
++        CG_KEY_MODE_GRACEFUL = 1 << 0,
++} CGroupKeyMode;
++
+ int cg_set_attribute(const char *controller, const char *path, const char *attribute, const char *value);
+ int cg_get_attribute(const char *controller, const char *path, const char *attribute, char **ret);
+-int cg_get_keyed_attribute(const char *controller, const char *path, const char *attribute, char **keys, char **values);
++int cg_get_keyed_attribute_full(const char *controller, const char *path, const char *attribute, char **keys, char **values, CGroupKeyMode mode);
++
++static inline int cg_get_keyed_attribute(
++                const char *controller,
++                const char *path,
++                const char *attribute,
++                char **keys,
++                char **ret_values) {
++        return cg_get_keyed_attribute_full(controller, path, attribute, keys, ret_values, 0);
++}
++
++static inline int cg_get_keyed_attribute_graceful(
++                const char *controller,
++                const char *path,
++                const char *attribute,
++                char **keys,
++                char **ret_values) {
++        return cg_get_keyed_attribute_full(controller, path, attribute, keys, ret_values, CG_KEY_MODE_GRACEFUL);
++}
+ 
+ int cg_set_access(const char *controller, const char *path, uid_t uid, gid_t gid);
+ 
+diff --git a/src/test/test-cgroup-util.c b/src/test/test-cgroup-util.c
+index d49356315e..60d7bb19cb 100644
+--- a/src/test/test-cgroup-util.c
++++ b/src/test/test-cgroup-util.c
+@@ -421,22 +421,42 @@ static void test_cg_get_keyed_attribute(void) {
+         }
+ 
+         assert_se(cg_get_keyed_attribute("cpu", "/init.scope", "cpu.stat", STRV_MAKE("no_such_attr"), &val) == -ENXIO);
++        assert_se(cg_get_keyed_attribute_graceful("cpu", "/init.scope", "cpu.stat", STRV_MAKE("no_such_attr"), &val) == 0);
+         assert_se(val == NULL);
+ 
+         assert_se(cg_get_keyed_attribute("cpu", "/init.scope", "cpu.stat", STRV_MAKE("usage_usec"), &val) == 0);
++        free(val);
++
++        assert_se(cg_get_keyed_attribute_graceful("cpu", "/init.scope", "cpu.stat", STRV_MAKE("usage_usec"), &val) == 1);
+         log_info("cpu /init.scope cpu.stat [usage_usec] → \"%s\"", val);
+ 
+         assert_se(cg_get_keyed_attribute("cpu", "/init.scope", "cpu.stat", STRV_MAKE("usage_usec", "no_such_attr"), vals3) == -ENXIO);
++        assert_se(cg_get_keyed_attribute_graceful("cpu", "/init.scope", "cpu.stat", STRV_MAKE("usage_usec", "no_such_attr"), vals3) == 1);
++        assert(vals3[0] && !vals3[1]);
++        free(vals3[0]);
+ 
+         assert_se(cg_get_keyed_attribute("cpu", "/init.scope", "cpu.stat", STRV_MAKE("usage_usec", "usage_usec"), vals3) == -ENXIO);
++        assert_se(cg_get_keyed_attribute_graceful("cpu", "/init.scope", "cpu.stat", STRV_MAKE("usage_usec", "usage_usec"), vals3) == 1);
++        assert(vals3[0] && !vals3[1]);
++        free(vals3[0]);
+ 
+         assert_se(cg_get_keyed_attribute("cpu", "/init.scope", "cpu.stat",
+                                          STRV_MAKE("usage_usec", "user_usec", "system_usec"), vals3) == 0);
++        for (i = 0; i < 3; i++)
++                free(vals3[i]);
++
++        assert_se(cg_get_keyed_attribute_graceful("cpu", "/init.scope", "cpu.stat",
++                                         STRV_MAKE("usage_usec", "user_usec", "system_usec"), vals3) == 3);
+         log_info("cpu /init.scope cpu.stat [usage_usec user_usec system_usec] → \"%s\", \"%s\", \"%s\"",
+                  vals3[0], vals3[1], vals3[2]);
+ 
+         assert_se(cg_get_keyed_attribute("cpu", "/init.scope", "cpu.stat",
+                                          STRV_MAKE("system_usec", "user_usec", "usage_usec"), vals3a) == 0);
++        for (i = 0; i < 3; i++)
++                free(vals3a[i]);
++
++        assert_se(cg_get_keyed_attribute_graceful("cpu", "/init.scope", "cpu.stat",
++                                         STRV_MAKE("system_usec", "user_usec", "usage_usec"), vals3a) == 3);
+         log_info("cpu /init.scope cpu.stat [system_usec user_usec usage_usec] → \"%s\", \"%s\", \"%s\"",
+                  vals3a[0], vals3a[1], vals3a[2]);
+ 

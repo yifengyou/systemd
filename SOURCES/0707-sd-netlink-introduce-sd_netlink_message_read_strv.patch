@@ -1,0 +1,106 @@
+From cd3b4c5345a3500f190941454fff03fc143c6f2e Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Sun, 15 Dec 2019 21:32:25 +0900
+Subject: [PATCH] sd-netlink: introduce sd_netlink_message_read_strv()
+
+The combination of sd_netlink_message_enter_container() and
+sd_netlink_message_read_string() only reads the last element if the attribute is
+duplicated, such a situation easily happens for IFLA_ALT_IFNAME.
+The function introduced here reads all matched attributes.
+
+(cherry picked from commit 8f3c1859669230c2c8458675f41de13e369b47e7)
+
+Related: #2005008
+---
+ src/libsystemd/sd-netlink/netlink-message.c | 58 +++++++++++++++++++++
+ src/systemd/sd-netlink.h                    |  1 +
+ 2 files changed, 59 insertions(+)
+
+diff --git a/src/libsystemd/sd-netlink/netlink-message.c b/src/libsystemd/sd-netlink/netlink-message.c
+index db9101c163..5723e1d21c 100644
+--- a/src/libsystemd/sd-netlink/netlink-message.c
++++ b/src/libsystemd/sd-netlink/netlink-message.c
+@@ -14,6 +14,7 @@
+ #include "netlink-util.h"
+ #include "refcnt.h"
+ #include "socket-util.h"
++#include "strv.h"
+ #include "util.h"
+ 
+ #define GET_CONTAINER(m, i) ((i) < (m)->n_containers ? (struct rtattr*)((uint8_t*)(m)->hdr + (m)->containers[i].offset) : NULL)
+@@ -754,6 +755,63 @@ int sd_netlink_message_read_in6_addr(sd_netlink_message *m, unsigned short type,
+         return 0;
+ }
+ 
++int sd_netlink_message_read_strv(sd_netlink_message *m, unsigned short container_type, unsigned short type_id, char ***ret) {
++        _cleanup_strv_free_ char **s = NULL;
++        const NLTypeSystem *type_system;
++        const NLType *nl_type;
++        struct rtattr *rta;
++        void *container;
++        unsigned short rt_len;
++        int r;
++
++        assert_return(m, -EINVAL);
++        assert_return(m->n_containers < RTNL_CONTAINER_DEPTH, -EINVAL);
++
++        r = type_system_get_type(m->containers[m->n_containers].type_system,
++                                 &nl_type,
++                                 container_type);
++        if (r < 0)
++                return r;
++
++        if (type_get_type(nl_type) != NETLINK_TYPE_NESTED)
++                return -EINVAL;
++
++        r = type_system_get_type_system(m->containers[m->n_containers].type_system,
++                                        &type_system,
++                                        container_type);
++        if (r < 0)
++                return r;
++
++        r = type_system_get_type(type_system, &nl_type, type_id);
++        if (r < 0)
++                return r;
++
++        if (type_get_type(nl_type) != NETLINK_TYPE_STRING)
++                return -EINVAL;
++
++        r = netlink_message_read_internal(m, container_type, &container, NULL);
++        if (r < 0)
++                return r;
++
++        rt_len = (unsigned short) r;
++        rta = container;
++
++        for (; RTA_OK(rta, rt_len); rta = RTA_NEXT(rta, rt_len)) {
++                unsigned short type;
++
++                type = RTA_TYPE(rta);
++                if (type != type_id)
++                        continue;
++
++                r = strv_extend(&s, RTA_DATA(rta));
++                if (r < 0)
++                        return r;
++        }
++
++        *ret = TAKE_PTR(s);
++        return 0;
++}
++
+ static int netlink_container_parse(sd_netlink_message *m,
+                                    struct netlink_container *container,
+                                    int count,
+diff --git a/src/systemd/sd-netlink.h b/src/systemd/sd-netlink.h
+index 51f0fa16b4..1f5c093f11 100644
+--- a/src/systemd/sd-netlink.h
++++ b/src/systemd/sd-netlink.h
+@@ -82,6 +82,7 @@ int sd_netlink_message_open_container_union(sd_netlink_message *m, unsigned shor
+ int sd_netlink_message_close_container(sd_netlink_message *m);
+ 
+ int sd_netlink_message_read_string(sd_netlink_message *m, unsigned short type, const char **data);
++int sd_netlink_message_read_strv(sd_netlink_message *m, unsigned short container_type, unsigned short type_id, char ***ret);
+ int sd_netlink_message_read_u8(sd_netlink_message *m, unsigned short type, uint8_t *data);
+ int sd_netlink_message_read_u16(sd_netlink_message *m, unsigned short type, uint16_t *data);
+ int sd_netlink_message_read_u32(sd_netlink_message *m, unsigned short type, uint32_t *data);

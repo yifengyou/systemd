@@ -1,0 +1,32 @@
+From 2e33a4ffdd54de1f88c3cd37ca5ace94a637b1dc Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 19 Aug 2020 17:46:30 +0200
+Subject: [PATCH] shared/syscall-list: filter out some obviously
+ platform-specific syscalls
+
+(cherry picked from commit 752fedbea7c02c82287c7ff2a4139f528b3f7ba8)
+
+Related: #2040247
+---
+ src/shared/generate-syscall-list.py | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/shared/generate-syscall-list.py b/src/shared/generate-syscall-list.py
+index 0b90d2d276..030c3feec4 100755
+--- a/src/shared/generate-syscall-list.py
++++ b/src/shared/generate-syscall-list.py
+@@ -1,5 +1,14 @@
+ #!/usr/bin/env python3
+ import sys
++import os
++
++s390 = 's390' in os.uname().machine
++arm = 'arm' in os.uname().machine
+ 
+ for line in open(sys.argv[1]):
++    if line.startswith('s390_') and not s390:
++        continue
++    if line.startswith('arm_') and not arm:
++        continue
++
+     print('"{}\\0"'.format(line.strip()))

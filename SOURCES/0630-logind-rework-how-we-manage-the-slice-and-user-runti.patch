@@ -1,0 +1,618 @@
+From a05c1077911652954c8b9e82cfdc0fc643eca782 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 6 Aug 2018 21:44:45 +0200
+Subject: [PATCH] logind: rework how we manage the slice and
+ user-runtime-dir@.service unit for each user
+
+Instead of managing it explicitly, let's simplify things and rely on
+regular Wants=/Requires= dependencies to pull in these units from
+user@.service and the session scope, and StopWhenUneeded= to stop these
+auxiliary units again. This way, they can be pulled in easily by
+unrelated units too.
+
+This simplifies things quite a bit: for each session we now only need to
+manage the session scope, and for each user the user@.service, the other
+units are not something we need to manage anymore.
+
+This patch also makes sure that if user@.service of a user is masked we
+will continue to work, and user-runtime-dir@.service will still be
+correctly pulled in, as it is now a dependency of the scope unit.
+
+Fixes: #9461
+Replaces: #5546
+(cherry picked from commit 25a1ab4ed48b72e974f77a68dcbe3521014787bb)
+
+Related: #1642460
+---
+ src/login/logind-dbus.c    |  58 ++++++++--------
+ src/login/logind-session.c |  64 ++++++++++--------
+ src/login/logind-session.h |   2 +-
+ src/login/logind-user.c    | 134 ++++++++++++++-----------------------
+ src/login/logind-user.h    |   7 +-
+ src/login/logind.c         |   2 +-
+ src/login/logind.h         |   2 +-
+ 7 files changed, 123 insertions(+), 146 deletions(-)
+
+diff --git a/src/login/logind-dbus.c b/src/login/logind-dbus.c
+index 4b2c418453..7eba617fff 100644
+--- a/src/login/logind-dbus.c
++++ b/src/login/logind-dbus.c
+@@ -847,7 +847,7 @@ static int method_create_session(sd_bus_message *message, void *userdata, sd_bus
+         if (r < 0)
+                 goto fail;
+ 
+-        r = session_start(session, message);
++        r = session_start(session, message, error);
+         if (r < 0)
+                 goto fail;
+ 
+@@ -3110,24 +3110,20 @@ const sd_bus_vtable manager_vtable[] = {
+ };
+ 
+ static int session_jobs_reply(Session *s, const char *unit, const char *result) {
+-        int r = 0;
+-
+         assert(s);
+         assert(unit);
+ 
+         if (!s->started)
+-                return r;
++                return 0;
+ 
+-        if (streq(result, "done"))
+-                r = session_send_create_reply(s, NULL);
+-        else {
++        if (result && !streq(result, "done")) {
+                 _cleanup_(sd_bus_error_free) sd_bus_error e = SD_BUS_ERROR_NULL;
+ 
+-                sd_bus_error_setf(&e, BUS_ERROR_JOB_FAILED, "Start job for unit %s failed with '%s'", unit, result);
+-                r = session_send_create_reply(s, &e);
++                sd_bus_error_setf(&e, BUS_ERROR_JOB_FAILED, "Start job for unit '%s' failed with '%s'", unit, result);
++                return session_send_create_reply(s, &e);
+         }
+ 
+-        return r;
++        return session_send_create_reply(s, NULL);
+ }
+ 
+ int match_job_removed(sd_bus_message *message, void *userdata, sd_bus_error *error) {
+@@ -3160,30 +3156,29 @@ int match_job_removed(sd_bus_message *message, void *userdata, sd_bus_error *err
+         }
+ 
+         session = hashmap_get(m->session_units, unit);
+-        if (session && streq_ptr(path, session->scope_job)) {
+-                session->scope_job = mfree(session->scope_job);
+-                session_jobs_reply(session, unit, result);
++        if (session) {
++                if (streq_ptr(path, session->scope_job)) {
++                        session->scope_job = mfree(session->scope_job);
++                        (void) session_jobs_reply(session, unit, result);
++
++                        session_save(session);
++                        user_save(session->user);
++                }
+ 
+-                session_save(session);
+-                user_save(session->user);
+                 session_add_to_gc_queue(session);
+         }
+ 
+         user = hashmap_get(m->user_units, unit);
+-        if (user &&
+-            (streq_ptr(path, user->service_job) ||
+-             streq_ptr(path, user->slice_job))) {
+-
+-                if (streq_ptr(path, user->service_job))
++        if (user) {
++                if (streq_ptr(path, user->service_job)) {
+                         user->service_job = mfree(user->service_job);
+ 
+-                if (streq_ptr(path, user->slice_job))
+-                        user->slice_job = mfree(user->slice_job);
++                        LIST_FOREACH(sessions_by_user, session, user->sessions)
++                                (void) session_jobs_reply(session, unit, NULL /* don't propagate user service failures to the client */);
+ 
+-                LIST_FOREACH(sessions_by_user, session, user->sessions)
+-                        session_jobs_reply(session, unit, result);
++                        user_save(user);
++                }
+ 
+-                user_save(user);
+                 user_add_to_gc_queue(user);
+         }
+ 
+@@ -3315,13 +3310,14 @@ int manager_start_scope(
+                 pid_t pid,
+                 const char *slice,
+                 const char *description,
+-                const char *after,
+-                const char *after2,
++                char **wants,
++                char **after,
+                 sd_bus_message *more_properties,
+                 sd_bus_error *error,
+                 char **job) {
+ 
+         _cleanup_(sd_bus_message_unrefp) sd_bus_message *m = NULL, *reply = NULL;
++        char **i;
+         int r;
+ 
+         assert(manager);
+@@ -3359,14 +3355,14 @@ int manager_start_scope(
+                         return r;
+         }
+ 
+-        if (!isempty(after)) {
+-                r = sd_bus_message_append(m, "(sv)", "After", "as", 1, after);
++        STRV_FOREACH(i, wants) {
++                r = sd_bus_message_append(m, "(sv)", "Wants", "as", 1, *i);
+                 if (r < 0)
+                         return r;
+         }
+ 
+-        if (!isempty(after2)) {
+-                r = sd_bus_message_append(m, "(sv)", "After", "as", 1, after2);
++        STRV_FOREACH(i, after) {
++                r = sd_bus_message_append(m, "(sv)", "After", "as", 1, *i);
+                 if (r < 0)
+                         return r;
+         }
+diff --git a/src/login/logind-session.c b/src/login/logind-session.c
+index 960a24d1a7..d56b48a732 100644
+--- a/src/login/logind-session.c
++++ b/src/login/logind-session.c
+@@ -27,6 +27,7 @@
+ #include "path-util.h"
+ #include "process-util.h"
+ #include "string-table.h"
++#include "strv.h"
+ #include "terminal-util.h"
+ #include "user-util.h"
+ #include "util.h"
+@@ -560,17 +561,18 @@ int session_activate(Session *s) {
+         return 0;
+ }
+ 
+-static int session_start_scope(Session *s, sd_bus_message *properties) {
++static int session_start_scope(Session *s, sd_bus_message *properties, sd_bus_error *error) {
+         int r;
+ 
+         assert(s);
+         assert(s->user);
+ 
+         if (!s->scope) {
+-                _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
+-                char *scope, *job = NULL;
++                _cleanup_free_ char *scope = NULL;
+                 const char *description;
+ 
++                s->scope_job = mfree(s->scope_job);
++
+                 scope = strjoin("session-", s->id, ".scope");
+                 if (!scope)
+                         return log_oom();
+@@ -583,21 +585,15 @@ static int session_start_scope(Session *s, sd_bus_message *properties) {
+                                 s->leader,
+                                 s->user->slice,
+                                 description,
+-                                "systemd-logind.service",
+-                                "systemd-user-sessions.service",
++                                STRV_MAKE(s->user->runtime_dir_service, s->user->service), /* These two have StopWhenUnneeded= set, hence add a dep towards them */
++                                STRV_MAKE("systemd-logind.service", "systemd-user-sessions.service", s->user->runtime_dir_service, s->user->service), /* And order us after some more */
+                                 properties,
+-                                &error,
+-                                &job);
+-                if (r < 0) {
+-                        log_error_errno(r, "Failed to start session scope %s: %s", scope, bus_error_message(&error, r));
+-                        free(scope);
+-                        return r;
+-                } else {
+-                        s->scope = scope;
++                                error,
++                                &s->scope_job);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to start session scope %s: %s", scope, bus_error_message(error, r));
+ 
+-                        free(s->scope_job);
+-                        s->scope_job = job;
+-                }
++                s->scope = TAKE_PTR(scope);
+         }
+ 
+         if (s->scope)
+@@ -606,7 +602,7 @@ static int session_start_scope(Session *s, sd_bus_message *properties) {
+         return 0;
+ }
+ 
+-int session_start(Session *s, sd_bus_message *properties) {
++int session_start(Session *s, sd_bus_message *properties, sd_bus_error *error) {
+         int r;
+ 
+         assert(s);
+@@ -614,6 +610,9 @@ int session_start(Session *s, sd_bus_message *properties) {
+         if (!s->user)
+                 return -ESTALE;
+ 
++        if (s->stopping)
++                return -EINVAL;
++
+         if (s->started)
+                 return 0;
+ 
+@@ -621,8 +620,7 @@ int session_start(Session *s, sd_bus_message *properties) {
+         if (r < 0)
+                 return r;
+ 
+-        /* Create cgroup */
+-        r = session_start_scope(s, properties);
++        r = session_start_scope(s, properties, error);
+         if (r < 0)
+                 return r;
+ 
+@@ -673,21 +671,24 @@ static int session_stop_scope(Session *s, bool force) {
+          * that is left in the scope is "left-over". Informing systemd about this has the benefit that it will log
+          * when killing any processes left after this point. */
+         r = manager_abandon_scope(s->manager, s->scope, &error);
+-        if (r < 0)
++        if (r < 0) {
+                 log_warning_errno(r, "Failed to abandon session scope, ignoring: %s", bus_error_message(&error, r));
++                sd_bus_error_free(&error);
++        }
++
++        s->scope_job = mfree(s->scope_job);
+ 
+         /* Optionally, let's kill everything that's left now. */
+         if (force || manager_shall_kill(s->manager, s->user->name)) {
+-                char *job = NULL;
+ 
+-                r = manager_stop_unit(s->manager, s->scope, &error, &job);
+-                if (r < 0)
+-                        return log_error_errno(r, "Failed to stop session scope: %s", bus_error_message(&error, r));
++                r = manager_stop_unit(s->manager, s->scope, &error, &s->scope_job);
++                if (r < 0) {
++                        if (force)
++                                return log_error_errno(r, "Failed to stop session scope: %s", bus_error_message(&error, r));
+ 
+-                free(s->scope_job);
+-                s->scope_job = job;
++                        log_warning_errno(r, "Failed to stop session scope, ignoring: %s", bus_error_message(&error, r));
++                }
+         } else {
+-                s->scope_job = mfree(s->scope_job);
+ 
+                 /* With no killing, this session is allowed to persist in "closing" state indefinitely.
+                  * Therefore session stop and session removal may be two distinct events.
+@@ -707,8 +708,17 @@ int session_stop(Session *s, bool force) {
+ 
+         assert(s);
+ 
++        /* This is called whenever we begin with tearing down a session record. It's called in four cases: explicit API
++         * request via the bus (either directly for the session object or for the seat or user object this session
++         * belongs to; 'force' is true), or due to automatic GC (i.e. scope vanished; 'force' is false), or because the
++         * session FIFO saw an EOF ('force' is false), or because the release timer hit ('force' is false). */
++
+         if (!s->user)
+                 return -ESTALE;
++        if (!s->started)
++                return 0;
++        if (s->stopping)
++                return 0;
+ 
+         s->timer_event_source = sd_event_source_unref(s->timer_event_source);
+ 
+diff --git a/src/login/logind-session.h b/src/login/logind-session.h
+index 572f2545c1..7d17d9a25f 100644
+--- a/src/login/logind-session.h
++++ b/src/login/logind-session.h
+@@ -124,7 +124,7 @@ void session_set_idle_hint(Session *s, bool b);
+ int session_get_locked_hint(Session *s);
+ void session_set_locked_hint(Session *s, bool b);
+ int session_create_fifo(Session *s);
+-int session_start(Session *s, sd_bus_message *properties);
++int session_start(Session *s, sd_bus_message *properties, sd_bus_error *error);
+ int session_stop(Session *s, bool force);
+ int session_finalize(Session *s);
+ int session_release(Session *s);
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index 3e4c99bdbd..39fc76f4dc 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -68,6 +68,10 @@ int user_new(User **ret, Manager *m, uid_t uid, gid_t gid, const char *name) {
+         if (r < 0)
+                 return r;
+ 
++        r = unit_name_build("user-runtime-dir", lu, ".service", &u->runtime_dir_service);
++        if (r < 0)
++                return r;
++
+         r = hashmap_put(m->users, UID_TO_PTR(uid), u);
+         if (r < 0)
+                 return r;
+@@ -80,6 +84,10 @@ int user_new(User **ret, Manager *m, uid_t uid, gid_t gid, const char *name) {
+         if (r < 0)
+                 return r;
+ 
++        r = hashmap_put(m->user_units, u->runtime_dir_service, u);
++        if (r < 0)
++                return r;
++
+         *ret = TAKE_PTR(u);
+         return 0;
+ }
+@@ -97,15 +105,18 @@ User *user_free(User *u) {
+         if (u->service)
+                 hashmap_remove_value(u->manager->user_units, u->service, u);
+ 
++        if (u->runtime_dir_service)
++                hashmap_remove_value(u->manager->user_units, u->runtime_dir_service, u);
++
+         if (u->slice)
+                 hashmap_remove_value(u->manager->user_units, u->slice, u);
+ 
+         hashmap_remove_value(u->manager->users, UID_TO_PTR(u->uid), u);
+ 
+-        u->slice_job = mfree(u->slice_job);
+         u->service_job = mfree(u->service_job);
+ 
+         u->service = mfree(u->service);
++        u->runtime_dir_service = mfree(u->runtime_dir_service);
+         u->slice = mfree(u->slice);
+         u->runtime_path = mfree(u->runtime_path);
+         u->state_file = mfree(u->state_file);
+@@ -149,9 +160,6 @@ static int user_save_internal(User *u) {
+         if (u->service_job)
+                 fprintf(f, "SERVICE_JOB=%s\n", u->service_job);
+ 
+-        if (u->slice_job)
+-                fprintf(f, "SLICE_JOB=%s\n", u->slice_job);
+-
+         if (u->display)
+                 fprintf(f, "DISPLAY=%s\n", u->display->id);
+ 
+@@ -311,66 +319,46 @@ int user_load(User *u) {
+         return 0;
+ }
+ 
+-static int user_start_service(User *u) {
++static void user_start_service(User *u) {
+         _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
+-        char *job;
+         int r;
+ 
+         assert(u);
+ 
++        /* Start the service containing the "systemd --user" instance (user@.service). Note that we don't explicitly
++         * start the per-user slice or the systemd-runtime-dir@.service instance, as those are pulled in both by
++         * user@.service and the session scopes as dependencies. */
++
+         u->service_job = mfree(u->service_job);
+ 
+-        r = manager_start_unit(
+-                        u->manager,
+-                        u->service,
+-                        &error,
+-                        &job);
++        r = manager_start_unit(u->manager, u->service, &error, &u->service_job);
+         if (r < 0)
+                 /* we don't fail due to this, let's try to continue */
+                 log_full_errno(sd_bus_error_has_name(&error, BUS_ERROR_UNIT_MASKED) ? LOG_DEBUG : LOG_WARNING, r,
+                                "Failed to start user service '%s', ignoring: %s", u->service, bus_error_message(&error, r));
+-        else
+-                u->service_job = job;
+-
+-        return 0;
+ }
+ 
+ int user_start(User *u) {
+-        int r;
+-
+         assert(u);
+ 
+         if (u->started && !u->stopping)
+                 return 0;
+ 
+-        /*
+-         * If u->stopping is set, the user is marked for removal and the slice
+-         * and service stop-jobs are queued. We have to clear that flag before
+-         * queing the start-jobs again. If they succeed, the user object can be
+-         * re-used just fine (pid1 takes care of job-ordering and proper
+-         * restart), but if they fail, we want to force another user_stop() so
+-         * possibly pending units are stopped.
+-         * Note that we don't clear u->started, as we have no clue what state
+-         * the user is in on failure here. Hence, we pretend the user is
+-         * running so it will be properly taken down by GC. However, we clearly
+-         * return an error from user_start() in that case, so no further
+-         * reference to the user is taken.
+-         */
++        /* If u->stopping is set, the user is marked for removal and service stop-jobs are queued. We have to clear
++         * that flag before queing the start-jobs again. If they succeed, the user object can be re-used just fine
++         * (pid1 takes care of job-ordering and proper restart), but if they fail, we want to force another user_stop()
++         * so possibly pending units are stopped. */
+         u->stopping = false;
+ 
+         if (!u->started)
+                 log_debug("Starting services for new user %s.", u->name);
+ 
+-        /* Save the user data so far, because pam_systemd will read the
+-         * XDG_RUNTIME_DIR out of it while starting up systemd --user.
+-         * We need to do user_save_internal() because we have not
+-         * "officially" started yet. */
++        /* Save the user data so far, because pam_systemd will read the XDG_RUNTIME_DIR out of it while starting up
++         * systemd --user.  We need to do user_save_internal() because we have not "officially" started yet. */
+         user_save_internal(u);
+ 
+-        /* Spawn user systemd */
+-        r = user_start_service(u);
+-        if (r < 0)
+-                return r;
++        /* Start user@UID.service */
++        user_start_service(u);
+ 
+         if (!u->started) {
+                 if (!dual_timestamp_is_set(&u->timestamp))
+@@ -385,68 +373,50 @@ int user_start(User *u) {
+         return 0;
+ }
+ 
+-static int user_stop_slice(User *u) {
++static void user_stop_service(User *u) {
+         _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
+-        char *job;
+         int r;
+ 
+         assert(u);
++        assert(u->service);
+ 
+-        r = manager_stop_unit(u->manager, u->slice, &error, &job);
+-        if (r < 0) {
+-                log_error("Failed to stop user slice: %s", bus_error_message(&error, r));
+-                return r;
+-        }
++        /* The reverse of user_start_service(). Note that we only stop user@UID.service here, and let StopWhenUnneeded=
++         * deal with the slice and the user-runtime-dir@.service instance. */
+ 
+-        free(u->slice_job);
+-        u->slice_job = job;
+-
+-        return r;
+-}
+-
+-static int user_stop_service(User *u) {
+-        _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
+-        char *job;
+-        int r;
+-
+-        assert(u);
+-
+-        r = manager_stop_unit(u->manager, u->service, &error, &job);
+-        if (r < 0) {
+-                log_error("Failed to stop user service: %s", bus_error_message(&error, r));
+-                return r;
+-        }
++        u->service_job = mfree(u->service_job);
+ 
+-        free_and_replace(u->service_job, job);
+-        return r;
++        r = manager_stop_unit(u->manager, u->service, &error, &u->service_job);
++        if (r < 0)
++                log_warning_errno(r, "Failed to stop user service '%s', ignoring: %s", u->service, bus_error_message(&error, r));
+ }
+ 
+ int user_stop(User *u, bool force) {
+         Session *s;
+-        int r = 0, k;
++        int r = 0;
+         assert(u);
+ 
+-        /* Stop jobs have already been queued */
+-        if (u->stopping) {
++        /* This is called whenever we begin with tearing down a user record. It's called in two cases: explicit API
++         * request to do so via the bus (in which case 'force' is true) and automatically due to GC, if there's no
++         * session left pinning it (in which case 'force' is false). Note that this just initiates tearing down of the
++         * user, the User object will remain in memory until user_finalize() is called, see below. */
++
++        if (!u->started)
++                return 0;
++
++        if (u->stopping) { /* Stop jobs have already been queued */
+                 user_save(u);
+-                return r;
++                return 0;
+         }
+ 
+         LIST_FOREACH(sessions_by_user, s, u->sessions) {
++                int k;
++
+                 k = session_stop(s, force);
+                 if (k < 0)
+                         r = k;
+         }
+ 
+-        /* Kill systemd */
+-        k = user_stop_service(u);
+-        if (k < 0)
+-                r = k;
+-
+-        /* Kill cgroup */
+-        k = user_stop_slice(u);
+-        if (k < 0)
+-                r = k;
++        user_stop_service(u);
+ 
+         u->stopping = true;
+ 
+@@ -461,6 +431,9 @@ int user_finalize(User *u) {
+ 
+         assert(u);
+ 
++        /* Called when the user is really ready to be freed, i.e. when all unit stop jobs and suchlike for it are
++         * done. This is called as a result of an earlier user_done() when all jobs are completed. */
++
+         if (u->started)
+                 log_debug("User %s logged out.", u->name);
+ 
+@@ -554,9 +527,6 @@ bool user_may_gc(User *u, bool drop_not_started) {
+         if (user_check_linger_file(u) > 0)
+                 return false;
+ 
+-        if (u->slice_job && manager_job_is_active(u->manager, u->slice_job))
+-                return false;
+-
+         if (u->service_job && manager_job_is_active(u->manager, u->service_job))
+                 return false;
+ 
+@@ -581,7 +551,7 @@ UserState user_get_state(User *u) {
+         if (u->stopping)
+                 return USER_CLOSING;
+ 
+-        if (!u->started || u->slice_job || u->service_job)
++        if (!u->started || u->service_job)
+                 return USER_OPENING;
+ 
+         if (u->sessions) {
+diff --git a/src/login/logind-user.h b/src/login/logind-user.h
+index 03e020b870..5e1f7b813a 100644
+--- a/src/login/logind-user.h
++++ b/src/login/logind-user.h
+@@ -25,11 +25,12 @@ struct User {
+         char *name;
+         char *state_file;
+         char *runtime_path;
+-        char *slice;
+-        char *service;
++
++        char *slice;                     /* user-UID.slice */
++        char *service;                   /* user@UID.service */
++        char *runtime_dir_service;       /* user-runtime-dir@UID.service */
+ 
+         char *service_job;
+-        char *slice_job;
+ 
+         Session *display;
+ 
+diff --git a/src/login/logind.c b/src/login/logind.c
+index 1b366cd55f..6c208c8e89 100644
+--- a/src/login/logind.c
++++ b/src/login/logind.c
+@@ -1158,7 +1158,7 @@ static int manager_startup(Manager *m) {
+                 user_start(user);
+ 
+         HASHMAP_FOREACH(session, m->sessions, i)
+-                session_start(session, NULL);
++                (void) session_start(session, NULL, NULL);
+ 
+         HASHMAP_FOREACH(inhibitor, m->inhibitors, i)
+                 inhibitor_start(inhibitor);
+diff --git a/src/login/logind.h b/src/login/logind.h
+index a6ebc9e152..ae4d74076b 100644
+--- a/src/login/logind.h
++++ b/src/login/logind.h
+@@ -161,7 +161,7 @@ int bus_manager_shutdown_or_sleep_now_or_later(Manager *m, const char *unit_name
+ 
+ int manager_send_changed(Manager *manager, const char *property, ...) _sentinel_;
+ 
+-int manager_start_scope(Manager *manager, const char *scope, pid_t pid, const char *slice, const char *description, const char *after, const char *after2, sd_bus_message *more_properties, sd_bus_error *error, char **job);
++int manager_start_scope(Manager *manager, const char *scope, pid_t pid, const char *slice, const char *description, char **wants, char **after, sd_bus_message *more_properties, sd_bus_error *error, char **job);
+ int manager_start_unit(Manager *manager, const char *unit, sd_bus_error *error, char **job);
+ int manager_stop_unit(Manager *manager, const char *unit, sd_bus_error *error, char **job);
+ int manager_abandon_scope(Manager *manager, const char *scope, sd_bus_error *error);

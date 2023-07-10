@@ -1,0 +1,69 @@
+From cd8518b7f4ebfda9955bf0b649cf759c45e729f1 Mon Sep 17 00:00:00 2001
+From: Jan Macku <jamacku@redhat.com>
+Date: Mon, 6 Jun 2022 15:40:20 +0200
+Subject: [PATCH] ci(Mergify): configuration update
+
+Add rules for needs-ci label management
+
+RHEL-only
+
+Related: #2087152
+---
+ .mergify.yml | 48 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+ create mode 100644 .mergify.yml
+
+diff --git a/.mergify.yml b/.mergify.yml
+new file mode 100644
+index 0000000000..6fa400effd
+--- /dev/null
++++ b/.mergify.yml
+@@ -0,0 +1,48 @@
++# doc: https://docs.mergify.com
++---
++
++pull_request_rules:
++  - name: Add `needs-ci` label on CI fail
++    conditions:
++      - or:
++        # Unit tests
++        - -check-success=build (stream8, GCC)
++        - -check-success=build (stream8, GCC_ASAN)
++        # CentOS Stream CI
++        - -check-success=CentOS CI (CentOS Stream 8)
++        # LGTM
++        - and:
++          - "-check-success=LGTM analysis: JavaScript"
++          - "-check-neutral=LGTM analysis: JavaScript"
++        - and:
++          - "-check-success=LGTM analysis: Python"
++          - "-check-neutral=LGTM analysis: Python"
++        - and:    
++          - "-check-success=LGTM analysis: C/C++"
++          - "-check-neutral=LGTM analysis: C/C++"
++    actions:
++      label:
++        add:
++          - needs-ci
++
++  - name: Remove `needs-ci` label on CI success
++    conditions:
++      # Unit tests
++      - check-success=build (stream8, GCC)
++      - check-success=build (stream8, GCC_ASAN)
++      # CentOS Stream CI
++      - check-success=CentOS CI (CentOS Stream 8)
++      # LGTM
++      - or:
++        - "check-success=LGTM analysis: JavaScript"
++        - "check-neutral=LGTM analysis: JavaScript"
++      - or:
++        - "check-success=LGTM analysis: Python"
++        - "check-neutral=LGTM analysis: Python"
++      - or:    
++        - "check-success=LGTM analysis: C/C++"
++        - "check-neutral=LGTM analysis: C/C++"
++    actions:
++      label:
++        remove:
++          - needs-ci

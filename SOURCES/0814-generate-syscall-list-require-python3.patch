@@ -1,0 +1,24 @@
+From da722bc383c359b77fab671a0e7872fe4c0232ce Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Sat, 22 Aug 2020 16:07:05 +0200
+Subject: [PATCH] generate-syscall-list: require python3
+
+Python3.4 works, but 2.7 returns a tuple from os.uname().
+
+(cherry picked from commit 8694114b809f92f6a882134f3635aa42bfb41e11)
+
+Related: #2040247
+---
+ src/shared/generate-syscall-list.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/shared/generate-syscall-list.py b/src/shared/generate-syscall-list.py
+index 13a6ae9241..0b90d2d276 100755
+--- a/src/shared/generate-syscall-list.py
++++ b/src/shared/generate-syscall-list.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ import sys
+ 
+ for line in open(sys.argv[1]):

@@ -1,0 +1,32 @@
+From f025def77efc6bb1473b719e905fa70ed20b08d3 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Wed, 8 Sep 2021 15:42:11 +0200
+Subject: [PATCH] sd-event: take ref on event loop object before dispatching
+ event sources
+
+Idea is that all public APIs should take reference on objects that get
+exposed to user-provided callbacks. We take the reference as a
+protection from callbacks dropping it. We used to do this also here in
+sd_event_loop(). However, in cleanup portion of f814c871e6 this was
+accidentally dropped.
+
+(cherry picked from commit 9f6ef467818f902fe5369c8e37a39a3901bdcf4f)
+
+Related: #1970945
+---
+ src/libsystemd/sd-event/sd-event.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/libsystemd/sd-event/sd-event.c b/src/libsystemd/sd-event/sd-event.c
+index f78da00c3a..47cf93b3f4 100644
+--- a/src/libsystemd/sd-event/sd-event.c
++++ b/src/libsystemd/sd-event/sd-event.c
+@@ -3838,7 +3838,7 @@ _public_ int sd_event_loop(sd_event *e) {
+         assert_return(!event_pid_changed(e), -ECHILD);
+         assert_return(e->state == SD_EVENT_INITIAL, -EBUSY);
+ 
+-        _unused_ _cleanup_(sd_event_unrefp) sd_event *ref = NULL;
++        _unused_ _cleanup_(sd_event_unrefp) sd_event *ref = sd_event_ref(e);
+ 
+         while (e->state != SD_EVENT_FINISHED) {
+                 r = sd_event_run(e, (uint64_t) -1);

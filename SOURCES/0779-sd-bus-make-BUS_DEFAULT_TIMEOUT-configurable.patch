@@ -1,0 +1,182 @@
+From 3022d49ba2276eb5634d84a89a078aa3c357b70a Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Fri, 13 Jul 2018 17:38:47 +0900
+Subject: [PATCH] sd-bus: make BUS_DEFAULT_TIMEOUT configurable
+
+This adds sd_bus_{get,set}_method_call_timeout().
+If the timeout is not set or set to 0, then the timeout value is
+parsed from $SYSTEMD_BUS_TIMEOUT= environment variable. If the
+environment variable is not set, then built-in timeout is used.
+
+(cherry picked from commit 385b2eb262a99373f09d01b7f5571dd71a14dc98)
+
+Resolves: #2039461
+---
+ doc/ENVIRONMENT.md                   |  5 ++++
+ src/libsystemd/libsystemd.sym        |  7 ++++-
+ src/libsystemd/sd-bus/bus-internal.h |  9 ++++---
+ src/libsystemd/sd-bus/bus-message.c  |  7 +++--
+ src/libsystemd/sd-bus/sd-bus.c       | 40 ++++++++++++++++++++++++++--
+ src/systemd/sd-bus.h                 |  3 +++
+ 6 files changed, 62 insertions(+), 9 deletions(-)
+
+diff --git a/doc/ENVIRONMENT.md b/doc/ENVIRONMENT.md
+index 8d7ce6ae2c..d1a79eaa4f 100644
+--- a/doc/ENVIRONMENT.md
++++ b/doc/ENVIRONMENT.md
+@@ -50,6 +50,11 @@ All tools:
+   this only controls use of Unicode emoji glyphs, and has no effect on other
+   Unicode glyphs.
+ 
++* `$SYSTEMD_BUS_TIMEOUT=SECS` — specifies the maximum time to wait for method call
++  completion. If no time unit is specified, assumes seconds. The usual other units
++  are understood, too (us, ms, s, min, h, d, w, month, y). If it is not set or set
++  to 0, then the built-in default is used.
++
+ systemctl:
+ 
+ * `$SYSTEMCTL_FORCE_BUS=1` — if set, do not connect to PID1's private D-Bus
+diff --git a/src/libsystemd/libsystemd.sym b/src/libsystemd/libsystemd.sym
+index f4a1426248..3b55fc6473 100644
+--- a/src/libsystemd/libsystemd.sym
++++ b/src/libsystemd/libsystemd.sym
+@@ -573,12 +573,17 @@ global:
+         sd_event_source_disable_unref;
+ } LIBSYSTEMD_238;
+ 
++LIBSYSTEMD_240 {
++        sd_bus_set_method_call_timeout;
++        sd_bus_get_method_call_timeout;
++} LIBSYSTEMD_239;
++
+ LIBSYSTEMD_248 {
+ global:
+         sd_event_source_set_ratelimit;
+         sd_event_source_get_ratelimit;
+         sd_event_source_is_ratelimited;
+-} LIBSYSTEMD_239;
++} LIBSYSTEMD_240;
+ 
+ LIBSYSTEMD_250 {
+ global:
+diff --git a/src/libsystemd/sd-bus/bus-internal.h b/src/libsystemd/sd-bus/bus-internal.h
+index 06bd7862cb..88415ae678 100644
+--- a/src/libsystemd/sd-bus/bus-internal.h
++++ b/src/libsystemd/sd-bus/bus-internal.h
+@@ -319,6 +319,9 @@ struct sd_bus {
+ 
+         int *inotify_watches;
+         size_t n_inotify_watches;
++
++        /* zero means use value specified by $SYSTEMD_BUS_TIMEOUT= environment variable or built-in default */
++        usec_t method_call_timeout;
+ };
+ 
+ /* For method calls we time-out at 25s, like in the D-Bus reference implementation */
+@@ -340,8 +343,7 @@ struct sd_bus {
+ 
+ #define BUS_CONTAINER_DEPTH 128
+ 
+-/* Defined by the specification as maximum size of an array in
+- * bytes */
++/* Defined by the specification as maximum size of an array in bytes */
+ #define BUS_ARRAY_MAX_SIZE 67108864
+ 
+ #define BUS_FDS_MAX 1024
+@@ -392,8 +394,7 @@ void bus_close_io_fds(sd_bus *b);
+              _slash = streq((prefix), "/") ? NULL : strrchr((prefix), '/'))
+ 
+ /* If we are invoking callbacks of a bus object, ensure unreffing the
+- * bus from the callback doesn't destroy the object we are working
+- * on */
++ * bus from the callback doesn't destroy the object we are working on */
+ #define BUS_DONT_DESTROY(bus) \
+         _cleanup_(sd_bus_unrefp) _unused_ sd_bus *_dont_destroy_##bus = sd_bus_ref(bus)
+ 
+diff --git a/src/libsystemd/sd-bus/bus-message.c b/src/libsystemd/sd-bus/bus-message.c
+index 7fe8929f82..3ffe559b8d 100644
+--- a/src/libsystemd/sd-bus/bus-message.c
++++ b/src/libsystemd/sd-bus/bus-message.c
+@@ -5882,8 +5882,11 @@ int bus_message_remarshal(sd_bus *bus, sd_bus_message **m) {
+                 return r;
+ 
+         timeout = (*m)->timeout;
+-        if (timeout == 0 && !((*m)->header->flags & BUS_MESSAGE_NO_REPLY_EXPECTED))
+-                timeout = BUS_DEFAULT_TIMEOUT;
++        if (timeout == 0 && !((*m)->header->flags & BUS_MESSAGE_NO_REPLY_EXPECTED)) {
++                r = sd_bus_get_method_call_timeout(bus, &timeout);
++                if (r < 0)
++                        return r;
++        }
+ 
+         r = sd_bus_message_seal(n, BUS_MESSAGE_COOKIE(*m), timeout);
+         if (r < 0)
+diff --git a/src/libsystemd/sd-bus/sd-bus.c b/src/libsystemd/sd-bus/sd-bus.c
+index c65e24b2d1..803f3f50d6 100644
+--- a/src/libsystemd/sd-bus/sd-bus.c
++++ b/src/libsystemd/sd-bus/sd-bus.c
+@@ -1651,8 +1651,11 @@ static int bus_seal_message(sd_bus *b, sd_bus_message *m, usec_t timeout) {
+                 return 0;
+         }
+ 
+-        if (timeout == 0)
+-                timeout = BUS_DEFAULT_TIMEOUT;
++        if (timeout == 0) {
++                r = sd_bus_get_method_call_timeout(b, &timeout);
++                if (r < 0)
++                        return r;
++        }
+ 
+         if (!m->sender && b->patch_sender) {
+                 r = sd_bus_message_set_sender(m, b->patch_sender);
+@@ -4141,3 +4144,36 @@ _public_ int sd_bus_enqueue_for_read(sd_bus *bus, sd_bus_message *m) {
+         bus->rqueue[bus->rqueue_size++] = bus_message_ref_queued(m, bus);
+         return 0;
+ }
++
++_public_ int sd_bus_set_method_call_timeout(sd_bus *bus, uint64_t usec) {
++        assert_return(bus, -EINVAL);
++        assert_return(bus = bus_resolve(bus), -ENOPKG);
++
++        bus->method_call_timeout = usec;
++        return 0;
++}
++
++_public_ int sd_bus_get_method_call_timeout(sd_bus *bus, uint64_t *ret) {
++        const char *e;
++        usec_t usec;
++
++        assert_return(bus, -EINVAL);
++        assert_return(bus = bus_resolve(bus), -ENOPKG);
++        assert_return(ret, -EINVAL);
++
++        if (bus->method_call_timeout != 0) {
++                *ret = bus->method_call_timeout;
++                return 0;
++        }
++
++        e = secure_getenv("SYSTEMD_BUS_TIMEOUT");
++        if (e && parse_sec(e, &usec) >= 0 && usec != 0) {
++                /* Save the parsed value to avoid multiple parsing. To change the timeout value,
++                 * use sd_bus_set_method_call_timeout() instead of setenv(). */
++                *ret = bus->method_call_timeout = usec;
++                return 0;
++        }
++
++        *ret = bus->method_call_timeout = BUS_DEFAULT_TIMEOUT;
++        return 0;
++}
+diff --git a/src/systemd/sd-bus.h b/src/systemd/sd-bus.h
+index 9ba757b13d..8b6f70bd68 100644
+--- a/src/systemd/sd-bus.h
++++ b/src/systemd/sd-bus.h
+@@ -207,6 +207,9 @@ sd_event *sd_bus_get_event(sd_bus *bus);
+ int sd_bus_get_n_queued_read(sd_bus *bus, uint64_t *ret);
+ int sd_bus_get_n_queued_write(sd_bus *bus, uint64_t *ret);
+ 
++int sd_bus_set_method_call_timeout(sd_bus *bus, uint64_t usec);
++int sd_bus_get_method_call_timeout(sd_bus *bus, uint64_t *ret);
++
+ int sd_bus_add_filter(sd_bus *bus, sd_bus_slot **slot, sd_bus_message_handler_t callback, void *userdata);
+ int sd_bus_add_match(sd_bus *bus, sd_bus_slot **slot, const char *match, sd_bus_message_handler_t callback, void *userdata);
+ int sd_bus_add_match_async(sd_bus *bus, sd_bus_slot **slot, const char *match, sd_bus_message_handler_t callback, sd_bus_message_handler_t install_callback, void *userdata);

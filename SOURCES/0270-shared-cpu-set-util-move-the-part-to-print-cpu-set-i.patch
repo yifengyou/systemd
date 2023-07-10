@@ -1,0 +1,215 @@
+From 46b4d26c54a773f7da350e89562039ccc5157a8f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Sun, 19 May 2019 18:02:38 +0200
+Subject: [PATCH] shared/cpu-set-util: move the part to print cpu-set into a
+ separate function
+
+Also avoid unnecessary asprintf() when we can write to the output area
+directly.
+
+(cherry picked from commit a832893f9c4f0a0329768e90f67e2fa24bb0008e)
+
+Related: #1734787
+---
+ src/basic/cpu-set-util.c     | 21 +++++++++++++++++++++
+ src/basic/cpu-set-util.h     |  1 +
+ src/core/dbus-execute.c      | 29 +++++------------------------
+ src/test/test-cpu-set-util.c | 29 +++++++++++++++++++++++++++++
+ 4 files changed, 56 insertions(+), 24 deletions(-)
+
+diff --git a/src/basic/cpu-set-util.c b/src/basic/cpu-set-util.c
+index b1c927bcb8..8f24a2601a 100644
+--- a/src/basic/cpu-set-util.c
++++ b/src/basic/cpu-set-util.c
+@@ -5,6 +5,7 @@
+ 
+ #include <errno.h>
+ #include <stddef.h>
++#include <stdio.h>
+ #include <syslog.h>
+ 
+ #include "alloc-util.h"
+@@ -15,6 +16,26 @@
+ #include "parse-util.h"
+ #include "string-util.h"
+ 
++char* cpu_set_to_string(const cpu_set_t *set, size_t setsize) {
++        _cleanup_free_ char *str = NULL;
++        size_t allocated = 0, len = 0;
++        int i, r;
++
++        for (i = 0; (size_t) i < setsize * 8; i++) {
++                if (!CPU_ISSET_S(i, setsize, set))
++                        continue;
++
++                if (!GREEDY_REALLOC(str, allocated, len + 1 + DECIMAL_STR_MAX(int)))
++                        return NULL;
++
++                r = sprintf(str + len, len > 0 ? " %d" : "%d", i);
++                assert_se(r > 0);
++                len += r;
++        }
++
++        return TAKE_PTR(str) ?: strdup("");
++}
++
+ cpu_set_t* cpu_set_malloc(unsigned *ncpus) {
+         cpu_set_t *c;
+         unsigned n = 1024;
+diff --git a/src/basic/cpu-set-util.h b/src/basic/cpu-set-util.h
+index 88470fe15a..3c546beb55 100644
+--- a/src/basic/cpu-set-util.h
++++ b/src/basic/cpu-set-util.h
+@@ -26,6 +26,7 @@ static inline cpu_set_t* cpu_set_mfree(cpu_set_t *p) {
+ 
+ cpu_set_t* cpu_set_malloc(unsigned *ncpus);
+ 
++char* cpu_set_to_string(const cpu_set_t *set, size_t setsize);
+ int parse_cpu_set_internal(const char *rvalue, cpu_set_t **cpu_set, bool warn, const char *unit, const char *filename, unsigned line, const char *lvalue);
+ 
+ static inline int parse_cpu_set_and_warn(const char *rvalue, cpu_set_t **cpu_set, const char *unit, const char *filename, unsigned line, const char *lvalue) {
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index 5379545d57..d9f4445745 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -1565,32 +1565,13 @@ int bus_exec_context_set_transient_property(
+                                 unit_write_settingf(u, flags, name, "%s=", name);
+                         } else {
+                                 _cleanup_free_ char *str = NULL;
+-                                size_t allocated = 0, len = 0, i, ncpus;
++                                size_t ncpus;
+ 
+-                                ncpus = CPU_SIZE_TO_NUM(n);
+-
+-                                for (i = 0; i < ncpus; i++) {
+-                                        _cleanup_free_ char *p = NULL;
+-                                        size_t add;
+-
+-                                        if (!CPU_ISSET_S(i, n, (cpu_set_t*) a))
+-                                                continue;
+-
+-                                        r = asprintf(&p, "%zu", i);
+-                                        if (r < 0)
+-                                                return -ENOMEM;
+-
+-                                        add = strlen(p);
+-
+-                                        if (!GREEDY_REALLOC(str, allocated, len + add + 2))
+-                                                return -ENOMEM;
+-
+-                                        strcpy(mempcpy(str + len, p, add), " ");
+-                                        len += add + 1;
+-                                }
++                                str = cpu_set_to_string(a, n);
++                                if (!str)
++                                        return -ENOMEM;
+ 
+-                                if (len != 0)
+-                                        str[len - 1] = '\0';
++                                ncpus = CPU_SIZE_TO_NUM(n);
+ 
+                                 if (!c->cpuset || c->cpuset_ncpus < ncpus) {
+                                         cpu_set_t *cpuset;
+diff --git a/src/test/test-cpu-set-util.c b/src/test/test-cpu-set-util.c
+index c9272459b4..ff5edb2a69 100644
+--- a/src/test/test-cpu-set-util.c
++++ b/src/test/test-cpu-set-util.c
+@@ -6,6 +6,7 @@
+ 
+ static void test_parse_cpu_set(void) {
+         cpu_set_t *c = NULL;
++        _cleanup_free_ char *str = NULL;
+         int ncpus;
+         int cpu;
+ 
+@@ -15,6 +16,10 @@ static void test_parse_cpu_set(void) {
+         assert_se(CPU_ISSET_S(1, CPU_ALLOC_SIZE(ncpus), c));
+         assert_se(CPU_ISSET_S(2, CPU_ALLOC_SIZE(ncpus), c));
+         assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 2);
++
++        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
+         c = cpu_set_mfree(c);
+ 
+         /* A more interesting range */
+@@ -25,6 +30,9 @@ static void test_parse_cpu_set(void) {
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+         for (cpu = 8; cpu < 12; cpu++)
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
+         c = cpu_set_mfree(c);
+ 
+         /* Quoted strings */
+@@ -33,6 +41,9 @@ static void test_parse_cpu_set(void) {
+         assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 4);
+         for (cpu = 8; cpu < 12; cpu++)
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
+         c = cpu_set_mfree(c);
+ 
+         /* Use commas as separators */
+@@ -43,6 +54,9 @@ static void test_parse_cpu_set(void) {
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+         for (cpu = 8; cpu < 12; cpu++)
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
+         c = cpu_set_mfree(c);
+ 
+         /* Commas with spaces (and trailing comma, space) */
+@@ -51,6 +65,9 @@ static void test_parse_cpu_set(void) {
+         assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 8);
+         for (cpu = 0; cpu < 8; cpu++)
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
+         c = cpu_set_mfree(c);
+ 
+         /* Ranges */
+@@ -61,6 +78,9 @@ static void test_parse_cpu_set(void) {
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+         for (cpu = 8; cpu < 12; cpu++)
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
+         c = cpu_set_mfree(c);
+ 
+         /* Ranges with trailing comma, space */
+@@ -71,6 +91,9 @@ static void test_parse_cpu_set(void) {
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+         for (cpu = 8; cpu < 12; cpu++)
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
+         c = cpu_set_mfree(c);
+ 
+         /* Negative range (returns empty cpu_set) */
+@@ -85,6 +108,9 @@ static void test_parse_cpu_set(void) {
+         assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 12);
+         for (cpu = 0; cpu < 12; cpu++)
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
+         c = cpu_set_mfree(c);
+ 
+         /* Mix ranges and individual CPUs */
+@@ -95,6 +121,9 @@ static void test_parse_cpu_set(void) {
+         assert_se(CPU_ISSET_S(1, CPU_ALLOC_SIZE(ncpus), c));
+         for (cpu = 4; cpu < 12; cpu++)
+                 assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
+         c = cpu_set_mfree(c);
+ 
+         /* Garbage */

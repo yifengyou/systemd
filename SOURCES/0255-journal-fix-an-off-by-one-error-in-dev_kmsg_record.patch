@@ -1,0 +1,25 @@
+From f00d221d5dc92a530e260db5f44fa57653f03e8b Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Fri, 16 Nov 2018 07:11:06 +0100
+Subject: [PATCH] journal: fix an off-by-one error in dev_kmsg_record
+
+(cherry picked from commit 080d112caa0dc948555a69a008c1caf4d5d41ed6)
+
+Resolves: #1764560
+---
+ src/journal/journald-kmsg.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/journal/journald-kmsg.c b/src/journal/journald-kmsg.c
+index 0cdf1c4794..726c006ce1 100644
+--- a/src/journal/journald-kmsg.c
++++ b/src/journal/journald-kmsg.c
+@@ -239,7 +239,7 @@ void dev_kmsg_record(Server *s, char *p, size_t l) {
+                         ll = udev_device_get_devlinks_list_entry(ud);
+                         udev_list_entry_foreach(ll, ll) {
+ 
+-                                if (j > N_IOVEC_UDEV_FIELDS)
++                                if (j >= N_IOVEC_UDEV_FIELDS)
+                                         break;
+ 
+                                 g = udev_list_entry_get_name(ll);

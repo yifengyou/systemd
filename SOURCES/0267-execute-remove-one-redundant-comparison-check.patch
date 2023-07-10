@@ -1,0 +1,32 @@
+From 81ca39b7b38ef1d44cc146efe75bef412e7c4c97 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 14 Mar 2019 17:01:46 +0100
+Subject: [PATCH] execute: remove one redundant comparison check
+
+(cherry picked from commit d484580ca6f0e79abe6f3f5c677323a22d9e22d7)
+
+Related: #1778384
+---
+ src/core/execute.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/core/execute.c b/src/core/execute.c
+index 9ddba00421..46aa733937 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -2097,11 +2097,12 @@ static int setup_exec_directory(
+                         }
+                 } else {
+                         r = mkdir_label(p, context->directories[type].mode);
+-                        if (r < 0 && r != -EEXIST)
+-                                goto fail;
+-                        if (r == -EEXIST) {
++                        if (r < 0) {
+                                 struct stat st;
+ 
++                                if (r != -EEXIST)
++                                        goto fail;
++
+                                 if (stat(p, &st) < 0) {
+                                         r = -errno;
+                                         goto fail;

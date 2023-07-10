@@ -1,0 +1,31 @@
+From 8df2d39a562416e1218e3ff191f3f3af1f9d4844 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Tue, 13 Aug 2019 00:14:54 +0200
+Subject: [PATCH] test: store coredumps in journal
+
+To make debugging much easier, especially for crashes in tests under
+QEMU, let's store the entire coredump bundle in the systemd journal,
+which is usually kept around by various CIs. Right now, we usually end
+up with a journal, but without the coredump itself, which is pretty
+useless.
+
+(cherry picked from commit 215bffe1b8d7cb72fe9f72ed53682d52d5c2a9c5)
+
+Related: #1823767
+---
+ test/test-functions | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/test/test-functions b/test/test-functions
+index 3f1c327f3c..7c4230b078 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -420,6 +420,8 @@ install_systemd() {
+ 
+     # enable debug logging in PID1
+     echo LogLevel=debug >> $initdir/etc/systemd/system.conf
++    # store coredumps in journal
++    echo Storage=journal >> $initdir/etc/systemd/coredump.conf
+ }
+ 
+ get_ldpath() {

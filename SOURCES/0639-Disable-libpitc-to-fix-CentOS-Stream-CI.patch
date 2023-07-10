@@ -1,0 +1,26 @@
+From b029865ef6d8b23ecdbfda4e277a3f75cb59ee94 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Mon, 25 Oct 2021 15:27:27 +0200
+Subject: [PATCH] Disable libpitc to fix CentOS Stream CI
+
+We have disabled it in our spec starting with 8.5.0, so let's follow
+suit here.
+
+Related: #2017033
+---
+ .github/workflows/unit_tests.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/.github/workflows/unit_tests.sh b/.github/workflows/unit_tests.sh
+index ad4584ec1d..def38bffe2 100755
+--- a/.github/workflows/unit_tests.sh
++++ b/.github/workflows/unit_tests.sh
+@@ -50,7 +50,7 @@ CONFIGURE_OPTS=(
+     -Dgnutls=true
+     -Dmicrohttpd=true
+     -Dlibidn2=true
+-    -Dlibiptc=true
++    -Dlibiptc=false
+     -Dlibcurl=true
+     -Defi=true
+     -Dtpm=true

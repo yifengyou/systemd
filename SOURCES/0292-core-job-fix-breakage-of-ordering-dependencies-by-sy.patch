@@ -1,0 +1,136 @@
+From cb084637ba1c8558f1538ce300c5520a6764dc76 Mon Sep 17 00:00:00 2001
+From: HATAYAMA Daisuke <d.hatayama@jp.fujitsu.com>
+Date: Mon, 28 Oct 2019 19:35:24 +0900
+Subject: [PATCH] core, job: fix breakage of ordering dependencies by systemctl
+ reload command
+
+Currently, systemctl reload command breaks ordering dependencies if it's
+executed when its target service unit is in activating state.
+
+For example, prepare A.service, B.service and C.target as follows:
+
+    # systemctl cat A.service B.service C.target
+    # /etc/systemd/system/A.service
+    [Unit]
+    Description=A
+
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/bin/echo A1
+    ExecStart=/usr/bin/sleep 60
+    ExecStart=/usr/bin/echo A2
+    ExecReload=/usr/bin/echo A reloaded
+    RemainAfterExit=yes
+
+    # /etc/systemd/system/B.service
+    [Unit]
+    Description=B
+    After=A.service
+
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/bin/echo B
+    RemainAfterExit=yes
+
+    # /etc/systemd/system/C.target
+    [Unit]
+    Description=C
+    Wants=A.service B.service
+
+Start them.
+
+    # systemctl daemon-reload
+    # systemctl start C.target
+
+Then, we have:
+
+    # LANG=C journalctl --no-pager -u A.service -u B.service -u C.target -b
+    -- Logs begin at Mon 2019-09-09 00:25:06 EDT, end at Thu 2019-10-24 22:28:47 EDT. --
+    Oct 24 22:27:47 localhost.localdomain systemd[1]: Starting A...
+    Oct 24 22:27:47 localhost.localdomain systemd[1]: A.service: Child 967 belongs to A.service.
+    Oct 24 22:27:47 localhost.localdomain systemd[1]: A.service: Main process exited, code=exited, status=0/SUCCESS
+    Oct 24 22:27:47 localhost.localdomain systemd[1]: A.service: Running next main command for state start.
+    Oct 24 22:27:47 localhost.localdomain systemd[1]: A.service: Passing 0 fds to service
+    Oct 24 22:27:47 localhost.localdomain systemd[1]: A.service: About to execute: /usr/bin/sleep 60
+    Oct 24 22:27:47 localhost.localdomain systemd[1]: A.service: Forked /usr/bin/sleep as 968
+    Oct 24 22:27:47 localhost.localdomain systemd[968]: A.service: Executing: /usr/bin/sleep 60
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: A.service: Trying to enqueue job A.service/reload/replace
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: A.service: Merged into running job, re-running: A.service/reload as 1288
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: A.service: Enqueued job A.service/reload as 1288
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: A.service: Unit cannot be reloaded because it is inactive.
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: A.service: Job 1288 A.service/reload finished, result=invalid
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: B.service: Passing 0 fds to service
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: B.service: About to execute: /usr/bin/echo B
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: B.service: Forked /usr/bin/echo as 970
+    Oct 24 22:27:52 localhost.localdomain systemd[970]: B.service: Executing: /usr/bin/echo B
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: B.service: Failed to send unit change signal for B.service: Connection reset by peer
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: B.service: Changed dead -> start
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: Starting B...
+    Oct 24 22:27:52 localhost.localdomain echo[970]: B
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: B.service: Child 970 belongs to B.service.
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: B.service: Main process exited, code=exited, status=0/SUCCESS
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: B.service: Changed start -> exited
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: B.service: Job 1371 B.service/start finished, result=done
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: Started B.
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: C.target: Job 1287 C.target/start finished, result=done
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: Reached target C.
+    Oct 24 22:27:52 localhost.localdomain systemd[1]: C.target: Failed to send unit change signal for C.target: Connection reset by peer
+    Oct 24 22:28:47 localhost.localdomain systemd[1]: A.service: Child 968 belongs to A.service.
+    Oct 24 22:28:47 localhost.localdomain systemd[1]: A.service: Main process exited, code=exited, status=0/SUCCESS
+    Oct 24 22:28:47 localhost.localdomain systemd[1]: A.service: Running next main command for state start.
+    Oct 24 22:28:47 localhost.localdomain systemd[1]: A.service: Passing 0 fds to service
+    Oct 24 22:28:47 localhost.localdomain systemd[1]: A.service: About to execute: /usr/bin/echo A2
+    Oct 24 22:28:47 localhost.localdomain systemd[1]: A.service: Forked /usr/bin/echo as 972
+    Oct 24 22:28:47 localhost.localdomain systemd[972]: A.service: Executing: /usr/bin/echo A2
+    Oct 24 22:28:47 localhost.localdomain echo[972]: A2
+    Oct 24 22:28:47 localhost.localdomain systemd[1]: A.service: Child 972 belongs to A.service.
+    Oct 24 22:28:47 localhost.localdomain systemd[1]: A.service: Main process exited, code=exited, status=0/SUCCESS
+    Oct 24 22:28:47 localhost.localdomain systemd[1]: A.service: Changed start -> exited
+
+The issue occurs not only in reload command, i.e.:
+
+  - reload
+  - try-restart
+  - reload-or-restart
+  - reload-or-try-restart commands
+
+The cause of this issue is that job_type_collapse() doesn't take care of the
+activating state.
+
+Fixes: #10464
+(cherry picked from commit d1559793df555212271e490a4a72f55826caf5b4)
+
+Resolves: #1766417
+---
+ src/core/job.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/core/job.c b/src/core/job.c
+index 8552ffb704..769ed6d603 100644
+--- a/src/core/job.c
++++ b/src/core/job.c
+@@ -403,21 +403,21 @@ JobType job_type_collapse(JobType t, Unit *u) {
+ 
+         case JOB_TRY_RESTART:
+                 s = unit_active_state(u);
+-                if (UNIT_IS_INACTIVE_OR_DEACTIVATING(s))
++                if (!UNIT_IS_ACTIVE_OR_RELOADING(s))
+                         return JOB_NOP;
+ 
+                 return JOB_RESTART;
+ 
+         case JOB_TRY_RELOAD:
+                 s = unit_active_state(u);
+-                if (UNIT_IS_INACTIVE_OR_DEACTIVATING(s))
++                if (!UNIT_IS_ACTIVE_OR_RELOADING(s))
+                         return JOB_NOP;
+ 
+                 return JOB_RELOAD;
+ 
+         case JOB_RELOAD_OR_START:
+                 s = unit_active_state(u);
+-                if (UNIT_IS_INACTIVE_OR_DEACTIVATING(s))
++                if (!UNIT_IS_ACTIVE_OR_RELOADING(s))
+                         return JOB_START;
+ 
+                 return JOB_RELOAD;

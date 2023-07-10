@@ -1,0 +1,30 @@
+From 66f6f6304d87b2fe0c4f91373c7d1b836de1b054 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Tue, 23 Jul 2019 00:56:04 +0200
+Subject: [PATCH] test: give strace some time to initialize
+
+The `coproc` implementation seems to be a little bit different in older
+bash versions, so the `strace` is sometimes started AFTER `systemctl
+daemon-reload`, which causes unexpected fails. Let's help it a little by
+sleeping for a bit.
+
+(cherry picked from commit c7367d7cfdfdcec98f8659f0ed3f1d7b77123903)
+
+Related: #1808940
+---
+ test/TEST-36-NUMAPOLICY/testsuite.sh | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/test/TEST-36-NUMAPOLICY/testsuite.sh b/test/TEST-36-NUMAPOLICY/testsuite.sh
+index 4b715d305a..1c8cf7e6b6 100755
+--- a/test/TEST-36-NUMAPOLICY/testsuite.sh
++++ b/test/TEST-36-NUMAPOLICY/testsuite.sh
+@@ -34,6 +34,8 @@ journalCursorFile="jounalCursorFile"
+ 
+ startStrace() {
+     coproc strace -qq -p 1 -o $straceLog -e set_mempolicy -s 1024 $1
++    # Wait for strace to properly "initialize"
++    sleep $sleepAfterStart
+ }
+ 
+ stopStrace() {

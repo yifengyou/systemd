@@ -1,0 +1,84 @@
+From 12ce6830c63b4a27bb6d5b7729d70a86079b108f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 15:56:35 +0200
+Subject: [PATCH] man: move description of *Action= modes to
+ FailureAction=/SuccessAction=
+
+FailureAction=/SuccessAction= were added later then StartLimitAction=, so it
+was easiest to refer to the existing description. But those two settings are
+somewhat simpler (they just execute the action unconditionally) while
+StartLimitAction= has additional timing and burst parameters, and they are
+about to take on a more prominent role, so let's move the description of
+allowed values.
+
+(cherry picked from commit 454dd6ce7adb744584ecae9aa0bd1acf3a00e9ed)
+
+Related: #1860899
+---
+ man/systemd.unit.xml | 44 +++++++++++++++++++++++---------------------
+ 1 file changed, 23 insertions(+), 21 deletions(-)
+
+diff --git a/man/systemd.unit.xml b/man/systemd.unit.xml
+index 7605c43375..802db453a4 100644
+--- a/man/systemd.unit.xml
++++ b/man/systemd.unit.xml
+@@ -873,6 +873,24 @@
+         </listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>FailureAction=</varname></term>
++        <term><varname>SuccessAction=</varname></term>
++
++        <listitem><para>Configure the action to take when the unit stops and enters a failed state or inactive
++        state. Takes one of <option>none</option>, <option>reboot</option>, <option>reboot-force</option>,
++        <option>reboot-immediate</option>, <option>poweroff</option>, <option>poweroff-force</option> or
++        <option>poweroff-immediate</option>. If <option>none</option> is set, no action will be triggered.
++        <option>reboot</option> causes a reboot following the normal shutdown procedure (i.e. equivalent to
++        <command>systemctl reboot</command>). <option>reboot-force</option> causes a forced reboot which will
++        terminate all processes forcibly but should cause no dirty file systems on reboot (i.e. equivalent to
++        <command>systemctl reboot -f</command>) and <option>reboot-immediate</option> causes immediate execution of the
++        <citerefentry><refentrytitle>reboot</refentrytitle><manvolnum>2</manvolnum></citerefentry> system call, which
++        might result in data loss. Similarly, <option>poweroff</option>, <option>poweroff-force</option>,
++        <option>poweroff-immediate</option> have the effect of powering down the system with similar semantics. Both
++        options default to <option>none</option>.</para></listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>JobTimeoutSec=</varname></term>
+         <term><varname>JobRunningTimeoutSec=</varname></term>
+@@ -929,29 +947,13 @@
+       <varlistentry>
+         <term><varname>StartLimitAction=</varname></term>
+ 
+-        <listitem><para>Configure the action to take if the rate limit configured with
+-        <varname>StartLimitIntervalSec=</varname> and <varname>StartLimitBurst=</varname> is hit. Takes one of
+-        <option>none</option>, <option>reboot</option>, <option>reboot-force</option>,
+-        <option>reboot-immediate</option>, <option>poweroff</option>, <option>poweroff-force</option> or
+-        <option>poweroff-immediate</option>. If <option>none</option> is set, hitting the rate limit will trigger no
+-        action besides that the start will not be permitted. <option>reboot</option> causes a reboot following the
+-        normal shutdown procedure (i.e. equivalent to <command>systemctl reboot</command>).
+-        <option>reboot-force</option> causes a forced reboot which will terminate all processes forcibly but should
+-        cause no dirty file systems on reboot (i.e. equivalent to <command>systemctl reboot -f</command>) and
+-        <option>reboot-immediate</option> causes immediate execution of the
+-        <citerefentry><refentrytitle>reboot</refentrytitle><manvolnum>2</manvolnum></citerefentry> system call, which
+-        might result in data loss. Similarly, <option>poweroff</option>, <option>poweroff-force</option>,
+-        <option>poweroff-immediate</option> have the effect of powering down the system with similar
+-        semantics. Defaults to <option>none</option>.</para></listitem>
++        <listitem><para>Configure an additional action to take if the rate limit configured with
++        <varname>StartLimitIntervalSec=</varname> and <varname>StartLimitBurst=</varname> is hit.  Takes the same
++        values as the setting <varname>FailureAction=</varname>/<varname>SuccessAction=</varname> settings and executes
++        the same actions. If <option>none</option> is set, hitting the rate limit will trigger no action besides that
++        the start will not be permitted. Defaults to <option>none</option>.</para></listitem>
+       </varlistentry>
+ 
+-      <varlistentry>
+-        <term><varname>FailureAction=</varname></term>
+-        <term><varname>SuccessAction=</varname></term>
+-        <listitem><para>Configure the action to take when the unit stops and enters a failed state or inactive
+-        state. Takes the same values as the setting <varname>StartLimitAction=</varname> setting and executes the same
+-        actions. Both options default to <option>none</option>.</para></listitem>
+-      </varlistentry>
+ 
+       <varlistentry>
+         <term><varname>RebootArgument=</varname></term>

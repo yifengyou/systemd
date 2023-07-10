@@ -1,0 +1,25 @@
+From 573229efeb2c5ade25794deee8cfe2f967414ef7 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Fri, 6 Nov 2020 10:13:19 +0100
+Subject: [PATCH] fix typo in ProtectSystem= option
+
+This was introduced by commit d9ae3222cfbd5d2a48e6dbade6617085cc76f1c1 .
+
+Resolves: #1871139
+---
+ units/systemd-resolved.service.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/units/systemd-resolved.service.in b/units/systemd-resolved.service.in
+index aad1a53a5f..f10f1d1690 100644
+--- a/units/systemd-resolved.service.in
++++ b/units/systemd-resolved.service.in
+@@ -30,7 +30,7 @@ CapabilityBoundingSet=CAP_SETPCAP CAP_NET_RAW CAP_NET_BIND_SERVICE
+ AmbientCapabilities=CAP_SETPCAP CAP_NET_RAW CAP_NET_BIND_SERVICE
+ PrivateTmp=yes
+ PrivateDevices=yes
+-ProtectSystems=strict
++ProtectSystem=strict
+ ProtectHome=yes
+ ProtectControlGroups=yes
+ ProtectKernelTunables=yes

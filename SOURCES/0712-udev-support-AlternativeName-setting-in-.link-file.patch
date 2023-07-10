@@ -1,0 +1,238 @@
+From a29790ac578540ccb4264367603aba9bc41d1bf7 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Sun, 15 Dec 2019 23:21:18 +0900
+Subject: [PATCH] udev: support AlternativeName= setting in .link file
+
+(cherry picked from commit a5053a158b43c5ddee90f4915b9fc603e0191d6d)
+
+Related: #2005008
+---
+ man/systemd.link.xml                     |  8 ++++
+ src/libsystemd/sd-netlink/netlink-util.c | 40 ++++++++++++++++
+ src/libsystemd/sd-netlink/netlink-util.h |  1 +
+ src/shared/conf-parser.c                 | 60 ++++++++++++++++++++++++
+ src/shared/conf-parser.h                 |  1 +
+ src/udev/net/link-config-gperf.gperf     |  1 +
+ src/udev/net/link-config.c               |  5 ++
+ src/udev/net/link-config.h               |  1 +
+ 8 files changed, 117 insertions(+)
+
+diff --git a/man/systemd.link.xml b/man/systemd.link.xml
+index 32657308d0..0b0d83349d 100644
+--- a/man/systemd.link.xml
++++ b/man/systemd.link.xml
+@@ -343,6 +343,14 @@
+           </para>
+         </listitem>
+       </varlistentry>
++      <varlistentry>
++        <term><varname>AlternativeName=</varname></term>
++        <listitem>
++          <para>The alternative interface name to use. This option can be specified multiple times.
++          If the empty string is assigned to this option, the list is reset, and all prior assignments
++          have no effect.</para>
++        </listitem>
++      </varlistentry>
+       <varlistentry>
+         <term><varname>MTUBytes=</varname></term>
+         <listitem>
+diff --git a/src/libsystemd/sd-netlink/netlink-util.c b/src/libsystemd/sd-netlink/netlink-util.c
+index 3928dfbabf..c1c306f121 100644
+--- a/src/libsystemd/sd-netlink/netlink-util.c
++++ b/src/libsystemd/sd-netlink/netlink-util.c
+@@ -4,6 +4,7 @@
+ 
+ #include "netlink-internal.h"
+ #include "netlink-util.h"
++#include "strv.h"
+ 
+ int rtnl_set_link_name(sd_netlink **rtnl, int ifindex, const char *name) {
+         _cleanup_(sd_netlink_message_unrefp) sd_netlink_message *message = NULL;
+@@ -80,6 +81,45 @@ int rtnl_set_link_properties(sd_netlink **rtnl, int ifindex, const char *alias,
+         return 0;
+ }
+ 
++int rtnl_set_link_alternative_names(sd_netlink **rtnl, int ifindex, char * const *alternative_names) {
++        _cleanup_(sd_netlink_message_unrefp) sd_netlink_message *message = NULL;
++        int r;
++
++        assert(rtnl);
++        assert(ifindex > 0);
++
++        if (strv_isempty(alternative_names))
++                return 0;
++
++        if (!*rtnl) {
++                r = sd_netlink_open(rtnl);
++                if (r < 0)
++                        return r;
++        }
++
++        r = sd_rtnl_message_new_link(*rtnl, &message, RTM_NEWLINKPROP, ifindex);
++        if (r < 0)
++                return r;
++
++        r = sd_netlink_message_open_container(message, IFLA_PROP_LIST);
++        if (r < 0)
++                return r;
++
++        r = sd_netlink_message_append_strv(message, IFLA_ALT_IFNAME, alternative_names);
++        if (r < 0)
++                return r;
++
++        r = sd_netlink_message_close_container(message);
++        if (r < 0)
++                return r;
++
++        r = sd_netlink_call(*rtnl, message, 0, NULL);
++        if (r < 0)
++                return r;
++
++        return 0;
++}
++
+ int rtnl_message_new_synthetic_error(sd_netlink *rtnl, int error, uint32_t serial, sd_netlink_message **ret) {
+         struct nlmsgerr *err;
+         int r;
+diff --git a/src/libsystemd/sd-netlink/netlink-util.h b/src/libsystemd/sd-netlink/netlink-util.h
+index 882a616310..92de19c092 100644
+--- a/src/libsystemd/sd-netlink/netlink-util.h
++++ b/src/libsystemd/sd-netlink/netlink-util.h
+@@ -38,6 +38,7 @@ static inline bool rtnl_message_type_is_routing_policy_rule(uint16_t type) {
+ 
+ int rtnl_set_link_name(sd_netlink **rtnl, int ifindex, const char *name);
+ int rtnl_set_link_properties(sd_netlink **rtnl, int ifindex, const char *alias, const struct ether_addr *mac, uint32_t mtu);
++int rtnl_set_link_alternative_names(sd_netlink **rtnl, int ifindex, char * const *alternative_names);
+ 
+ int rtnl_log_parse_error(int r);
+ int rtnl_log_create_error(int r);
+diff --git a/src/shared/conf-parser.c b/src/shared/conf-parser.c
+index 246b7431e4..1f40f00c72 100644
+--- a/src/shared/conf-parser.c
++++ b/src/shared/conf-parser.c
+@@ -970,6 +970,66 @@ int config_parse_ifname(
+         return 0;
+ }
+ 
++int config_parse_ifnames(
++                const char *unit,
++                const char *filename,
++                unsigned line,
++                const char *section,
++                unsigned section_line,
++                const char *lvalue,
++                int ltype,
++                const char *rvalue,
++                void *data,
++                void *userdata) {
++
++        _cleanup_strv_free_ char **names = NULL;
++        char ***s = data;
++        const char *p;
++        int r;
++
++        assert(filename);
++        assert(lvalue);
++        assert(rvalue);
++        assert(data);
++
++        if (isempty(rvalue)) {
++                *s = strv_free(*s);
++                return 0;
++        }
++
++        p = rvalue;
++        for (;;) {
++                _cleanup_free_ char *word = NULL;
++
++                r = extract_first_word(&p, &word, NULL, 0);
++                if (r < 0) {
++                        log_syntax(unit, LOG_ERR, filename, line, r,
++                                   "Failed to extract interface name, ignoring assignment: %s",
++                                   rvalue);
++                        return 0;
++                }
++                if (r == 0)
++                        break;
++
++                if (!ifname_valid_full(word, ltype)) {
++                        log_syntax(unit, LOG_ERR, filename, line, 0,
++                                   "Interface name is not valid or too long, ignoring assignment: %s",
++                                   word);
++                        continue;
++                }
++
++                r = strv_consume(&names, TAKE_PTR(word));
++                if (r < 0)
++                        return log_oom();
++        }
++
++        r = strv_extend_strv(s, names, true);
++        if (r < 0)
++                return log_oom();
++
++        return 0;
++}
++
+ int config_parse_ip_port(
+                 const char *unit,
+                 const char *filename,
+diff --git a/src/shared/conf-parser.h b/src/shared/conf-parser.h
+index a0a5c89c27..375b2e5a74 100644
+--- a/src/shared/conf-parser.h
++++ b/src/shared/conf-parser.h
+@@ -137,6 +137,7 @@ CONFIG_PARSER_PROTOTYPE(config_parse_signal);
+ CONFIG_PARSER_PROTOTYPE(config_parse_personality);
+ CONFIG_PARSER_PROTOTYPE(config_parse_permille);
+ CONFIG_PARSER_PROTOTYPE(config_parse_ifname);
++CONFIG_PARSER_PROTOTYPE(config_parse_ifnames);
+ CONFIG_PARSER_PROTOTYPE(config_parse_ip_port);
+ CONFIG_PARSER_PROTOTYPE(config_parse_join_controllers);
+ CONFIG_PARSER_PROTOTYPE(config_parse_mtu);
+diff --git a/src/udev/net/link-config-gperf.gperf b/src/udev/net/link-config-gperf.gperf
+index b37836d852..913c754145 100644
+--- a/src/udev/net/link-config-gperf.gperf
++++ b/src/udev/net/link-config-gperf.gperf
+@@ -34,6 +34,7 @@ Link.MACAddressPolicy,           config_parse_mac_policy,    0,
+ Link.MACAddress,                 config_parse_hwaddr,        0,                             offsetof(link_config, mac)
+ Link.NamePolicy,                 config_parse_name_policy,   0,                             offsetof(link_config, name_policy)
+ Link.Name,                       config_parse_ifname,        0,                             offsetof(link_config, name)
++Link.AlternativeName,            config_parse_ifnames,       1,                             offsetof(link_config, alternative_names)
+ Link.Alias,                      config_parse_ifalias,       0,                             offsetof(link_config, alias)
+ Link.MTUBytes,                   config_parse_mtu,           AF_UNSPEC,                     offsetof(link_config, mtu)
+ Link.BitsPerSecond,              config_parse_si_size,       0,                             offsetof(link_config, speed)
+diff --git a/src/udev/net/link-config.c b/src/udev/net/link-config.c
+index 5113586457..d07a1a1874 100644
+--- a/src/udev/net/link-config.c
++++ b/src/udev/net/link-config.c
+@@ -67,6 +67,7 @@ static void link_config_free(link_config *link) {
+         free(link->mac);
+         free(link->name_policy);
+         free(link->name);
++        strv_free(link->alternative_names);
+         free(link->alias);
+ 
+         free(link);
+@@ -468,6 +469,10 @@ int link_config_apply(link_config_ctx *ctx, link_config *config,
+         if (r < 0)
+                 return log_warning_errno(r, "Could not set Alias=, MACAddress= or MTU= on %s: %m", old_name);
+ 
++        r = rtnl_set_link_alternative_names(&ctx->rtnl, ifindex, config->alternative_names);
++        if (r < 0)
++                return log_warning_errno(r, "Could not set AlternativeName= on %s: %m", old_name);
++
+         *name = new_name;
+ 
+         return 0;
+diff --git a/src/udev/net/link-config.h b/src/udev/net/link-config.h
+index 4798bb101c..93d5fdce59 100644
+--- a/src/udev/net/link-config.h
++++ b/src/udev/net/link-config.h
+@@ -50,6 +50,7 @@ struct link_config {
+         MACPolicy mac_policy;
+         NamePolicy *name_policy;
+         char *name;
++        char **alternative_names;
+         char *alias;
+         uint32_t mtu;
+         size_t speed;

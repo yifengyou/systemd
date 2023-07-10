@@ -1,0 +1,26 @@
+From c0e530dc95fa7842ec1a48fd5df98956a76ae26c Mon Sep 17 00:00:00 2001
+From: Luca Boccassi <luca.boccassi@microsoft.com>
+Date: Fri, 26 Feb 2021 10:25:31 +0000
+Subject: [PATCH] udev rules: add rule to create /dev/ptp_hyperv
+
+As for the KVM case, necessary for network cards with
+PTP devices when running a guest on HyperV
+
+(cherry picked from commit 32e868f058da8b90add00b2958c516241c532b70)
+
+Resolves: #1991834
+---
+ rules/50-udev-default.rules.in | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/rules/50-udev-default.rules.in b/rules/50-udev-default.rules.in
+index 191f56f42e..36657ce1a4 100644
+--- a/rules/50-udev-default.rules.in
++++ b/rules/50-udev-default.rules.in
+@@ -83,4 +83,6 @@ KERNEL=="kvm", GROUP="kvm", MODE="@DEV_KVM_MODE@", OPTIONS+="static_node=kvm"
+ 
+ SUBSYSTEM=="ptp", ATTR{clock_name}=="KVM virtual PTP", SYMLINK += "ptp_kvm"
+ 
++SUBSYSTEM=="ptp", ATTR{clock_name}=="hyperv", SYMLINK += "ptp_hyperv"
++
+ LABEL="default_end"

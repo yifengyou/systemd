@@ -1,0 +1,128 @@
+From 3f90090e70a5fa81bced17792fe08d9c46324da9 Mon Sep 17 00:00:00 2001
+From: "Ted X. Toth" <txtoth@flycast.org>
+Date: Thu, 13 Oct 2022 12:58:26 -0700
+Subject: [PATCH] manager: use target process context to set socket context
+
+Use target process context to set socket context when using SELinuxContextFromNet
+not systemd's context. Currently when using the SELinuxContextFromNet option for
+a socket activated services, systemd calls getcon_raw which returns init_t and
+uses the resulting context to compute the context to be passed to the
+setsockcreatecon call. A socket of type init_t is created and listened on and
+this means that SELinux policy cannot be written to control which processes
+(SELinux types) can connect to the socket since the ref policy allows all
+'types' to connect to sockets of the type init_t. When security accessors see
+that any process can connect to a socket this raises serious concerns. I have
+spoken with SELinux contributors in person and on the mailing list and the
+consensus is that the best solution is to use the target executables context
+when computing the sockets context in all cases.
+
+[zjs review/comment:
+
+This removes the branch that was added in 16115b0a7b7cdf08fb38084d857d572d8a9088dc.
+16115b0a7b7cdf08fb38084d857d572d8a9088dc did two things: it had the branch here
+in 'socket_determine_selinux_label()' and a code in 'exec_child()' to call
+'label_get_child_mls_label(socket_fd, command->path, &label)'.
+
+Before this patch, the flow was:
+'''
+mac_selinux_get_child_mls_label:
+  peercon = getpeercon_raw(socket_fd);
+  if (!exec_label)
+     exec_label = getfilecon_raw(exe);
+
+socket_open_fds:
+  if (params->selinux_context_net)                 #
+     label = mac_selinux_get_our_label();          #  this part is removed
+  else                                             #
+     label = mac_selinux_get_create_label_from_exe(path);
+  socket_address_listen_in_cgroup(s, &p->address, label);
+
+exec_child():
+   exec_context = mac_selinux_get_child_mls_label(fd, executable, context->selinux_context);
+   setexeccon(exec_context);
+'''
+]
+
+(cherry picked from commit 29dbc62d74f7b7881dc3136e68e03a03ea055b36)
+
+Resolves: #2136738
+---
+ src/core/socket.c | 58 ++++++++++++++++++++---------------------------
+ 1 file changed, 24 insertions(+), 34 deletions(-)
+
+diff --git a/src/core/socket.c b/src/core/socket.c
+index d1ca0a07c5..8aa5463b25 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -1434,47 +1434,37 @@ static int socket_determine_selinux_label(Socket *s, char **ret) {
+         assert(s);
+         assert(ret);
+ 
+-        if (s->selinux_context_from_net) {
+-                /* If this is requested, get label from the network label */
+-
+-                r = mac_selinux_get_our_label(ret);
+-                if (r == -EOPNOTSUPP)
+-                        goto no_label;
+-
+-        } else {
+-                /* Otherwise, get it from the executable we are about to start */
+-                r = socket_instantiate_service(s);
+-                if (r < 0)
+-                        return r;
++        r = socket_instantiate_service(s);
++        if (r < 0)
++                return r;
+ 
+-                if (!UNIT_ISSET(s->service))
+-                        goto no_label;
+-                service = SERVICE(UNIT_DEREF(s->service));
++        if (!UNIT_ISSET(s->service))
++                goto no_label;
++        service = SERVICE(UNIT_DEREF(s->service));
+ 
+-                exec_context = service->exec_context.selinux_context;
+-                if (exec_context) {
+-                        char *con;
++        exec_context = service->exec_context.selinux_context;
++        if (exec_context) {
++                char *con;
+ 
+-                        con = strdup(exec_context);
+-                        if (!con)
+-                                return -ENOMEM;
++                con = strdup(exec_context);
++                if (!con)
++                        return -ENOMEM;
+ 
+-                        *ret = TAKE_PTR(con);
+-                        return 0;
+-                }
++                *ret = TAKE_PTR(con);
++                return 0;
++        }
+ 
+-                c = service->exec_command[SERVICE_EXEC_START];
+-                if (!c)
+-                        goto no_label;
++        c = service->exec_command[SERVICE_EXEC_START];
++        if (!c)
++                goto no_label;
+ 
+-                r = chase_symlinks(c->path, service->exec_context.root_directory, CHASE_PREFIX_ROOT, &path);
+-                if (r < 0)
+-                        goto no_label;
++        r = chase_symlinks(c->path, service->exec_context.root_directory, CHASE_PREFIX_ROOT, &path);
++        if (r < 0)
++                goto no_label;
+ 
+-                r = mac_selinux_get_create_label_from_exe(path, ret);
+-                if (IN_SET(r, -EPERM, -EOPNOTSUPP))
+-                        goto no_label;
+-        }
++        r = mac_selinux_get_create_label_from_exe(path, ret);
++        if (IN_SET(r, -EPERM, -EOPNOTSUPP))
++                goto no_label;
+ 
+         return r;
+ 

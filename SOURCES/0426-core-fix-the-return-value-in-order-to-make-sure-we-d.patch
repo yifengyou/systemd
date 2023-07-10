@@ -1,0 +1,31 @@
+From 4da9dfaec0d7d232d8bfed0d7f65afd65369bc8c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Fri, 5 Jun 2020 15:23:12 +0200
+Subject: [PATCH] core: fix the return value in order to make sure we don't
+ dipatch method return too early
+
+Actually, it is the same kind of problem as in d910f4c . Basically, we
+need to return 1 on success code path in slice_freezer_action().
+Otherwise we dispatch DBus return message too soon.
+
+Fixes: #16050
+(cherry picked from commit 2884836e3c26fa76718319cdc6d13136bbc1354d)
+
+Related: #1830861
+---
+ src/core/slice.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/slice.c b/src/core/slice.c
+index b5eb2f5c01..c10e830917 100644
+--- a/src/core/slice.c
++++ b/src/core/slice.c
+@@ -399,7 +399,7 @@ static int slice_freezer_action(Unit *s, FreezerAction action) {
+         if (r < 0)
+                 return r;
+ 
+-        return 0;
++        return 1;
+ }
+ 
+ static int slice_freeze(Unit *s) {

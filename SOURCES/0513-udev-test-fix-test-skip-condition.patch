@@ -1,0 +1,33 @@
+From f44fcdde656036f0388fc8244b8960c1873a3a08 Mon Sep 17 00:00:00 2001
+From: Alexey Bogdanenko <alexey@bogdanenko.com>
+Date: Sat, 8 Dec 2018 11:02:30 +0300
+Subject: [PATCH] udev-test: fix test skip condition
+
+When there is a failure to setup the environment, the following happens:
+
+1. Command "./test-udev check" exits with non-zero code.
+2. Perl function "system" returns the code.
+3. The code is evaluated as true by Perl.
+
+Then we stop the test.
+
+(cherry picked from commit 7935dae547caf164d807237f1009a9e9fa510337)
+
+Related: #1642728
+---
+ test/udev-test.pl | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index aa38bae0b1..3517feab15 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1661,7 +1661,7 @@ if (!udev_setup()) {
+         exit($EXIT_TEST_SKIP);
+ }
+ 
+-if (!system($udev_bin, "check")) {
++if (system($udev_bin, "check")) {
+         warn "$udev_bin failed to set up the environment, skipping the test";
+         exit($EXIT_TEST_SKIP);
+ }

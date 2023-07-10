@@ -1,0 +1,44 @@
+From 74632586b46c7e88b09c57eec50f9c4aed254b98 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Mon, 30 Jan 2023 14:31:23 +0100
+Subject: [PATCH] systemctl: preserve old behavior unless requested
+
+Currently, the legacy shutdown commands ignore inhibitors and reboot
+immediately if run by root. Let's preserve that behavior in RHEL-8 by
+default. The new behavior can be turned on by those who want it by
+exporting SYSTEMD_NEW_SHUTDOWN=1 .
+
+RHEL-only
+
+Related: #2053273
+---
+ src/systemctl/systemctl.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index a26e4a913a..1546119ce5 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -8714,7 +8714,7 @@ static int halt_main_old(void) {
+         return log_error_errno(r, "Failed to reboot: %m");
+ }
+ 
+-static int halt_main(void) {
++static int halt_main_new(void) {
+         int r;
+ 
+         /* always try logind first */
+@@ -8765,6 +8765,13 @@ static int halt_main(void) {
+         return log_error_errno(r, "Failed to reboot: %m");
+ }
+ 
++static int halt_main(void) {
++        if (getenv_bool("SYSTEMD_NEW_SHUTDOWN") > 0)
++                return halt_main_new();
++        else
++                return halt_main_old();
++}
++
+ static int runlevel_main(void) {
+         int r, runlevel, previous;
+ 

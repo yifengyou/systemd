@@ -1,0 +1,102 @@
+From c6b2c2fb577d20879b5b4c610c4c29bac259beab Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Fri, 17 Jul 2020 21:29:13 +0900
+Subject: [PATCH] netlink: introduce rtnl_get/delete_link_alternative_names()
+
+(cherry picked from commit 14982526145de84201c7e3b4fc6be6aa5e9a08f7)
+
+Related: #2005008
+---
+ src/libsystemd/sd-netlink/netlink-util.c | 45 ++++++++++++++++++++++--
+ src/libsystemd/sd-netlink/netlink-util.h |  2 ++
+ 2 files changed, 45 insertions(+), 2 deletions(-)
+
+diff --git a/src/libsystemd/sd-netlink/netlink-util.c b/src/libsystemd/sd-netlink/netlink-util.c
+index 62fc71a3d8..7f09261981 100644
+--- a/src/libsystemd/sd-netlink/netlink-util.c
++++ b/src/libsystemd/sd-netlink/netlink-util.c
+@@ -81,12 +81,45 @@ int rtnl_set_link_properties(sd_netlink **rtnl, int ifindex, const char *alias,
+         return 0;
+ }
+ 
+-int rtnl_set_link_alternative_names(sd_netlink **rtnl, int ifindex, char * const *alternative_names) {
++int rtnl_get_link_alternative_names(sd_netlink **rtnl, int ifindex, char ***ret) {
++        _cleanup_(sd_netlink_message_unrefp) sd_netlink_message *message = NULL, *reply = NULL;
++        _cleanup_strv_free_ char **names = NULL;
++        int r;
++
++        assert(rtnl);
++        assert(ifindex > 0);
++        assert(ret);
++
++        if (!*rtnl) {
++                r = sd_netlink_open(rtnl);
++                if (r < 0)
++                        return r;
++        }
++
++        r = sd_rtnl_message_new_link(*rtnl, &message, RTM_GETLINK, ifindex);
++        if (r < 0)
++                return r;
++
++        r = sd_netlink_call(*rtnl, message, 0, &reply);
++        if (r < 0)
++                return r;
++
++        r = sd_netlink_message_read_strv(reply, IFLA_PROP_LIST, IFLA_ALT_IFNAME, &names);
++        if (r < 0 && r != -ENODATA)
++                return r;
++
++        *ret = TAKE_PTR(names);
++
++        return 0;
++}
++
++static int rtnl_update_link_alternative_names(sd_netlink **rtnl, uint16_t nlmsg_type, int ifindex, char * const *alternative_names) {
+         _cleanup_(sd_netlink_message_unrefp) sd_netlink_message *message = NULL;
+         int r;
+ 
+         assert(rtnl);
+         assert(ifindex > 0);
++        assert(IN_SET(nlmsg_type, RTM_NEWLINKPROP, RTM_DELLINKPROP));
+ 
+         if (strv_isempty(alternative_names))
+                 return 0;
+@@ -97,7 +130,7 @@ int rtnl_set_link_alternative_names(sd_netlink **rtnl, int ifindex, char * const
+                         return r;
+         }
+ 
+-        r = sd_rtnl_message_new_link(*rtnl, &message, RTM_NEWLINKPROP, ifindex);
++        r = sd_rtnl_message_new_link(*rtnl, &message, nlmsg_type, ifindex);
+         if (r < 0)
+                 return r;
+ 
+@@ -120,6 +153,14 @@ int rtnl_set_link_alternative_names(sd_netlink **rtnl, int ifindex, char * const
+         return 0;
+ }
+ 
++int rtnl_set_link_alternative_names(sd_netlink **rtnl, int ifindex, char * const *alternative_names) {
++        return rtnl_update_link_alternative_names(rtnl, RTM_NEWLINKPROP, ifindex, alternative_names);
++}
++
++int rtnl_delete_link_alternative_names(sd_netlink **rtnl, int ifindex, char * const *alternative_names) {
++        return rtnl_update_link_alternative_names(rtnl, RTM_DELLINKPROP, ifindex, alternative_names);
++}
++
+ int rtnl_resolve_link_alternative_name(sd_netlink **rtnl, const char *name, int *ret) {
+         _cleanup_(sd_netlink_message_unrefp) sd_netlink_message *message = NULL, *reply = NULL;
+         int r;
+diff --git a/src/libsystemd/sd-netlink/netlink-util.h b/src/libsystemd/sd-netlink/netlink-util.h
+index ea98439fad..4fc31aa274 100644
+--- a/src/libsystemd/sd-netlink/netlink-util.h
++++ b/src/libsystemd/sd-netlink/netlink-util.h
+@@ -38,7 +38,9 @@ static inline bool rtnl_message_type_is_routing_policy_rule(uint16_t type) {
+ 
+ int rtnl_set_link_name(sd_netlink **rtnl, int ifindex, const char *name);
+ int rtnl_set_link_properties(sd_netlink **rtnl, int ifindex, const char *alias, const struct ether_addr *mac, uint32_t mtu);
++int rtnl_get_link_alternative_names(sd_netlink **rtnl, int ifindex, char ***ret);
+ int rtnl_set_link_alternative_names(sd_netlink **rtnl, int ifindex, char * const *alternative_names);
++int rtnl_delete_link_alternative_names(sd_netlink **rtnl, int ifindex, char * const *alternative_names);
+ int rtnl_resolve_link_alternative_name(sd_netlink **rtnl, const char *name, int *ret);
+ 
+ int rtnl_log_parse_error(int r);

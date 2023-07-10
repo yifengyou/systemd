@@ -1,0 +1,27 @@
+From cb519c7d769851ee5e24c797fc04eaa13383c674 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Mon, 4 Oct 2021 19:41:34 +0200
+Subject: [PATCH] mount: make mount units start jobs not runnable if
+ /p/s/mountinfo ratelimit is in effect
+
+(cherry picked from commit a7c93dfe91e88a5a561341c523a45c7f8d71a588)
+
+Related: #2036608
+---
+ src/core/mount.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/core/mount.c b/src/core/mount.c
+index 032a2ca156..ab09e6fbb0 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -1957,6 +1957,9 @@ static int mount_can_start(Unit *u) {
+ 
+         assert(m);
+ 
++        if (sd_event_source_is_ratelimited(u->manager->mount_event_source))
++                return -EAGAIN;
++
+         r = unit_test_start_limit(u);
+         if (r < 0) {
+                 mount_enter_dead(m, MOUNT_FAILURE_START_LIMIT_HIT);

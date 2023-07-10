@@ -1,0 +1,30 @@
+From 7b2d5268cf43a4ed7847bdbed2328bccddd5a716 Mon Sep 17 00:00:00 2001
+From: Neal Gompa <ngompa13@gmail.com>
+Date: Tue, 26 Jun 2018 07:42:29 -0400
+Subject: [PATCH] rpm: Add misspelled %_environmentdir macro for temporary
+ compatibility
+
+This should be removed after systemd 240 is released.
+
+Signed-off-by: Neal Gompa <ngompa13@gmail.com>
+(cherry picked from commit a6bb5504583e3267d35fa385fe20f60fd998ca5d)
+Related: #2018024
+---
+ src/core/macros.systemd.in | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/core/macros.systemd.in b/src/core/macros.systemd.in
+index a24d7bbe58..abbb42b22f 100644
+--- a/src/core/macros.systemd.in
++++ b/src/core/macros.systemd.in
+@@ -26,6 +26,10 @@
+ %_systemd_system_env_generator_dir @systemenvgeneratordir@
+ %_systemd_user_env_generator_dir @userenvgeneratordir@
+ 
++# Because we had one release with a typo...
++# This is temporary (Remove after systemd 240 is released)
++%_environmnentdir %_environmentdir
++
+ %systemd_requires \
+ Requires(post): systemd \
+ Requires(preun): systemd \

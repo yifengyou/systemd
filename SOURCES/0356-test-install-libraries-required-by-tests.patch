@@ -1,0 +1,25 @@
+From 98e4c0d39a83a325038d0b39715fc534c7613bef Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Wed, 12 Sep 2018 18:19:45 +0900
+Subject: [PATCH] test: install libraries required by tests
+
+(cherry picked from commit e3d3dada248c5f30e2978840ca1f0a03a4675b53)
+
+Resolves: #1823767
+---
+ test/test-functions | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/test-functions b/test/test-functions
+index da83891f46..f7ca3ad975 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -420,7 +420,7 @@ get_ldpath() {
+ 
+ install_missing_libraries() {
+     # install possible missing libraries
+-    for i in $initdir{,/usr}/{sbin,bin}/* $initdir{,/usr}/lib/systemd/*; do
++    for i in $initdir{,/usr}/{sbin,bin}/* $initdir{,/usr}/lib/systemd/{,tests/{,manual/,unsafe/}}*; do
+         LD_LIBRARY_PATH=$(get_ldpath $i) inst_libs $i
+     done
+ }

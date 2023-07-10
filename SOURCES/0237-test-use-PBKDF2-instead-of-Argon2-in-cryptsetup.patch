@@ -1,0 +1,29 @@
+From a7f18f9ef4abc7e0732d1710ead2a18a38c3ec6d Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Fri, 15 Mar 2019 10:05:33 +0100
+Subject: [PATCH] test: use PBKDF2 instead of Argon2 in cryptsetup...
+
+to reduce memory requirements for volume manipulation. Also,
+to further improve the test performance, reduce number of PBKDF
+iterations to 1000 (allowed minimum).
+
+(cherry picked from commit 5b69d297c153478f6f5e74ba66e1f4e5b6422baf)
+
+Related: #1761519
+---
+ test/TEST-02-CRYPTSETUP/test.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/TEST-02-CRYPTSETUP/test.sh b/test/TEST-02-CRYPTSETUP/test.sh
+index 545602e17a..c38e56f72e 100755
+--- a/test/TEST-02-CRYPTSETUP/test.sh
++++ b/test/TEST-02-CRYPTSETUP/test.sh
+@@ -29,7 +29,7 @@ check_result_qemu() {
+ test_setup() {
+     create_empty_image
+     echo -n test >$TESTDIR/keyfile
+-    cryptsetup -q luksFormat ${LOOPDEV}p2 $TESTDIR/keyfile
++    cryptsetup -q luksFormat --pbkdf pbkdf2 --pbkdf-force-iterations 1000 ${LOOPDEV}p2 $TESTDIR/keyfile
+     cryptsetup luksOpen ${LOOPDEV}p2 varcrypt <$TESTDIR/keyfile
+     mkfs.ext4 -L var /dev/mapper/varcrypt
+     mkdir -p $TESTDIR/root

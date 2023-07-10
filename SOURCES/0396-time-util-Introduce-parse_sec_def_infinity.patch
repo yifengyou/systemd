@@ -1,0 +1,122 @@
+From 9692477a59c47b5fb6bd6d4702302859296db070 Mon Sep 17 00:00:00 2001
+From: Filipe Brandenburger <filbranden@google.com>
+Date: Wed, 23 Jan 2019 19:48:54 -0800
+Subject: [PATCH] time-util: Introduce parse_sec_def_infinity
+
+This works like parse_sec() but defaults to USEC_INFINITY when passed an
+empty string or only whitespace.
+
+Also introduce config_parse_sec_def_infinity, which can be used to parse
+config options using this function.
+
+This is useful for time options that use "infinity" for default and that
+can be reset by unsetting them.
+
+Introduce a test case to ensure it works as expected.
+
+(cherry picked from commit 7b61ce3c44ef5908e817009ce4f9d2a7a37722be)
+
+Related: #1770379
+---
+ src/basic/time-util.c     |  9 +++++++++
+ src/basic/time-util.h     |  1 +
+ src/shared/conf-parser.c  |  1 +
+ src/shared/conf-parser.h  |  1 +
+ src/test/test-time-util.c | 21 +++++++++++++++++++++
+ 5 files changed, 33 insertions(+)
+
+diff --git a/src/basic/time-util.c b/src/basic/time-util.c
+index fe201c398d..c36e462193 100644
+--- a/src/basic/time-util.c
++++ b/src/basic/time-util.c
+@@ -1072,6 +1072,15 @@ int parse_sec_fix_0(const char *t, usec_t *usec) {
+         return parse_sec(t, usec);
+ }
+ 
++int parse_sec_def_infinity(const char *t, usec_t *ret) {
++        t += strspn(t, WHITESPACE);
++        if (isempty(t)) {
++                *ret = USEC_INFINITY;
++                return 0;
++        }
++        return parse_sec(t, ret);
++}
++
+ int parse_nsec(const char *t, nsec_t *nsec) {
+         static const struct {
+                 const char *suffix;
+diff --git a/src/basic/time-util.h b/src/basic/time-util.h
+index 344f2dc52e..f5c9ea6327 100644
+--- a/src/basic/time-util.h
++++ b/src/basic/time-util.h
+@@ -116,6 +116,7 @@ int parse_timestamp(const char *t, usec_t *usec);
+ 
+ int parse_sec(const char *t, usec_t *usec);
+ int parse_sec_fix_0(const char *t, usec_t *usec);
++int parse_sec_def_infinity(const char *t, usec_t *usec);
+ int parse_time(const char *t, usec_t *usec, usec_t default_unit);
+ int parse_nsec(const char *t, nsec_t *nsec);
+ 
+diff --git a/src/shared/conf-parser.c b/src/shared/conf-parser.c
+index 2d62fdf05d..246b7431e4 100644
+--- a/src/shared/conf-parser.c
++++ b/src/shared/conf-parser.c
+@@ -509,6 +509,7 @@ DEFINE_PARSER(unsigned, unsigned, safe_atou);
+ DEFINE_PARSER(double, double, safe_atod);
+ DEFINE_PARSER(nsec, nsec_t, parse_nsec);
+ DEFINE_PARSER(sec, usec_t, parse_sec);
++DEFINE_PARSER(sec_def_infinity, usec_t, parse_sec_def_infinity);
+ DEFINE_PARSER(mode, mode_t, parse_mode);
+ 
+ int config_parse_iec_size(const char* unit,
+diff --git a/src/shared/conf-parser.h b/src/shared/conf-parser.h
+index 16f042d894..a0a5c89c27 100644
+--- a/src/shared/conf-parser.h
++++ b/src/shared/conf-parser.h
+@@ -127,6 +127,7 @@ CONFIG_PARSER_PROTOTYPE(config_parse_string);
+ CONFIG_PARSER_PROTOTYPE(config_parse_path);
+ CONFIG_PARSER_PROTOTYPE(config_parse_strv);
+ CONFIG_PARSER_PROTOTYPE(config_parse_sec);
++CONFIG_PARSER_PROTOTYPE(config_parse_sec_def_infinity);
+ CONFIG_PARSER_PROTOTYPE(config_parse_nsec);
+ CONFIG_PARSER_PROTOTYPE(config_parse_mode);
+ CONFIG_PARSER_PROTOTYPE(config_parse_warn_compat);
+diff --git a/src/test/test-time-util.c b/src/test/test-time-util.c
+index 87de8d172c..354a01dd1a 100644
+--- a/src/test/test-time-util.c
++++ b/src/test/test-time-util.c
+@@ -61,6 +61,26 @@ static void test_parse_sec_fix_0(void) {
+         assert_se(u == USEC_INFINITY);
+ }
+ 
++static void test_parse_sec_def_infinity(void) {
++        usec_t u;
++
++        log_info("/* %s */", __func__);
++
++        assert_se(parse_sec_def_infinity("5s", &u) >= 0);
++        assert_se(u == 5 * USEC_PER_SEC);
++        assert_se(parse_sec_def_infinity("", &u) >= 0);
++        assert_se(u == USEC_INFINITY);
++        assert_se(parse_sec_def_infinity("     ", &u) >= 0);
++        assert_se(u == USEC_INFINITY);
++        assert_se(parse_sec_def_infinity("0s", &u) >= 0);
++        assert_se(u == 0);
++        assert_se(parse_sec_def_infinity("0", &u) >= 0);
++        assert_se(u == 0);
++        assert_se(parse_sec_def_infinity(" 0", &u) >= 0);
++        assert_se(u == 0);
++        assert_se(parse_sec_def_infinity("-5s", &u) < 0);
++}
++
+ static void test_parse_time(void) {
+         usec_t u;
+ 
+@@ -420,6 +440,7 @@ int main(int argc, char *argv[]) {
+ 
+         test_parse_sec();
+         test_parse_sec_fix_0();
++        test_parse_sec_def_infinity();
+         test_parse_time();
+         test_parse_nsec();
+         test_format_timespan(1);

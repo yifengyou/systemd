@@ -1,0 +1,30 @@
+From 27d1acaa1d4c9299db461f0f1922c573be6a52c0 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <fsumsal@redhat.com>
+Date: Mon, 21 Oct 2019 18:39:39 +0200
+Subject: [PATCH] test: bump the second partition's size to 50M
+
+The former size (10M) caused systemd-journald to crash with SIGABRT when
+used on a LUKS2 partition, as the LUKS2 metadata consume a significant
+part of the 10M partition, thus leaving no space for the journal file
+itself (relevant for TEST-02-CRYPTSETUP). This change has been present
+in upstream for a while anyway.
+
+Related: #1761519
+rhel-only
+---
+ test/test-functions | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/test-functions b/test/test-functions
+index af9d16140f..fe25a501da 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -433,7 +433,7 @@ create_empty_image() {
+     [ -b "$LOOPDEV" ] || return 1
+     echo "LOOPDEV=$LOOPDEV" >> $STATEFILE
+     sfdisk "$LOOPDEV" <<EOF
+-,390M
++,350M
+ ,
+ EOF
+ 

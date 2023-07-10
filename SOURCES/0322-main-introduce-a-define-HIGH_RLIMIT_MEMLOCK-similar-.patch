@@ -1,0 +1,37 @@
+From 0528a880ddf797a42b2de274e5c7bd2d9896c991 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 11 Oct 2018 18:31:11 +0200
+Subject: [PATCH] main: introduce a define HIGH_RLIMIT_MEMLOCK similar to
+ HIGH_RLIMIT_NOFILE
+
+(cherry picked from commit c8884aceefc85245b9bdfb626e2daf27521259bd)
+Related: #1789930
+---
+ src/basic/def.h | 3 +++
+ src/core/main.c | 2 +-
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/basic/def.h b/src/basic/def.h
+index 4d515c11b6..65ad659999 100644
+--- a/src/basic/def.h
++++ b/src/basic/def.h
+@@ -75,3 +75,6 @@
+                 _CONF_PATHS_SPLIT_USR(n))
+ 
+ #define LONG_LINE_MAX (1U*1024U*1024U)
++
++#define HIGH_RLIMIT_NOFILE (256*1024)
++#define HIGH_RLIMIT_MEMLOCK (1024ULL*1024ULL*64ULL)
+diff --git a/src/core/main.c b/src/core/main.c
+index b8c1e567ad..d6550ea161 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -1168,7 +1168,7 @@ static int bump_rlimit_memlock(struct rlimit *saved_rlimit) {
+          * should normally disable such checks. We need them to implement IPAccessAllow= and IPAccessDeny=, hence let's
+          * bump the value high enough for the root user. */
+ 
+-        r = setrlimit_closest(RLIMIT_MEMLOCK, &RLIMIT_MAKE_CONST(1024ULL*1024ULL*16ULL));
++        r = setrlimit_closest(RLIMIT_MEMLOCK, &RLIMIT_MAKE_CONST(HIGH_RLIMIT_MEMLOCK));
+         if (r < 0)
+                 return log_warning_errno(r, "Setting RLIMIT_MEMLOCK failed, ignoring: %m");
+ 

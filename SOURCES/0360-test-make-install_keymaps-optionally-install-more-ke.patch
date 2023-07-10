@@ -1,0 +1,33 @@
+From 8dbd01f7018947fd15d00c25b1aa0ffc72278cb6 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Wed, 19 Sep 2018 10:54:28 +0900
+Subject: [PATCH] test: make install_keymaps() optionally install more keymaps
+
+(cherry picked from commit ad931fee506e1313e8a520ae0ecc1c8e275d9941)
+
+Resolves: #1823767
+---
+ test/test-functions | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/test/test-functions b/test/test-functions
+index 546928c516..0938e6e826 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -630,6 +630,16 @@ install_keymaps() {
+             [[ -f $i ]] || continue
+             inst $i
+     done
++
++    # When it takes any argument, then install more keymaps.
++    if [[ -n $1 ]]; then
++        for i in \
++        /usr/lib/kbd/keymaps/i386/*/* \
++        /usr/lib/kbd/keymaps/legacy/i386/*/*; do
++            [[ -f $i ]] || continue
++            inst $i
++        done
++    fi
+ }
+ 
+ install_zoneinfo() {

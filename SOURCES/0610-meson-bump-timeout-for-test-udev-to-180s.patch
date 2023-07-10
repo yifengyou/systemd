@@ -1,0 +1,30 @@
+From 998041fbb2b4114f2f1df604cdebc4afbf682d63 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Fri, 18 Jan 2019 22:32:42 +0100
+Subject: [PATCH] meson: bump timeout for test-udev to 180s
+
+On some (mainly virtual) machines the last test takes more than 30
+seconds, which causes unnecessary fails, as the test itself is working
+properly.
+
+(cherry picked from commit bb0e960448fce037f5b82b1829863da8ccbe636b)
+
+Related: #1934504
+---
+ test/meson.build | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/test/meson.build b/test/meson.build
+index 52e4fa2e3c..535354f3ab 100644
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -246,7 +246,8 @@ custom_target(
+ if perl.found()
+         udev_test_pl = find_program('udev-test.pl')
+         test('udev-test',
+-             udev_test_pl)
++             udev_test_pl,
++             timeout : 180)
+ else
+         message('Skipping udev-test because perl is not available')
+ endif

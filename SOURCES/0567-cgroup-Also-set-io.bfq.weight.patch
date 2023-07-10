@@ -1,0 +1,41 @@
+From 4e589237979fdf90af38d466abd7fcd852356f02 Mon Sep 17 00:00:00 2001
+From: Kai Krakow <kai@kaishome.de>
+Date: Sat, 17 Aug 2019 02:33:43 +0200
+Subject: [PATCH] cgroup: Also set io.bfq.weight
+
+Current kernels with BFQ scheduler do not yet set their IO weight
+through "io.weight" but through "io.bfq.weight" (using a slightly
+different interface supporting only default weights, not per-device
+weights). This commit enables "IOWeight=" to just to that.
+
+This patch may be dropped at some time later.
+
+Github-Link: https://github.com/systemd/systemd/issues/7057
+Signed-off-by: Kai Krakow <kai@kaishome.de>
+
+(cherry picked from commit 21221ce1ce9a572e82d46d80692afd65c224fc50)
+
+Related: #1927290
+---
+ src/core/cgroup.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index 71e30fd4db..f02cc31c6e 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -984,6 +984,14 @@ static void cgroup_context_apply(
+                                 log_unit_full(u, IN_SET(r, -ENOENT, -EROFS, -EACCES) ? LOG_DEBUG : LOG_WARNING, r,
+                                               "Failed to set io.weight: %m");
+ 
++                        /* FIXME: drop this when distro kernels properly support BFQ through "io.weight"
++                         * See also: https://github.com/systemd/systemd/pull/13335 */
++                        xsprintf(buf, "%" PRIu64 "\n", weight);
++                        r = cg_set_attribute("io", path, "io.bfq.weight", buf);
++                        if (r < 0)
++                                log_unit_full(u, IN_SET(r, -ENOENT, -EROFS, -EACCES) ? LOG_DEBUG : LOG_WARNING, r,
++                                              "Failed to set io.bfq.weight: %m");
++
+                         if (has_io) {
+                                 CGroupIODeviceWeight *w;
+ 

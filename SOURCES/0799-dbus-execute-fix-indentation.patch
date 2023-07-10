@@ -1,0 +1,29 @@
+From 2ba82e6b7e9a7b138c985561dd7d26b9e4111fbe Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 26 Nov 2018 21:06:19 +0100
+Subject: [PATCH] dbus-execute: fix indentation
+
+(cherry picked from commit dbe6c4b657aa5c58bfc049d869b94f00b41b7d95)
+
+Related: #2093479
+---
+ src/core/dbus-execute.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index 05134851c5..fc433cc96f 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -1858,9 +1858,9 @@ int bus_exec_context_set_transient_property(
+                                         c->std_error = EXEC_OUTPUT_FILE;
+                                         unit_write_settingf(u, flags|UNIT_ESCAPE_SPECIFIERS, name, "StandardOutput=file:%s", s);
+                                 } else {
+-                                      assert(streq(name, "StandardErrorFileToAppend"));
+-                                      c->std_error = EXEC_OUTPUT_FILE_APPEND;
+-                                      unit_write_settingf(u, flags|UNIT_ESCAPE_SPECIFIERS, name, "StandardOutput=append:%s", s);
++                                        assert(streq(name, "StandardErrorFileToAppend"));
++                                        c->std_error = EXEC_OUTPUT_FILE_APPEND;
++                                        unit_write_settingf(u, flags|UNIT_ESCAPE_SPECIFIERS, name, "StandardOutput=append:%s", s);
+                                 }
+                         }
+                 }

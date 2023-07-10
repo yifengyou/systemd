@@ -1,0 +1,68 @@
+From dbdba4f2998313949e7c5f5a47f4ef938e759a86 Mon Sep 17 00:00:00 2001
+From: Chris Down <chris@chrisdown.name>
+Date: Fri, 3 May 2019 08:19:05 -0400
+Subject: [PATCH] cgroup: Readd some plumbing for DefaultMemoryMin
+
+Somehow these got lost in the previous PR, rendering DefaultMemoryMin
+not very useful.
+
+(cherry picked from commit 7e7223b3d57c950b399352a92e1d817f7c463602)
+
+Related: #1763435
+---
+ src/core/dbus-cgroup.c                | 1 +
+ src/core/load-fragment-gperf.gperf.m4 | 1 +
+ src/shared/bus-unit-util.c            | 2 +-
+ src/shared/bus-util.c                 | 2 +-
+ 4 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/dbus-cgroup.c b/src/core/dbus-cgroup.c
+index e1278c317a..e34ff3a016 100644
+--- a/src/core/dbus-cgroup.c
++++ b/src/core/dbus-cgroup.c
+@@ -354,6 +354,7 @@ const sd_bus_vtable bus_cgroup_vtable[] = {
+         SD_BUS_PROPERTY("BlockIOWriteBandwidth", "a(st)", property_get_blockio_device_bandwidths, 0, 0),
+         SD_BUS_PROPERTY("MemoryAccounting", "b", bus_property_get_bool, offsetof(CGroupContext, memory_accounting), 0),
+         SD_BUS_PROPERTY("DefaultMemoryLow", "t", NULL, offsetof(CGroupContext, default_memory_low), 0),
++        SD_BUS_PROPERTY("DefaultMemoryMin", "t", NULL, offsetof(CGroupContext, default_memory_min), 0),
+         SD_BUS_PROPERTY("MemoryMin", "t", NULL, offsetof(CGroupContext, memory_min), 0),
+         SD_BUS_PROPERTY("MemoryLow", "t", NULL, offsetof(CGroupContext, memory_low), 0),
+         SD_BUS_PROPERTY("MemoryHigh", "t", NULL, offsetof(CGroupContext, memory_high), 0),
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index 43cc78fdea..6d21b2e433 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -172,6 +172,7 @@ $1.CPUQuota,                     config_parse_cpu_quota,             0,
+ $1.CPUQuotaPeriodSec,            config_parse_sec_def_infinity,      0,                             offsetof($1, cgroup_context.cpu_quota_period_usec)
+ $1.MemoryAccounting,             config_parse_bool,                  0,                             offsetof($1, cgroup_context.memory_accounting)
+ $1.MemoryMin,                    config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
++$1.DefaultMemoryMin,             config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+ $1.DefaultMemoryLow,             config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+ $1.MemoryLow,                    config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+ $1.MemoryHigh,                   config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index f88730a85d..77788f0fe2 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -429,7 +429,7 @@ static int bus_append_cgroup_property(sd_bus_message *m, const char *field, cons
+                 return 1;
+         }
+ 
+-        if (STR_IN_SET(field, "MemoryMin", "DefaultMemoryLow", "MemoryLow", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemoryLimit", "TasksMax")) {
++        if (STR_IN_SET(field, "MemoryMin", "DefaultMemoryLow", "DefaultMemoryMin", "MemoryLow", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemoryLimit", "TasksMax")) {
+ 
+                 if (isempty(eq) || streq(eq, "infinity")) {
+                         r = sd_bus_message_append(m, "(sv)", field, "t", CGROUP_LIMIT_MAX);
+diff --git a/src/shared/bus-util.c b/src/shared/bus-util.c
+index 0ba2712deb..ff0e800347 100644
+--- a/src/shared/bus-util.c
++++ b/src/shared/bus-util.c
+@@ -774,7 +774,7 @@ int bus_print_property(const char *name, sd_bus_message *m, bool value, bool all
+ 
+                         print_property(name, "%s", "[not set]");
+ 
+-                else if ((STR_IN_SET(name, "DefaultMemoryLow", "MemoryLow", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemoryLimit") && u == CGROUP_LIMIT_MAX) ||
++                else if ((STR_IN_SET(name, "DefaultMemoryLow", "DefaultMemoryMin", "MemoryLow", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemoryLimit") && u == CGROUP_LIMIT_MAX) ||
+                          (STR_IN_SET(name, "TasksMax", "DefaultTasksMax") && u == (uint64_t) -1) ||
+                          (startswith(name, "Limit") && u == (uint64_t) -1) ||
+                          (startswith(name, "DefaultLimit") && u == (uint64_t) -1))

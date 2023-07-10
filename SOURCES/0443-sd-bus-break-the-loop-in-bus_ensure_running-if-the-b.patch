@@ -1,0 +1,44 @@
+From 6a50c735a3bbf98d06fbfa7815f7bdc14ea96f9f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 14 Oct 2020 14:03:13 +0200
+Subject: [PATCH] sd-bus: break the loop in bus_ensure_running() if the bus is
+ not connecting
+
+This might fix #17025:
+> the call trace is
+> bus_ensure_running -> sd_bus_process -> bus_process_internal -> process_closeing --> sd_bus_close
+>                                                                                  |
+>                                                                                  \-> process_match
+
+We ended doing callouts to the Disconnected matches from bus_ensure_running()
+and shouldn't. bus_ensure_running() should never do callouts. This change
+should fix this however: once we notice that the connection is going down we
+will now fail instantly with ENOTOCONN instead of calling any callbacks.
+
+(cherry picked from commit 93a59b1ae5d3bcb0ec1488ebc13d0d1ff4d1729a)
+
+Resolves: #1885553
+---
+ src/libsystemd/sd-bus/sd-bus.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/libsystemd/sd-bus/sd-bus.c b/src/libsystemd/sd-bus/sd-bus.c
+index a3509f7e89..c65e24b2d1 100644
+--- a/src/libsystemd/sd-bus/sd-bus.c
++++ b/src/libsystemd/sd-bus/sd-bus.c
+@@ -2059,12 +2059,13 @@ int bus_ensure_running(sd_bus *bus) {
+ 
+         assert(bus);
+ 
+-        if (IN_SET(bus->state, BUS_UNSET, BUS_CLOSED, BUS_CLOSING))
+-                return -ENOTCONN;
+         if (bus->state == BUS_RUNNING)
+                 return 1;
+ 
+         for (;;) {
++                if (IN_SET(bus->state, BUS_UNSET, BUS_CLOSED, BUS_CLOSING))
++                        return -ENOTCONN;
++
+                 r = sd_bus_process(bus, NULL);
+                 if (r < 0)
+                         return r;

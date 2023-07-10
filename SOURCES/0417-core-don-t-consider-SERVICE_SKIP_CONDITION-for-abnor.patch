@@ -1,0 +1,170 @@
+From 41346615264e01c6ff6118e09cf3ac4b4c71e89d Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Wed, 10 Jun 2020 01:18:00 -0700
+Subject: [PATCH] core: don't consider SERVICE_SKIP_CONDITION for abnormal or
+ failure restarts
+
+Fixes: #16115
+(cherry picked from commit bb9244781c6fc7608f7cac910269f8987b8adc01)
+
+Related: #1737283
+---
+ src/core/service.c                       |  4 +--
+ test/TEST-51-ISSUE-16115/Makefile        |  1 +
+ test/TEST-51-ISSUE-16115/repro-1.service |  9 +++++
+ test/TEST-51-ISSUE-16115/repro-2.service |  9 +++++
+ test/TEST-51-ISSUE-16115/test.sh         | 46 ++++++++++++++++++++++++
+ test/TEST-51-ISSUE-16115/testsuite.sh    | 19 ++++++++++
+ test/test-functions                      |  2 +-
+ 7 files changed, 87 insertions(+), 3 deletions(-)
+ create mode 120000 test/TEST-51-ISSUE-16115/Makefile
+ create mode 100644 test/TEST-51-ISSUE-16115/repro-1.service
+ create mode 100644 test/TEST-51-ISSUE-16115/repro-2.service
+ create mode 100755 test/TEST-51-ISSUE-16115/test.sh
+ create mode 100755 test/TEST-51-ISSUE-16115/testsuite.sh
+
+diff --git a/src/core/service.c b/src/core/service.c
+index 92be4280f6..1d98ee37fd 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -1637,10 +1637,10 @@ static bool service_shall_restart(Service *s) {
+                 return s->result == SERVICE_SUCCESS;
+ 
+         case SERVICE_RESTART_ON_FAILURE:
+-                return s->result != SERVICE_SUCCESS;
++                return !IN_SET(s->result, SERVICE_SUCCESS, SERVICE_SKIP_CONDITION);
+ 
+         case SERVICE_RESTART_ON_ABNORMAL:
+-                return !IN_SET(s->result, SERVICE_SUCCESS, SERVICE_FAILURE_EXIT_CODE);
++                return !IN_SET(s->result, SERVICE_SUCCESS, SERVICE_FAILURE_EXIT_CODE, SERVICE_SKIP_CONDITION);
+ 
+         case SERVICE_RESTART_ON_WATCHDOG:
+                 return s->result == SERVICE_FAILURE_WATCHDOG;
+diff --git a/test/TEST-51-ISSUE-16115/Makefile b/test/TEST-51-ISSUE-16115/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-51-ISSUE-16115/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-51-ISSUE-16115/repro-1.service b/test/TEST-51-ISSUE-16115/repro-1.service
+new file mode 100644
+index 0000000000..96ecabe234
+--- /dev/null
++++ b/test/TEST-51-ISSUE-16115/repro-1.service
+@@ -0,0 +1,9 @@
++[Unit]
++Description=Issue 16115 Repro with on-abnormal
++
++[Service]
++Type=simple
++Restart=on-abnormal
++ExecCondition=/bin/false
++ExecStart=sleep 100
++RestartSec=1
+diff --git a/test/TEST-51-ISSUE-16115/repro-2.service b/test/TEST-51-ISSUE-16115/repro-2.service
+new file mode 100644
+index 0000000000..6015ad8080
+--- /dev/null
++++ b/test/TEST-51-ISSUE-16115/repro-2.service
+@@ -0,0 +1,9 @@
++[Unit]
++Description=Issue 16115 Repro with on-failure
++
++[Service]
++Type=simple
++Restart=on-failure
++ExecCondition=/bin/false
++ExecStart=sleep 100
++RestartSec=1
+diff --git a/test/TEST-51-ISSUE-16115/test.sh b/test/TEST-51-ISSUE-16115/test.sh
+new file mode 100755
+index 0000000000..09ac96ffce
+--- /dev/null
++++ b/test/TEST-51-ISSUE-16115/test.sh
+@@ -0,0 +1,46 @@
++#!/usr/bin/env bash
++set -e
++TEST_DESCRIPTION="Test ExecCondition= does not restart on abnormal or failure"
++. $TEST_BASE_DIR/test-functions
++
++test_setup() {
++    create_empty_image
++    mkdir -p $TESTDIR/root
++    mount ${LOOPDEV}p1 $TESTDIR/root
++
++    (
++        LOG_LEVEL=5
++        eval $(udevadm info --export --query=env --name=${LOOPDEV}p2)
++
++        setup_basic_environment
++
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
++        # setup the testsuite service
++        cat >$initdir/etc/systemd/system/testsuite.service <<EOF
++[Unit]
++Description=Testsuite service
++
++[Service]
++ExecStart=/testsuite.sh
++Type=oneshot
++EOF
++
++        cp testsuite.sh $initdir/
++        cp repro-?.service $initdir/etc/systemd/system/
++
++        setup_testsuite
++    )
++    setup_nspawn_root
++
++    ddebug "umount $TESTDIR/root"
++    umount $TESTDIR/root
++}
++
++do_test "$@"
+diff --git a/test/TEST-51-ISSUE-16115/testsuite.sh b/test/TEST-51-ISSUE-16115/testsuite.sh
+new file mode 100755
+index 0000000000..695896ab7b
+--- /dev/null
++++ b/test/TEST-51-ISSUE-16115/testsuite.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++set -ex
++set -o pipefail
++
++systemd-analyze log-level debug
++systemd-analyze log-target console
++
++systemctl start repro-1
++systemctl start repro-2
++sleep 5 # wait a bit in case there are restarts so we can count them below
++
++[[ "$(systemctl show repro-1 --value -p NRestarts)" == "0" ]]
++[[ "$(systemctl show repro-2 --value -p NRestarts)" == "0" ]]
++
++systemd-analyze log-level info
++
++echo OK > /testok
++
++exit 0
+diff --git a/test/test-functions b/test/test-functions
+index 7c4230b078..4d7832b1fb 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -23,7 +23,7 @@ fi
+ 
+ PATH_TO_INIT=$ROOTLIBDIR/systemd
+ 
+-BASICTOOLS="test sh bash setsid loadkeys setfont login sulogin gzip sleep echo mount umount cryptsetup date dmsetup modprobe sed cmp tee rm true false chmod chown ln xargs"
++BASICTOOLS="test sh bash setsid loadkeys setfont login sulogin gzip sleep echo mount umount cryptsetup date dmsetup modprobe sed cmp tee rm true false chmod chown ln xargs env"
+ DEBUGTOOLS="df free ls stty cat ps ln ip route dmesg dhclient mkdir cp ping dhclient strace less grep id tty touch du sort hostname find"
+ 
+ STATEDIR="${BUILD_DIR:-.}/test/$(basename $(dirname $(realpath $0)))"

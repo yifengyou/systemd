@@ -1,0 +1,65 @@
+From bbfebb42c9023e36fb66f0e3b0bad132ab2fba55 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Sun, 15 Dec 2019 21:47:21 +0900
+Subject: [PATCH] sd-netlink: introduce sd_netlink_message_append_strv()
+
+(cherry picked from commit 6d725977c4f98a8f5effc33f44aa646cc2b6a0b7)
+
+Related: #2005008
+---
+ src/libsystemd/sd-netlink/netlink-message.c | 29 +++++++++++++++++++++
+ src/systemd/sd-netlink.h                    |  1 +
+ 2 files changed, 30 insertions(+)
+
+diff --git a/src/libsystemd/sd-netlink/netlink-message.c b/src/libsystemd/sd-netlink/netlink-message.c
+index 5723e1d21c..55d6510b63 100644
+--- a/src/libsystemd/sd-netlink/netlink-message.c
++++ b/src/libsystemd/sd-netlink/netlink-message.c
+@@ -259,6 +259,35 @@ int sd_netlink_message_append_string(sd_netlink_message *m, unsigned short type,
+         return 0;
+ }
+ 
++int sd_netlink_message_append_strv(sd_netlink_message *m, unsigned short type, char * const *data) {
++        size_t length, size;
++        char * const *p;
++        int r;
++
++        assert_return(m, -EINVAL);
++        assert_return(!m->sealed, -EPERM);
++        assert_return(data, -EINVAL);
++
++        r = message_attribute_has_type(m, &size, type, NETLINK_TYPE_STRING);
++        if (r < 0)
++                return r;
++
++        STRV_FOREACH(p, data) {
++                if (size) {
++                        length = strnlen(*p, size+1);
++                        if (length > size)
++                                return -EINVAL;
++                } else
++                        length = strlen(*p);
++
++                r = add_rtattr(m, type, *p, length + 1);
++                if (r < 0)
++                        return r;
++        }
++
++        return 0;
++}
++
+ int sd_netlink_message_append_flag(sd_netlink_message *m, unsigned short type) {
+         size_t size;
+         int r;
+diff --git a/src/systemd/sd-netlink.h b/src/systemd/sd-netlink.h
+index 1f5c093f11..5a05cd4485 100644
+--- a/src/systemd/sd-netlink.h
++++ b/src/systemd/sd-netlink.h
+@@ -67,6 +67,7 @@ int sd_netlink_attach_event(sd_netlink *nl, sd_event *e, int64_t priority);
+ int sd_netlink_detach_event(sd_netlink *nl);
+ 
+ int sd_netlink_message_append_string(sd_netlink_message *m, unsigned short type, const char *data);
++int sd_netlink_message_append_strv(sd_netlink_message *m, unsigned short type, char * const *data);
+ int sd_netlink_message_append_flag(sd_netlink_message *m, unsigned short type);
+ int sd_netlink_message_append_u8(sd_netlink_message *m, unsigned short type, uint8_t data);
+ int sd_netlink_message_append_u16(sd_netlink_message *m, unsigned short type, uint16_t data);

@@ -1,0 +1,63 @@
+From 0feaf0be515c02a10ca12f726b4a8424262cf09c Mon Sep 17 00:00:00 2001
+From: Jan Macku <jamacku@redhat.com>
+Date: Tue, 19 Jul 2022 12:43:43 +0200
+Subject: [PATCH] ci(Mergify): Add `ci-waived` logic
+
+RHEL-only
+
+Related: #2087152
+---
+ .mergify.yml | 32 ++++++++++++++++++--------------
+ 1 file changed, 18 insertions(+), 14 deletions(-)
+
+diff --git a/.mergify.yml b/.mergify.yml
+index 6fa400effd..3afd04f18e 100644
+--- a/.mergify.yml
++++ b/.mergify.yml
+@@ -4,6 +4,7 @@
+ pull_request_rules:
+   - name: Add `needs-ci` label on CI fail
+     conditions:
++      - label!=ci-waived
+       - or:
+         # Unit tests
+         - -check-success=build (stream8, GCC)
+@@ -27,21 +28,24 @@ pull_request_rules:
+ 
+   - name: Remove `needs-ci` label on CI success
+     conditions:
+-      # Unit tests
+-      - check-success=build (stream8, GCC)
+-      - check-success=build (stream8, GCC_ASAN)
+-      # CentOS Stream CI
+-      - check-success=CentOS CI (CentOS Stream 8)
+-      # LGTM
+       - or:
+-        - "check-success=LGTM analysis: JavaScript"
+-        - "check-neutral=LGTM analysis: JavaScript"
+-      - or:
+-        - "check-success=LGTM analysis: Python"
+-        - "check-neutral=LGTM analysis: Python"
+-      - or:    
+-        - "check-success=LGTM analysis: C/C++"
+-        - "check-neutral=LGTM analysis: C/C++"
++        - label=ci-waived
++        - and:
++          # Unit tests
++          - check-success=build (stream8, GCC)
++          - check-success=build (stream8, GCC_ASAN)
++          # CentOS Stream CI
++          - check-success=CentOS CI (CentOS Stream 8)
++          # LGTM
++          - or:
++            - "check-success=LGTM analysis: JavaScript"
++            - "check-neutral=LGTM analysis: JavaScript"
++          - or:
++            - "check-success=LGTM analysis: Python"
++            - "check-neutral=LGTM analysis: Python"
++          - or:    
++            - "check-success=LGTM analysis: C/C++"
++            - "check-neutral=LGTM analysis: C/C++"
+     actions:
+       label:
+         remove:

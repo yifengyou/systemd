@@ -1,0 +1,41 @@
+From d9ae3222cfbd5d2a48e6dbade6617085cc76f1c1 Mon Sep 17 00:00:00 2001
+From: HATAYAMA Daisuke <d.hatayama@fujitsu.com>
+Date: Tue, 25 Feb 2020 13:35:50 -0500
+Subject: [PATCH] resolved: Recover missing PrivateTmp=yes and
+ ProtectSystem=strict
+
+Since the commit b61e8046ebcb28225423fc0073183d68d4c577c4,
+systemd-resolved.service often fails to start with the following message:
+
+    Failed at step NAMESPACE spawning /usr/bin/mount: Read-only file system
+
+This is because dropping DynamicUser=yes dropped implicit PrivateTmp=yes and
+also implicit After=systemd-tmpfiles-setup.service, and thus
+systemd-resolved.service can start before systemd-remount-fs.service. As a
+result, mount operations associated with PrivateDevices= can be performed to
+still read-only filesystems.
+
+To fix this issue, it's better to recover PrivateTmp=yes and
+ProtectSystem=strict just as the upstream commit
+62fb7e80fcc45a1530ed58a84980be8cfafa9b3e (Revert "resolve: enable DynamicUser=
+for systemd-resolved.service").
+
+Resolves: #1810869
+---
+ units/systemd-resolved.service.in | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/units/systemd-resolved.service.in b/units/systemd-resolved.service.in
+index 6c2ad5ca86..aad1a53a5f 100644
+--- a/units/systemd-resolved.service.in
++++ b/units/systemd-resolved.service.in
+@@ -28,7 +28,9 @@ WatchdogSec=3min
+ User=systemd-resolve
+ CapabilityBoundingSet=CAP_SETPCAP CAP_NET_RAW CAP_NET_BIND_SERVICE
+ AmbientCapabilities=CAP_SETPCAP CAP_NET_RAW CAP_NET_BIND_SERVICE
++PrivateTmp=yes
+ PrivateDevices=yes
++ProtectSystems=strict
+ ProtectHome=yes
+ ProtectControlGroups=yes
+ ProtectKernelTunables=yes

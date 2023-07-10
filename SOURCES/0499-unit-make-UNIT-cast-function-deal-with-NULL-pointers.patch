@@ -1,0 +1,31 @@
+From a11334f0eae67b5159a416193e2e37634281000a Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 8 Nov 2018 09:33:31 +0100
+Subject: [PATCH] unit: make UNIT() cast function deal with NULL pointers
+
+Fixes: #10681
+(cherry picked from commit bbf11206230d1b089118971f98a047151cb5c4fa)
+
+Related: #1871827
+---
+ src/core/unit.h | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/unit.h b/src/core/unit.h
+index 6e37fd6f5a..ec45b5fb48 100644
+--- a/src/core/unit.h
++++ b/src/core/unit.h
+@@ -597,7 +597,12 @@ extern const UnitVTable * const unit_vtable[_UNIT_TYPE_MAX];
+         }
+ 
+ /* For casting the various unit types into a unit */
+-#define UNIT(u) (&(u)->meta)
++#define UNIT(u)                                         \
++        ({                                              \
++                typeof(u) _u_ = (u);                    \
++                Unit *_w_ = _u_ ? &(_u_)->meta : NULL;  \
++                _w_;                                    \
++        })
+ 
+ #define UNIT_HAS_EXEC_CONTEXT(u) (UNIT_VTABLE(u)->exec_context_offset > 0)
+ #define UNIT_HAS_CGROUP_CONTEXT(u) (UNIT_VTABLE(u)->cgroup_context_offset > 0)

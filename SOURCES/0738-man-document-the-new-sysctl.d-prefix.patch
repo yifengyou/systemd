@@ -1,0 +1,27 @@
+From b1b5f4625bda683871e8120d2c7b4a59b3ad3951 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 26 Jul 2019 09:24:11 +0200
+Subject: [PATCH] man: document the new sysctl.d/ - prefix
+
+(cherry picked from commit e08be64937293e3aa8adb08048497520d58445c6)
+
+Related: #2037807
+---
+ man/sysctl.d.xml | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/man/sysctl.d.xml b/man/sysctl.d.xml
+index 7c8fde0dba..61820f2c4b 100644
+--- a/man/sysctl.d.xml
++++ b/man/sysctl.d.xml
+@@ -60,6 +60,10 @@
+     <filename>/proc/sys/net/ipv4/conf/enp3s0.200/forwarding</filename>.
+     </para>
+ 
++    <para>If a variable assignment is prefixed with a single <literal>-</literal> character, any attempts to
++    set it that fail will be ignored (though are logged). Moreover, any access permission errors, and
++    attempts to write variables not defined on the local system are ignored (and logged) too.</para>
++
+     <para>The settings configured with <filename>sysctl.d</filename>
+     files will be applied early on boot. The network
+     interface-specific options will also be applied individually for

@@ -1,0 +1,69 @@
+From 3275093305c1305d163f26cb4e4d614a87f8ff43 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Fri, 27 Nov 2020 10:25:12 +0100
+Subject: [PATCH] rename function
+
+This happened upstream in commit
+54a8423788ec3cc6240959ab9f5cdac40baf047a, but I don't want to backport
+the whole commit...
+
+Related: #2005008
+---
+ src/libsystemd-network/network-internal.c | 2 +-
+ src/libsystemd-network/network-internal.h | 2 +-
+ src/network/networkd-network-gperf.gperf  | 2 +-
+ src/udev/net/link-config-gperf.gperf      | 2 +-
+ 4 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/libsystemd-network/network-internal.c b/src/libsystemd-network/network-internal.c
+index 0849b44ee2..629e858def 100644
+--- a/src/libsystemd-network/network-internal.c
++++ b/src/libsystemd-network/network-internal.c
+@@ -183,7 +183,7 @@ int config_parse_net_condition(const char *unit,
+         return 0;
+ }
+ 
+-int config_parse_ifnames(
++int config_parse_match_ifnames(
+                 const char *unit,
+                 const char *filename,
+                 unsigned line,
+diff --git a/src/libsystemd-network/network-internal.h b/src/libsystemd-network/network-internal.h
+index 883f34b95c..9074758bbb 100644
+--- a/src/libsystemd-network/network-internal.h
++++ b/src/libsystemd-network/network-internal.h
+@@ -34,7 +34,7 @@ bool net_match_config(Set *match_mac,
+ CONFIG_PARSER_PROTOTYPE(config_parse_net_condition);
+ CONFIG_PARSER_PROTOTYPE(config_parse_hwaddr);
+ CONFIG_PARSER_PROTOTYPE(config_parse_hwaddrs);
+-CONFIG_PARSER_PROTOTYPE(config_parse_ifnames);
++CONFIG_PARSER_PROTOTYPE(config_parse_match_ifnames);
+ CONFIG_PARSER_PROTOTYPE(config_parse_ifalias);
+ CONFIG_PARSER_PROTOTYPE(config_parse_iaid);
+ CONFIG_PARSER_PROTOTYPE(config_parse_bridge_port_priority);
+diff --git a/src/network/networkd-network-gperf.gperf b/src/network/networkd-network-gperf.gperf
+index 6ad5257f79..c4a2eccdc2 100644
+--- a/src/network/networkd-network-gperf.gperf
++++ b/src/network/networkd-network-gperf.gperf
+@@ -24,7 +24,7 @@ Match.MACAddress,                       config_parse_hwaddrs,
+ Match.Path,                             config_parse_strv,                              0,                             offsetof(Network, match_path)
+ Match.Driver,                           config_parse_strv,                              0,                             offsetof(Network, match_driver)
+ Match.Type,                             config_parse_strv,                              0,                             offsetof(Network, match_type)
+-Match.Name,                             config_parse_ifnames,                           0,                             offsetof(Network, match_name)
++Match.Name,                             config_parse_match_ifnames,                           0,                             offsetof(Network, match_name)
+ Match.Host,                             config_parse_net_condition,                     CONDITION_HOST,                offsetof(Network, match_host)
+ Match.Virtualization,                   config_parse_net_condition,                     CONDITION_VIRTUALIZATION,      offsetof(Network, match_virt)
+ Match.KernelCommandLine,                config_parse_net_condition,                     CONDITION_KERNEL_COMMAND_LINE, offsetof(Network, match_kernel_cmdline)
+diff --git a/src/udev/net/link-config-gperf.gperf b/src/udev/net/link-config-gperf.gperf
+index 5640fa0513..b37836d852 100644
+--- a/src/udev/net/link-config-gperf.gperf
++++ b/src/udev/net/link-config-gperf.gperf
+@@ -20,7 +20,7 @@ struct ConfigPerfItem;
+ %includes
+ %%
+ Match.MACAddress,                config_parse_hwaddrs,       0,                             offsetof(link_config, match_mac)
+-Match.OriginalName,              config_parse_ifnames,       0,                             offsetof(link_config, match_name)
++Match.OriginalName,              config_parse_match_ifnames,       0,                             offsetof(link_config, match_name)
+ Match.Path,                      config_parse_strv,          0,                             offsetof(link_config, match_path)
+ Match.Driver,                    config_parse_strv,          0,                             offsetof(link_config, match_driver)
+ Match.Type,                      config_parse_strv,          0,                             offsetof(link_config, match_type)

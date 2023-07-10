@@ -1,0 +1,25 @@
+From 4caa887ae8eabc087d6f9f2b233c96c220de8b02 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Fri, 16 Nov 2018 07:20:44 +0100
+Subject: [PATCH] tests: add a reproducer for a memory leak fixed in
+ 30eddcd51b8a472e05d3b8d1 in August
+
+(cherry picked from commit 1dd485b700fe9ad94d7a780f14fcf18a4738ace4)
+
+Resolves: #1764560
+---
+ ...leak-ab161e601e82f1ec31d11e2cbae2747834ce9e43 | Bin 0 -> 1847 bytes
+ 1 file changed, 0 insertions(+), 0 deletions(-)
+ create mode 100644 test/fuzz/fuzz-journald-kmsg/leak-ab161e601e82f1ec31d11e2cbae2747834ce9e43
+
+diff --git a/test/fuzz/fuzz-journald-kmsg/leak-ab161e601e82f1ec31d11e2cbae2747834ce9e43 b/test/fuzz/fuzz-journald-kmsg/leak-ab161e601e82f1ec31d11e2cbae2747834ce9e43
+new file mode 100644
+index 0000000000000000000000000000000000000000..424ae5cb010aa519758e6af90cc981795b68d3fd
+GIT binary patch
+literal 1847
+zcmXps(lIeJ&@nVNGBPkSGqo_&(Y4M<t>jX0aSiiycD2<{NiEaQE6vG)izFLb8I!<a
+b7zLvtFd70lLcjrs_^9w`2#kin;0*x)kUJOk
+
+literal 0
+HcmV?d00001
+

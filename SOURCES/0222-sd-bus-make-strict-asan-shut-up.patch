@@ -1,0 +1,45 @@
+From fbe5fa22f5b99d4e444db54aadb661e9c932eb6c Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 16 Nov 2018 13:00:40 +0100
+Subject: [PATCH] sd-bus: make strict asan shut up
+
+asan doesn't like it if we use strndup() (i.e. a string function) on a
+non-NULL terminated buffer (i.e. something that isn't really a string).
+
+Let's hence use memdup_suffix0() instead of strndup(), which is more
+appropriate for binary data that is to become a string.
+
+Fixes: #10385
+(cherry picked from commit ac0a94f7438b49a0890d9806db1fa211a5bca10a)
+
+Resolves: #1761519
+---
+ src/libsystemd/sd-bus/bus-message.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/libsystemd/sd-bus/bus-message.c b/src/libsystemd/sd-bus/bus-message.c
+index 53cbd675b7..19cb2b9a97 100644
+--- a/src/libsystemd/sd-bus/bus-message.c
++++ b/src/libsystemd/sd-bus/bus-message.c
+@@ -5101,6 +5101,7 @@ int bus_message_parse_fields(sd_bus_message *m) {
+                                 return -EBADMSG;
+ 
+                         if (*p == 0) {
++                                char *k;
+                                 size_t l;
+ 
+                                 /* We found the beginning of the signature
+@@ -5114,9 +5115,11 @@ int bus_message_parse_fields(sd_bus_message *m) {
+                                     p[1 + l - 1] != SD_BUS_TYPE_STRUCT_END)
+                                         return -EBADMSG;
+ 
+-                                if (free_and_strndup(&m->root_container.signature,
+-                                                     p + 1 + 1, l - 2) < 0)
++                                k = memdup_suffix0(p + 1 + 1, l - 2);
++                                if (!k)
+                                         return -ENOMEM;
++
++                                free_and_replace(m->root_container.signature, k);
+                                 break;
+                         }
+ 

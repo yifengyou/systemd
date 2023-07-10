@@ -1,0 +1,41 @@
+From fe6e09aa0931112e7e3750801858c66129c7a3a8 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Tue, 5 Mar 2019 16:08:00 +0100
+Subject: [PATCH] test: try to determine QEMU_SMP dynamically
+
+If the QEMU_SMP value has not been explicitly set, try to determine it
+from the number of online CPUs using the nproc utility. If this approach
+fails, fall back to the default value QEMU_SMP=1.
+
+This change should significantly help when running integration tests
+under QEMU on multicore systems.
+
+(cherry picked from commit 5bfb2a93a4a36bba0d24199553dcda6e560cbb75)
+
+Related: #1823767
+---
+ test/test-functions | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/test/test-functions b/test/test-functions
+index 0938e6e826..3f1c327f3c 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -120,7 +120,16 @@ run_qemu() {
+         fi
+     fi
+ 
+-    [ "$QEMU_SMP" ]   || QEMU_SMP=1
++    # If QEMU_SMP was not explicitly set, try to determine the value 'dynamically'
++    # i.e. use the number of online CPUs on the host machine. If the nproc utility
++    # is not installed or there's some other error when calling it, fall back
++    # to the original value (QEMU_SMP=1).
++    if ! [ "$QEMU_SMP" ]; then
++        if ! QEMU_SMP=$(nproc); then
++            dwarn "nproc utility is not installed, falling back to QEMU_SMP=1"
++            QEMU_SMP=1
++        fi
++    fi
+ 
+     find_qemu_bin || return 1
+ 

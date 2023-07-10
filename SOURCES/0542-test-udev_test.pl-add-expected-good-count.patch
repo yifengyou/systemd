@@ -1,0 +1,78 @@
+From e0cee95e0cc401ce120a1b56cdb7a8b9afbd6bcf Mon Sep 17 00:00:00 2001
+From: Martin Wilck <mwilck@suse.com>
+Date: Thu, 26 Apr 2018 14:07:27 +0200
+Subject: [PATCH] test/udev_test.pl: add "expected good" count
+
+Since 'test/udev-test.pl: count "good" results', we know how many
+checks succeeded. Add an "expected good" count to make that number
+more meaningful.
+
+(cherry picked from commit cbeb23d863d540408cd1fb274d78213f59639df2)
+
+Related: #1642728
+---
+ test/udev-test.pl | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 33a76ad292..cf6ca6b80c 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -2338,6 +2338,7 @@ sub udev {
+ 
+ my $error = 0;
+ my $good = 0;
++my $exp_good = 0;
+ 
+ sub permissions_test {
+         my($rules, $uid, $gid, $mode) = @_;
+@@ -2685,12 +2686,27 @@ sub run_test {
+         my ($rules, $number, $sema) = @_;
+         my $rc;
+         my @devices;
++        my $ntests;
++        my $cur_good = $good;
++        my $cur_error = $error;
+ 
+         if (!defined $rules->{devices}) {
+                 $rules->{devices} = all_block_devs($rules->{generator});
+         }
+         @devices = @{$rules->{devices}};
++        # For each device: exit status and devnode test for add & remove
++        $ntests += 4 * ($#devices + 1);
+ 
++        foreach my $dev (@devices) {
++                $ntests += 2 * ($#{$dev->{exp_links}} + 1)
++                    + ($#{$dev->{not_exp_links}} + 1)
++                    + (defined $dev->{exp_perms} ? 1 : 0)
++                    + (defined $dev->{exp_majorminor} ? 1 : 0);
++        }
++        if (defined $rules->{repeat}) {
++                $ntests *= $rules->{repeat};
++        }
++        $exp_good += $ntests;
+         print "TEST $number: $rules->{desc}\n";
+         create_rules(\$rules->{rules});
+ 
+@@ -2712,10 +2728,11 @@ sub run_test {
+                 check_remove($dev);
+         }
+ 
+-        print "\n";
+         if (defined($rules->{repeat}) && --($rules->{repeat}) > 0) {
+                 goto REPEAT;
+         }
++        printf "TEST $number: errors: %d good: %d/%d\n\n", $error-$cur_error,
++            $good-$cur_good, $ntests;
+ 
+         if (defined($rules->{option}) && $rules->{option} eq "clean") {
+                 udev_setup();
+@@ -2794,7 +2811,7 @@ if ($list[0]) {
+ }
+ 
+ $sema->remove;
+-print "$error errors occurred. $good good results.\n\n";
++print "$error errors occurred. $good/$exp_good good results.\n\n";
+ 
+ cleanup();
+ 

@@ -1,0 +1,90 @@
+From 4703c08fe3a8bfa1bc9b893e8bde365b1cbeffd9 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 6 Aug 2018 18:14:11 +0200
+Subject: [PATCH] logind: save/restore User object's "stopping" field during
+ restarts
+
+Whether we are stopping or not is highly relevant, hence don't forget it
+across restarts.
+
+(cherry picked from commit d865bc024bf28c17120d7322a81e9a99997a59f6)
+
+Related: #1642460
+---
+ src/login/logind-user.c | 20 +++++++++++++++-----
+ src/login/logind-user.h |  5 +++--
+ 2 files changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index 17ed361411..35b2ca5489 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -136,9 +136,11 @@ static int user_save_internal(User *u) {
+         fprintf(f,
+                 "# This is private data. Do not parse.\n"
+                 "NAME=%s\n"
+-                "STATE=%s\n",
++                "STATE=%s\n"         /* friendly user-facing state */
++                "STOPPING=%s\n",     /* low-level state */
+                 u->name,
+-                user_state_to_string(user_get_state(u)));
++                user_state_to_string(user_get_state(u)),
++                yes_no(u->stopping));
+ 
+         /* LEGACY: no-one reads RUNTIME= anymore, drop it at some point */
+         if (u->runtime_path)
+@@ -277,14 +279,14 @@ int user_save(User *u) {
+ }
+ 
+ int user_load(User *u) {
+-        _cleanup_free_ char *realtime = NULL, *monotonic = NULL;
++        _cleanup_free_ char *realtime = NULL, *monotonic = NULL, *stopping = NULL;
+         int r;
+ 
+         assert(u);
+ 
+         r = parse_env_file(NULL, u->state_file, NEWLINE,
+                            "SERVICE_JOB", &u->service_job,
+-                           "SLICE_JOB",   &u->slice_job,
++                           "STOPPING",    &stopping,
+                            "REALTIME",    &realtime,
+                            "MONOTONIC",   &monotonic,
+                            NULL);
+@@ -293,12 +295,20 @@ int user_load(User *u) {
+         if (r < 0)
+                 return log_error_errno(r, "Failed to read %s: %m", u->state_file);
+ 
++        if (stopping) {
++                r = parse_boolean(stopping);
++                if (r < 0)
++                        log_debug_errno(r, "Failed to parse 'STOPPING' boolean: %s", stopping);
++                else
++                        u->stopping = r;
++        }
++
+         if (realtime)
+                 timestamp_deserialize(realtime, &u->timestamp.realtime);
+         if (monotonic)
+                 timestamp_deserialize(monotonic, &u->timestamp.monotonic);
+ 
+-        return r;
++        return 0;
+ }
+ 
+ static int user_start_service(User *u) {
+diff --git a/src/login/logind-user.h b/src/login/logind-user.h
+index eba2325284..03e020b870 100644
+--- a/src/login/logind-user.h
++++ b/src/login/logind-user.h
+@@ -36,8 +36,9 @@ struct User {
+         dual_timestamp timestamp;
+ 
+         bool in_gc_queue:1;
+-        bool started:1;
+-        bool stopping:1;
++
++        bool started:1;       /* Whenever the user being started, has been started or is being stopped again. */
++        bool stopping:1;      /* Whenever the user is being stopped or has been stopped. */
+ 
+         LIST_HEAD(Session, sessions);
+         LIST_FIELDS(User, gc_queue);

@@ -1,0 +1,28 @@
+From c63273de445789ffeea961448fda51d21c924f8c Mon Sep 17 00:00:00 2001
+From: Martin Wilck <mwilck@suse.com>
+Date: Tue, 24 Apr 2018 18:16:59 +0200
+Subject: [PATCH] test/udev-test.pl: remove bogus rules from magic subsys test
+
+These rules have survived from an ancient version of the code
+and save no purpose any more.
+
+(cherry picked from commit 86634df43b715f3f77c7de73a3ef6566e5cdf571)
+
+Related: #1642728
+---
+ test/udev-test.pl | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 7465b5859e..6928439d14 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -2017,8 +2017,6 @@ EOF
+                                 exp_perms       => "0:0:0600",
+                         }],
+                 rules           => <<EOF
+-KERNEL=="sda", PROGRAM="/bin/true create-envp"
+-KERNEL=="sda", ENV{TESTENV}="change-envp"
+ KERNEL=="sda", SYMLINK+="%k-%s{[dmi/id]product_name}-end"
+ EOF
+         },

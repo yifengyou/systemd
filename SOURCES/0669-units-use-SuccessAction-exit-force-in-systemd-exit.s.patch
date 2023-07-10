@@ -1,0 +1,56 @@
+From b0394ad25fd601b9ef29d26b87f12b0a0c17cda0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 15:09:11 +0200
+Subject: [PATCH] units: use SuccessAction=exit-force in systemd-exit.service
+
+Fixes #10414.
+
+v2:
+- rename .service.in to .service
+- rename 'exit' to 'exit-force'
+
+(cherry picked from commit 631c9b7bf2dab5065d753a7b1cfaff5b100b3c90)
+
+Resolves: #1860899
+---
+ units/user/meson.build                                       | 2 +-
+ units/user/{systemd-exit.service.in => systemd-exit.service} | 5 +----
+ 2 files changed, 2 insertions(+), 5 deletions(-)
+ rename units/user/{systemd-exit.service.in => systemd-exit.service} (87%)
+
+diff --git a/units/user/meson.build b/units/user/meson.build
+index b1c2e95597..36341a42f5 100644
+--- a/units/user/meson.build
++++ b/units/user/meson.build
+@@ -14,6 +14,7 @@ units = [
+         'sockets.target',
+         'sound.target',
+         'timers.target',
++        'systemd-exit.service',
+         'systemd-tmpfiles-clean.timer',
+ ]
+ 
+@@ -23,7 +24,6 @@ foreach file : units
+ endforeach
+ 
+ in_units = [
+-        'systemd-exit.service',
+         'systemd-tmpfiles-clean.service',
+         'systemd-tmpfiles-setup.service',
+ ]
+diff --git a/units/user/systemd-exit.service.in b/units/user/systemd-exit.service
+similarity index 87%
+rename from units/user/systemd-exit.service.in
+rename to units/user/systemd-exit.service
+index d69273f6b3..1d3b61e3ab 100644
+--- a/units/user/systemd-exit.service.in
++++ b/units/user/systemd-exit.service
+@@ -13,7 +13,4 @@ Documentation=man:systemd.special(7)
+ DefaultDependencies=no
+ Requires=shutdown.target
+ After=shutdown.target
+-
+-[Service]
+-Type=oneshot
+-ExecStart=@SYSTEMCTL@ --user --force exit
++SuccessAction=exit-force

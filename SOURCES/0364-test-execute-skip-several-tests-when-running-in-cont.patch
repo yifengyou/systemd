@@ -1,0 +1,42 @@
+From fb66f2dbf1d228adc6f15edbbdf0ce53eb3be982 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Fri, 14 Sep 2018 15:47:42 +0900
+Subject: [PATCH] test-execute: skip several tests when running in container
+
+(cherry picked from commit 642d1a6d6e98204ade25816bcc429cb67df92a29)
+
+Resolves: #1823767
+---
+ src/test/test-execute.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/test/test-execute.c b/src/test/test-execute.c
+index af64427bc7..637ffe96bb 100644
+--- a/src/test/test-execute.c
++++ b/src/test/test-execute.c
+@@ -616,14 +616,24 @@ static void test_exec_privatenetwork(Manager *m) {
+ 
+ static void test_exec_oomscoreadjust(Manager *m) {
+         test(m, "exec-oomscoreadjust-positive.service", 0, CLD_EXITED);
++
++        if (detect_container() > 0) {
++                log_notice("Testing in container, skipping remaining tests in %s", __func__);
++                return;
++        }
+         test(m, "exec-oomscoreadjust-negative.service", 0, CLD_EXITED);
+ }
+ 
+ static void test_exec_ioschedulingclass(Manager *m) {
+         test(m, "exec-ioschedulingclass-none.service", 0, CLD_EXITED);
+         test(m, "exec-ioschedulingclass-idle.service", 0, CLD_EXITED);
+-        test(m, "exec-ioschedulingclass-realtime.service", 0, CLD_EXITED);
+         test(m, "exec-ioschedulingclass-best-effort.service", 0, CLD_EXITED);
++
++        if (detect_container() > 0) {
++                log_notice("Testing in container, skipping remaining tests in %s", __func__);
++                return;
++        }
++        test(m, "exec-ioschedulingclass-realtime.service", 0, CLD_EXITED);
+ }
+ 
+ static void test_exec_unsetenvironment(Manager *m) {

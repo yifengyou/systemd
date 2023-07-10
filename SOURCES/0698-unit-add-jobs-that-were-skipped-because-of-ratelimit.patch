@@ -1,0 +1,46 @@
+From dd662fc39a28655b89619a828a15e5e457bf6f4c Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Thu, 25 Nov 2021 18:28:25 +0100
+Subject: [PATCH] unit: add jobs that were skipped because of ratelimit back to
+ run_queue
+
+Assumption in edc027b was that job we first skipped because of active
+ratelimit is still in run_queue. Hence we trigger the queue and dispatch
+it in the next iteration. Actually we remove jobs from run_queue in
+job_run_and_invalidate() before we call unit_start(). Hence if we want
+to attempt to run the job again in the future we need to add it back
+to run_queue.
+
+Fixes #21458
+
+(cherry picked from commit c29e6a9530316823b0455cd83eb6d0bb8dd664f4)
+
+Related: #2036608
+---
+ src/core/mount.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/src/core/mount.c b/src/core/mount.c
+index c17154cde1..691b23ca74 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -1712,9 +1712,19 @@ static bool mount_is_mounted(Mount *m) {
+ 
+ static int mount_on_ratelimit_expire(sd_event_source *s, void *userdata) {
+         Manager *m = userdata;
++        Job *j;
++        Iterator i;
+ 
+         assert(m);
+ 
++        /* Let's enqueue all start jobs that were previously skipped because of active ratelimit. */
++        HASHMAP_FOREACH(j, m->jobs, i) {
++                if (j->unit->type != UNIT_MOUNT)
++                        continue;
++
++                job_add_to_run_queue(j);
++        }
++
+         /* By entering ratelimited state we made all mount start jobs not runnable, now rate limit is over so
+          * let's make sure we dispatch them in the next iteration. */
+         manager_trigger_run_queue(m);

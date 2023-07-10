@@ -1,0 +1,193 @@
+From 40dff18947fa198810db4cd3e5291349fc84a0e8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Thu, 1 Aug 2019 10:02:14 +0200
+Subject: [PATCH] shared/user-util: allow usernames with dots in specific
+ fields
+
+People do have usernames with dots, and it makes them very unhappy that systemd
+doesn't like their that. It seems that there is no actual problem with allowing
+dots in the username. In particular chown declares ":" as the official
+separator, and internally in systemd we never rely on "." as the seperator
+between user and group (nor do we call chown directly). Using dots in the name
+is probably not a very good idea, but we don't need to care. Debian tools
+(adduser) do not allow users with dots to be created.
+
+This patch allows *existing* names with dots to be used in User, Group,
+SupplementaryGroups, SocketUser, SocketGroup fields, both in unit files and on
+the command line. DynamicUsers and sysusers still follow the strict policy.
+user@.service and tmpfiles already allowed arbitrary user names, and this
+remains unchanged.
+
+Fixes #12754.
+
+(cherry picked from commit ae480f0b09aec815b64579bb1828ea935d8ee236)
+
+Related: #1848373
+---
+ src/core/dbus-execute.c               | 12 ++++++------
+ src/core/dbus-socket.c                |  4 ++--
+ src/core/dbus-util.c                  |  2 +-
+ src/core/dbus-util.h                  |  2 +-
+ src/core/load-fragment-gperf.gperf.m4 | 10 +++++-----
+ src/core/load-fragment.c              |  8 ++++----
+ src/core/load-fragment.h              |  4 ++--
+ 7 files changed, 21 insertions(+), 21 deletions(-)
+
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index 0fe4c14e48..e004fb55c9 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -1113,10 +1113,10 @@ int bus_exec_context_set_transient_property(
+         flags |= UNIT_PRIVATE;
+ 
+         if (streq(name, "User"))
+-                return bus_set_transient_user(u, name, &c->user, message, flags, error);
++                return bus_set_transient_user_compat(u, name, &c->user, message, flags, error);
+ 
+         if (streq(name, "Group"))
+-                return bus_set_transient_user(u, name, &c->group, message, flags, error);
++                return bus_set_transient_user_compat(u, name, &c->group, message, flags, error);
+ 
+         if (streq(name, "TTYPath"))
+                 return bus_set_transient_path(u, name, &c->tty_path, message, flags, error);
+@@ -1297,10 +1297,10 @@ int bus_exec_context_set_transient_property(
+                 if (r < 0)
+                         return r;
+ 
+-                STRV_FOREACH(p, l) {
+-                        if (!isempty(*p) && !valid_user_group_name_or_id(*p))
+-                                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "Invalid supplementary group names");
+-                }
++                STRV_FOREACH(p, l)
++                        if (!isempty(*p) && !valid_user_group_name_or_id_compat(*p))
++                                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS,
++                                                         "Invalid supplementary group names");
+ 
+                 if (!UNIT_WRITE_FLAGS_NOOP(flags)) {
+                         if (strv_isempty(l)) {
+diff --git a/src/core/dbus-socket.c b/src/core/dbus-socket.c
+index bb77539030..8fdbc05409 100644
+--- a/src/core/dbus-socket.c
++++ b/src/core/dbus-socket.c
+@@ -281,10 +281,10 @@ static int bus_socket_set_transient_property(
+                 return bus_set_transient_fdname(u, name, &s->fdname, message, flags, error);
+ 
+         if (streq(name, "SocketUser"))
+-                return bus_set_transient_user(u, name, &s->user, message, flags, error);
++                return bus_set_transient_user_compat(u, name, &s->user, message, flags, error);
+ 
+         if (streq(name, "SocketGroup"))
+-                return bus_set_transient_user(u, name, &s->group, message, flags, error);
++                return bus_set_transient_user_compat(u, name, &s->group, message, flags, error);
+ 
+         if (streq(name, "BindIPv6Only"))
+                 return bus_set_transient_bind_ipv6_only(u, name, &s->bind_ipv6_only, message, flags, error);
+diff --git a/src/core/dbus-util.c b/src/core/dbus-util.c
+index f4fbb72cb9..7862beaacb 100644
+--- a/src/core/dbus-util.c
++++ b/src/core/dbus-util.c
+@@ -30,7 +30,7 @@ int bus_property_get_triggered_unit(
+ 
+ BUS_DEFINE_SET_TRANSIENT(mode_t, "u", uint32_t, mode_t, "%040o");
+ BUS_DEFINE_SET_TRANSIENT(unsigned, "u", uint32_t, unsigned, "%" PRIu32);
+-BUS_DEFINE_SET_TRANSIENT_STRING_WITH_CHECK(user, valid_user_group_name_or_id);
++BUS_DEFINE_SET_TRANSIENT_STRING_WITH_CHECK(user_compat, valid_user_group_name_or_id_compat);
+ BUS_DEFINE_SET_TRANSIENT_STRING_WITH_CHECK(path, path_is_absolute);
+ 
+ int bus_set_transient_string(
+diff --git a/src/core/dbus-util.h b/src/core/dbus-util.h
+index 12b055e4ac..a3316c6701 100644
+--- a/src/core/dbus-util.h
++++ b/src/core/dbus-util.h
+@@ -235,7 +235,7 @@ int bus_property_get_triggered_unit(sd_bus *bus, const char *path, const char *i
+ 
+ int bus_set_transient_mode_t(Unit *u, const char *name, mode_t *p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+ int bus_set_transient_unsigned(Unit *u, const char *name, unsigned *p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+-int bus_set_transient_user(Unit *u, const char *name, char **p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
++int bus_set_transient_user_compat(Unit *u, const char *name, char **p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+ int bus_set_transient_path(Unit *u, const char *name, char **p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+ int bus_set_transient_string(Unit *u, const char *name, char **p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+ int bus_set_transient_bool(Unit *u, const char *name, bool *p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index 24ee5ae6fe..156a4d0a6d 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -25,9 +25,9 @@ m4_define(`EXEC_CONTEXT_CONFIG_ITEMS',
+ `$1.WorkingDirectory,            config_parse_working_directory,     0,                             offsetof($1, exec_context)
+ $1.RootDirectory,                config_parse_unit_path_printf,      true,                          offsetof($1, exec_context.root_directory)
+ $1.RootImage,                    config_parse_unit_path_printf,      true,                          offsetof($1, exec_context.root_image)
+-$1.User,                         config_parse_user_group,            0,                             offsetof($1, exec_context.user)
+-$1.Group,                        config_parse_user_group,            0,                             offsetof($1, exec_context.group)
+-$1.SupplementaryGroups,          config_parse_user_group_strv,       0,                             offsetof($1, exec_context.supplementary_groups)
++$1.User,                         config_parse_user_group_compat,     0,                             offsetof($1, exec_context.user)
++$1.Group,                        config_parse_user_group_compat,     0,                             offsetof($1, exec_context.group)
++$1.SupplementaryGroups,          config_parse_user_group_strv_compat, 0,                            offsetof($1, exec_context.supplementary_groups)
+ $1.Nice,                         config_parse_exec_nice,             0,                             offsetof($1, exec_context)
+ $1.OOMScoreAdjust,               config_parse_exec_oom_score_adjust, 0,                             offsetof($1, exec_context)
+ $1.IOSchedulingClass,            config_parse_exec_io_class,         0,                             offsetof($1, exec_context)
+@@ -354,8 +354,8 @@ Socket.ExecStartPost,            config_parse_exec,                  SOCKET_EXEC
+ Socket.ExecStopPre,              config_parse_exec,                  SOCKET_EXEC_STOP_PRE,          offsetof(Socket, exec_command)
+ Socket.ExecStopPost,             config_parse_exec,                  SOCKET_EXEC_STOP_POST,         offsetof(Socket, exec_command)
+ Socket.TimeoutSec,               config_parse_sec_fix_0,             0,                             offsetof(Socket, timeout_usec)
+-Socket.SocketUser,               config_parse_user_group,            0,                             offsetof(Socket, user)
+-Socket.SocketGroup,              config_parse_user_group,            0,                             offsetof(Socket, group)
++Socket.SocketUser,               config_parse_user_group_compat,     0,                             offsetof(Socket, user)
++Socket.SocketGroup,              config_parse_user_group_compat,     0,                             offsetof(Socket, group)
+ Socket.SocketMode,               config_parse_mode,                  0,                             offsetof(Socket, socket_mode)
+ Socket.DirectoryMode,            config_parse_mode,                  0,                             offsetof(Socket, directory_mode)
+ Socket.Accept,                   config_parse_bool,                  0,                             offsetof(Socket, accept)
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index 740401a582..ba81d94504 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -1899,7 +1899,7 @@ int config_parse_sec_fix_0(
+         return 0;
+ }
+ 
+-int config_parse_user_group(
++int config_parse_user_group_compat(
+                 const char *unit,
+                 const char *filename,
+                 unsigned line,
+@@ -1932,7 +1932,7 @@ int config_parse_user_group(
+                 return -ENOEXEC;
+         }
+ 
+-        if (!valid_user_group_name_or_id(k)) {
++        if (!valid_user_group_name_or_id_compat(k)) {
+                 log_syntax(unit, LOG_ERR, filename, line, 0, "Invalid user/group name or numeric ID: %s", k);
+                 return -ENOEXEC;
+         }
+@@ -1940,7 +1940,7 @@ int config_parse_user_group(
+         return free_and_replace(*user, k);
+ }
+ 
+-int config_parse_user_group_strv(
++int config_parse_user_group_strv_compat(
+                 const char *unit,
+                 const char *filename,
+                 unsigned line,
+@@ -1986,7 +1986,7 @@ int config_parse_user_group_strv(
+                         return -ENOEXEC;
+                 }
+ 
+-                if (!valid_user_group_name_or_id(k)) {
++                if (!valid_user_group_name_or_id_compat(k)) {
+                         log_syntax(unit, LOG_ERR, filename, line, 0, "Invalid user/group name or numeric ID: %s", k);
+                         return -ENOEXEC;
+                 }
+diff --git a/src/core/load-fragment.h b/src/core/load-fragment.h
+index 65a94d53cc..f9d34d484d 100644
+--- a/src/core/load-fragment.h
++++ b/src/core/load-fragment.h
+@@ -96,8 +96,8 @@ CONFIG_PARSER_PROTOTYPE(config_parse_exec_utmp_mode);
+ CONFIG_PARSER_PROTOTYPE(config_parse_working_directory);
+ CONFIG_PARSER_PROTOTYPE(config_parse_fdname);
+ CONFIG_PARSER_PROTOTYPE(config_parse_sec_fix_0);
+-CONFIG_PARSER_PROTOTYPE(config_parse_user_group);
+-CONFIG_PARSER_PROTOTYPE(config_parse_user_group_strv);
++CONFIG_PARSER_PROTOTYPE(config_parse_user_group_compat);
++CONFIG_PARSER_PROTOTYPE(config_parse_user_group_strv_compat);
+ CONFIG_PARSER_PROTOTYPE(config_parse_restrict_namespaces);
+ CONFIG_PARSER_PROTOTYPE(config_parse_bind_paths);
+ CONFIG_PARSER_PROTOTYPE(config_parse_exec_keyring_mode);

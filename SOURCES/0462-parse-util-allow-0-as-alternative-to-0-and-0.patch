@@ -1,0 +1,60 @@
+From 1c8e5070d8a88f35b5577e091de66727fa785ef7 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 1 Jun 2020 17:08:38 +0200
+Subject: [PATCH] parse-util: allow '-0' as alternative to '0' and '+0'
+
+Let's allow "-0" as alternative to "+0" and "0" when parsing integers,
+unless the new SAFE_ATO_REFUSE_PLUS_MINUS flag is specified.
+
+In cases where allowing the +/- syntax shall not be allowed
+SAFE_ATO_REFUSE_PLUS_MINUS is the right flag to use, but this also means
+that -0 as only negative integer that fits into an unsigned value should
+be acceptable if the flag is not specified.
+
+(cherry picked from commit c78eefc13562a8fc0c22c00a6d3001af89860258)
+
+Related: #1848373
+---
+ src/basic/parse-util.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/basic/parse-util.c b/src/basic/parse-util.c
+index 6cc4fc3e57..53d181dd60 100644
+--- a/src/basic/parse-util.c
++++ b/src/basic/parse-util.c
+@@ -416,7 +416,7 @@ int safe_atou_full(const char *s, unsigned base, unsigned *ret_u) {
+                 return -errno;
+         if (!x || x == s || *x != 0)
+                 return -EINVAL;
+-        if (s[0] == '-')
++        if (l != 0 && s[0] == '-')
+                 return -ERANGE;
+         if ((unsigned long) (unsigned) l != l)
+                 return -ERANGE;
+@@ -475,7 +475,7 @@ int safe_atollu_full(const char *s, unsigned base, long long unsigned *ret_llu)
+                 return -errno;
+         if (!x || x == s || *x != 0)
+                 return -EINVAL;
+-        if (*s == '-')
++        if (l != 0 && s[0] == '-')
+                 return -ERANGE;
+ 
+         if (ret_llu)
+@@ -517,7 +517,7 @@ int safe_atou8(const char *s, uint8_t *ret) {
+                 return -errno;
+         if (!x || x == s || *x != 0)
+                 return -EINVAL;
+-        if (s[0] == '-')
++        if (l != 0 && s[0] == '-')
+                 return -ERANGE;
+         if ((unsigned long) (uint8_t) l != l)
+                 return -ERANGE;
+@@ -554,7 +554,7 @@ int safe_atou16_full(const char *s, unsigned base, uint16_t *ret) {
+                 return -errno;
+         if (!x || x == s || *x != 0)
+                 return -EINVAL;
+-        if (s[0] == '-')
++        if (l != 0 && s[0] == '-')
+                 return -ERANGE;
+         if ((unsigned long) (uint16_t) l != l)
+                 return -ERANGE;

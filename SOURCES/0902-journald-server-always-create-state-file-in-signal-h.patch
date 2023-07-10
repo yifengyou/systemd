@@ -1,0 +1,38 @@
+From 47cc8f7e1d153e576f146d309b4043739997a673 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Mon, 13 Mar 2023 14:22:28 +0100
+Subject: [PATCH] journald-server: always create state file in signal handler
+
+`journalctl --flush` waits on that file, so we must create if even if
+nothing has really happened.
+
+RHEL-only
+
+Resolves: #2174645
+---
+ src/journal/journald-server.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/journal/journald-server.c b/src/journal/journald-server.c
+index 279a32768c..c72cb68095 100644
+--- a/src/journal/journald-server.c
++++ b/src/journal/journald-server.c
+@@ -1188,6 +1188,7 @@ int server_process_datagram(sd_event_source *es, int fd, uint32_t revents, void
+ 
+ static int dispatch_sigusr1(sd_event_source *es, const struct signalfd_siginfo *si, void *userdata) {
+         Server *s = userdata;
++        int r;
+ 
+         assert(s);
+ 
+@@ -1197,6 +1198,10 @@ static int dispatch_sigusr1(sd_event_source *es, const struct signalfd_siginfo *
+         server_sync(s);
+         server_vacuum(s, false);
+ 
++        r = touch("/run/systemd/journal/flushed");
++        if (r < 0)
++                log_warning_errno(r, "Failed to touch /run/systemd/journal/flushed, ignoring: %m");
++
+         server_space_usage_message(s, NULL);
+         return 0;
+ }

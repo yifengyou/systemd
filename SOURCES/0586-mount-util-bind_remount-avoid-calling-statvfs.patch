@@ -1,0 +1,92 @@
+From 996f88461c45e8620c5a8a0c958dc133bd02c50e Mon Sep 17 00:00:00 2001
+From: Jakob Unterwurzacher <jakobunt@gmail.com>
+Date: Mon, 30 Nov 2020 10:27:48 +0100
+Subject: [PATCH] mount-util: bind_remount: avoid calling statvfs
+
+The commit
+"util: Do not clear parent mount flags when setting up namespaces"
+introduced a statvfs call read the flags of the original mount
+and have them applied to the bind mount.
+
+This has two problems:
+
+(1) The mount flags returned by statvfs(2) do not match the flags
+accepted by mount(2). For example, the value 4096 means ST_RELATIME
+when returned by statvfs(2), but means MS_BIND when passed to mount(2).
+
+(2) A call to statvfs blocks indefinitely when ran against a disconnected
+network drive ( https://github.com/systemd/systemd/issues/12667 ).
+
+We already use libmount to parse `/proc/self/mountinfo` but did not use the
+mount flag information from there. This patch changes that to use the mount
+flags parsed by libmount instead of calling statvfs. Only if getting the
+flags through libmount fails we call statvfs.
+
+Fixes https://github.com/systemd/systemd/issues/12667
+
+(cherry picked from commit d34a40082db3ffca8de66bfa4df50951101bdae5)
+
+Resolves: #1885143
+---
+ src/basic/mount-util.c | 31 +++++++++++++++++++++++++++----
+ 1 file changed, 27 insertions(+), 4 deletions(-)
+
+diff --git a/src/basic/mount-util.c b/src/basic/mount-util.c
+index bac1a25cc8..2cf98eaa84 100644
+--- a/src/basic/mount-util.c
++++ b/src/basic/mount-util.c
+@@ -364,11 +364,34 @@ int umount_recursive(const char *prefix, int flags) {
+         return r ? r : n;
+ }
+ 
+-static int get_mount_flags(const char *path, unsigned long *flags) {
+-        struct statvfs buf;
++/* Get the mount flags for the mountpoint at "path" from "table" */
++static int get_mount_flags(const char *path, unsigned long *flags, struct libmnt_table *table) {
++        struct statvfs buf = {};
++        struct libmnt_fs *fs = NULL;
++        const char *opts = NULL;
++        int r = 0;
++
++        fs = mnt_table_find_target(table, path, MNT_ITER_FORWARD);
++        if (fs == NULL) {
++                log_warning("Could not find '%s' in mount table", path);
++                goto fallback;
++        }
++
++        opts = mnt_fs_get_vfs_options(fs);
++        r = mnt_optstr_get_flags(opts, flags, mnt_get_builtin_optmap(MNT_LINUX_MAP));
++        if (r != 0) {
++                log_warning_errno(r, "Could not get flags for '%s': %m", path);
++                goto fallback;
++        }
+ 
++        /* relatime is default and trying to set it in an unprivileged container causes EPERM */
++        *flags &= ~MS_RELATIME;
++        return 0;
++
++fallback:
+         if (statvfs(path, &buf) < 0)
+                 return -errno;
++
+         *flags = buf.f_flag;
+         return 0;
+ }
+@@ -501,7 +524,7 @@ int bind_remount_recursive_with_mountinfo(const char *prefix, bool ro, char **bl
+                                 return -errno;
+ 
+                         orig_flags = 0;
+-                        (void) get_mount_flags(cleaned, &orig_flags);
++                        (void) get_mount_flags(cleaned, &orig_flags, table);
+                         orig_flags &= ~MS_RDONLY;
+ 
+                         if (mount(NULL, prefix, NULL, orig_flags|MS_BIND|MS_REMOUNT|(ro ? MS_RDONLY : 0), NULL) < 0)
+@@ -535,7 +558,7 @@ int bind_remount_recursive_with_mountinfo(const char *prefix, bool ro, char **bl
+ 
+                         /* Try to reuse the original flag set */
+                         orig_flags = 0;
+-                        (void) get_mount_flags(x, &orig_flags);
++                        (void) get_mount_flags(x, &orig_flags, table);
+                         orig_flags &= ~MS_RDONLY;
+ 
+                         if (mount(NULL, x, NULL, orig_flags|MS_BIND|MS_REMOUNT|(ro ? MS_RDONLY : 0), NULL) < 0)

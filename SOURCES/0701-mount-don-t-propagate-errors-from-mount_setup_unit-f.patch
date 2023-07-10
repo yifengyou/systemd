@@ -1,0 +1,56 @@
+From c236734f95550747c4979fe318e3a890adaa0a94 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 28 Nov 2018 12:41:44 +0100
+Subject: [PATCH] mount: don't propagate errors from mount_setup_unit() further
+ up
+
+If we can't process a specific line in /proc/self/mountinfo we should
+log about it (which we do), but this should not affect other lines, nor
+further processing of mount units. Let's keep these failures local.
+
+Fixes: #10874
+
+Cherry picked from commit ba0d56f55f2073164799be714b5bd1aad94d059a.
+Trivial conflict in src/core/mount.c, function mount_load_proc_self_mountinfo,
+due to local commit ca634baa10e. Also, due to the same commit, int k
+is no longer used and is thus removed.
+
+Resolves: #2036853
+
+Signed-off-by: Kir Kolyshkin <kolyshkin@gmail.com>
+---
+ src/core/mount.c | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/src/core/mount.c b/src/core/mount.c
+index 691b23ca74..4e0a4f238a 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -1615,12 +1615,10 @@ static int mount_load_proc_self_mountinfo(Manager *m, bool set_flags) {
+         if (r < 0)
+                 return log_error_errno(r, "Failed to parse /proc/self/mountinfo: %m");
+ 
+-        r = 0;
+         for (;;) {
+                 struct libmnt_fs *fs;
+                 const char *device, *path, *options, *fstype;
+                 _cleanup_free_ char *d = NULL, *p = NULL;
+-                int k;
+ 
+                 r = mnt_table_next_fs(table, iter, &fs);
+                 if (r == 1)
+@@ -1644,12 +1642,10 @@ static int mount_load_proc_self_mountinfo(Manager *m, bool set_flags) {
+ 
+                 device_found_node(m, d, DEVICE_FOUND_MOUNT, DEVICE_FOUND_MOUNT);
+ 
+-                k = mount_setup_unit(m, d, p, options, fstype, set_flags);
+-                if (r == 0 && k < 0)
+-                        r = k;
++                (void) mount_setup_unit(m, d, p, options, fstype, set_flags);
+         }
+ 
+-        return r;
++        return 0;
+ }
+ 
+ static void mount_shutdown(Manager *m) {

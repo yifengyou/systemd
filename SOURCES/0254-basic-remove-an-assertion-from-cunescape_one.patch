@@ -1,0 +1,30 @@
+From 43d72623fdfca8500c8c89a4b5023e35a3f0b259 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Fri, 16 Nov 2018 07:05:29 +0100
+Subject: [PATCH] basic: remove an assertion from cunescape_one
+
+The function takes a pointer to a random block of memory and
+the length of that block. It shouldn't crash every time it sees
+a zero byte at the beginning there.
+
+This should help the dev-kmsg fuzzer to keep going.
+
+(cherry picked from commit 8dc4de966ce6d32470aaff30ed054f6a2688d6d7)
+
+Resolves: #1764560
+---
+ src/basic/escape.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/src/basic/escape.c b/src/basic/escape.c
+index 5004763d97..5f715156fb 100644
+--- a/src/basic/escape.c
++++ b/src/basic/escape.c
+@@ -106,7 +106,6 @@ int cunescape_one(const char *p, size_t length, char32_t *ret, bool *eight_bit)
+         int r = 1;
+ 
+         assert(p);
+-        assert(*p);
+         assert(ret);
+ 
+         /* Unescapes C style. Returns the unescaped character in ret.

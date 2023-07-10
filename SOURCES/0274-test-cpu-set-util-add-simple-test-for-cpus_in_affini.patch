@@ -1,0 +1,40 @@
+From a1ed6bfc5a8c40377b9f1cab1acc3c67a9529427 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 21 May 2019 09:01:34 +0200
+Subject: [PATCH] test-cpu-set-util: add simple test for
+ cpus_in_affinity_mask()
+
+(cherry picked from commit 9d1345f0657c707df89b41b2738776efb40aec8e)
+
+Related: #1734787
+---
+ src/test/test-cpu-set-util.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/test/test-cpu-set-util.c b/src/test/test-cpu-set-util.c
+index b9ec29af66..e87e0ca6e6 100644
+--- a/src/test/test-cpu-set-util.c
++++ b/src/test/test-cpu-set-util.c
+@@ -157,6 +157,14 @@ static void test_parse_cpu_set(void) {
+         cpu_set_reset(&c);
+ }
+ 
++static void test_cpus_in_affinity_mask(void) {
++        int r;
++
++        r = cpus_in_affinity_mask();
++        assert(r > 0);
++        log_info("cpus_in_affinity_mask: %d", r);
++}
++
+ int main(int argc, char *argv[]) {
+         log_info("CPU_ALLOC_SIZE(1) = %zu", CPU_ALLOC_SIZE(1));
+         log_info("CPU_ALLOC_SIZE(9) = %zu", CPU_ALLOC_SIZE(9));
+@@ -167,6 +175,7 @@ int main(int argc, char *argv[]) {
+         log_info("CPU_ALLOC_SIZE(8191) = %zu", CPU_ALLOC_SIZE(8191));
+ 
+         test_parse_cpu_set();
++        test_cpus_in_affinity_mask();
+ 
+         return 0;
+ }

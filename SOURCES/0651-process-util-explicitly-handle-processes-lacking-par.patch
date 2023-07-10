@@ -1,0 +1,223 @@
+From 9b30c003c8f80bf44f18168d07ea11c48e6d8864 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 7 Jul 2021 15:57:51 +0200
+Subject: [PATCH] process-util: explicitly handle processes lacking parents in
+ get_process_ppid()
+
+Let's make sure we signal out-of-band via an error message if a process
+doesn't have a parent process whose PID we could return. Otherwise we'll
+too likely hide errors, as we return an invalid PID 0, which in other
+contexts has special meaning (i.e. usually "myself").
+
+Replaces: #20153
+
+This is based on work by @dtardon, but goes a different route, by
+ensuring we propagate a proper error in this case.
+
+This modernizes the function in question a bit in other ways, i.e.
+renames stuff and makes the return parameter optional.
+
+(cherry picked from commit 0c4d1e6d96a549054bfe0597d197f829838917f1)
+
+Resolves: #1977569
+---
+ src/basic/process-util.c     | 27 +++++++++++++-------
+ src/coredump/coredump.c      | 23 +++++++++--------
+ src/test/test-process-util.c | 48 +++++++++++++++++++++++++++++++++---
+ 3 files changed, 74 insertions(+), 24 deletions(-)
+
+diff --git a/src/basic/process-util.c b/src/basic/process-util.c
+index 0a4a747ba4..6016d83d41 100644
+--- a/src/basic/process-util.c
++++ b/src/basic/process-util.c
+@@ -603,20 +603,23 @@ int get_process_environ(pid_t pid, char **env) {
+         return 0;
+ }
+ 
+-int get_process_ppid(pid_t pid, pid_t *_ppid) {
+-        int r;
++int get_process_ppid(pid_t pid, pid_t *ret) {
+         _cleanup_free_ char *line = NULL;
+         long unsigned ppid;
+         const char *p;
++        int r;
+ 
+         assert(pid >= 0);
+-        assert(_ppid);
+ 
+         if (pid == 0 || pid == getpid_cached()) {
+-                *_ppid = getppid();
++                if (ret)
++                        *ret = getppid();
+                 return 0;
+         }
+ 
++        if (pid == 1) /* PID 1 has no parent, shortcut this case */
++                return -EADDRNOTAVAIL;
++
+         p = procfs_file_alloca(pid, "stat");
+         r = read_one_line_file(p, &line);
+         if (r == -ENOENT)
+@@ -624,9 +627,8 @@ int get_process_ppid(pid_t pid, pid_t *_ppid) {
+         if (r < 0)
+                 return r;
+ 
+-        /* Let's skip the pid and comm fields. The latter is enclosed
+-         * in () but does not escape any () in its value, so let's
+-         * skip over it manually */
++        /* Let's skip the pid and comm fields. The latter is enclosed in () but does not escape any () in its
++         * value, so let's skip over it manually */
+ 
+         p = strrchr(line, ')');
+         if (!p)
+@@ -640,10 +642,17 @@ int get_process_ppid(pid_t pid, pid_t *_ppid) {
+                    &ppid) != 1)
+                 return -EIO;
+ 
+-        if ((long unsigned) (pid_t) ppid != ppid)
++        /* If ppid is zero the process has no parent. Which might be the case for PID 1 but also for
++         * processes originating in other namespaces that are inserted into a pidns. Return a recognizable
++         * error in this case. */
++        if (ppid == 0)
++                return -EADDRNOTAVAIL;
++
++        if ((pid_t) ppid < 0 || (long unsigned) (pid_t) ppid != ppid)
+                 return -ERANGE;
+ 
+-        *_ppid = (pid_t) ppid;
++        if (ret)
++                *ret = (pid_t) ppid;
+ 
+         return 0;
+ }
+diff --git a/src/coredump/coredump.c b/src/coredump/coredump.c
+index 2a130e8838..fb3a6ecfe9 100644
+--- a/src/coredump/coredump.c
++++ b/src/coredump/coredump.c
+@@ -591,8 +591,7 @@ static int get_process_ns(pid_t pid, const char *namespace, ino_t *ns) {
+         return 0;
+ }
+ 
+-static int get_mount_namespace_leader(pid_t pid, pid_t *container_pid) {
+-        pid_t cpid = pid, ppid = 0;
++static int get_mount_namespace_leader(pid_t pid, pid_t *ret) {
+         ino_t proc_mntns;
+         int r = 0;
+ 
+@@ -602,8 +601,12 @@ static int get_mount_namespace_leader(pid_t pid, pid_t *container_pid) {
+ 
+         for (;;) {
+                 ino_t parent_mntns;
++                pid_t ppid;
+ 
+-                r = get_process_ppid(cpid, &ppid);
++                r = get_process_ppid(pid, &ppid);
++                if (r == -EADDRNOTAVAIL) /* Reached the top (i.e. typically PID 1, but could also be a process
++                                          * whose parent is not in our pidns) */
++                        return -ENOENT;
+                 if (r < 0)
+                         return r;
+ 
+@@ -611,17 +614,13 @@ static int get_mount_namespace_leader(pid_t pid, pid_t *container_pid) {
+                 if (r < 0)
+                         return r;
+ 
+-                if (proc_mntns != parent_mntns)
+-                        break;
+-
+-                if (ppid == 1)
+-                        return -ENOENT;
++                if (proc_mntns != parent_mntns) {
++                        *ret = ppid;
++                        return 0;
++                }
+ 
+-                cpid = ppid;
++                pid = ppid;
+         }
+-
+-        *container_pid = ppid;
+-        return 0;
+ }
+ 
+ /* Returns 1 if the parent was found.
+diff --git a/src/test/test-process-util.c b/src/test/test-process-util.c
+index 26e3247993..6b14ff592b 100644
+--- a/src/test/test-process-util.c
++++ b/src/test/test-process-util.c
+@@ -19,6 +19,7 @@
+ #include "macro.h"
+ #include "parse-util.h"
+ #include "process-util.h"
++#include "procfs-util.h"
+ #include "signal-util.h"
+ #include "stdio-util.h"
+ #include "string-util.h"
+@@ -56,9 +57,12 @@ static void test_get_process_comm(pid_t pid) {
+         assert_se(get_process_cmdline(pid, 1, false, &d) >= 0);
+         log_info("PID"PID_FMT" cmdline truncated to 1: '%s'", pid, d);
+ 
+-        assert_se(get_process_ppid(pid, &e) >= 0);
+-        log_info("PID"PID_FMT" PPID: "PID_FMT, pid, e);
+-        assert_se(pid == 1 ? e == 0 : e > 0);
++        r = get_process_ppid(pid, &e);
++        assert_se(pid == 1 ? r == -EADDRNOTAVAIL : r >= 0);
++        if (r >= 0) {
++                log_info("PID"PID_FMT" PPID: "PID_FMT, pid, e);
++                assert_se(e > 0);
++        }
+ 
+         assert_se(is_kernel_thread(pid) == 0 || pid != 1);
+ 
+@@ -585,6 +589,43 @@ static void test_ioprio_class_from_to_string(void) {
+         test_ioprio_class_from_to_string_one("-1", -1);
+ }
+ 
++static void test_get_process_ppid(void) {
++        uint64_t limit;
++        int r;
++
++        log_info("/* %s */", __func__);
++
++        assert_se(get_process_ppid(1, NULL) == -EADDRNOTAVAIL);
++
++        /* the process with the PID above the global limit definitely doesn't exist. Verify that */
++        assert_se(procfs_tasks_get_limit(&limit) >= 0);
++        assert_se(limit >= INT_MAX || get_process_ppid(limit+1, NULL) == -ESRCH);
++
++        for (pid_t pid = 0;;) {
++                _cleanup_free_ char *c1 = NULL, *c2 = NULL;
++                pid_t ppid;
++
++                r = get_process_ppid(pid, &ppid);
++                if (r == -EADDRNOTAVAIL) {
++                        log_info("No further parent PID");
++                        break;
++                }
++
++                assert_se(r >= 0);
++
++                /* NOTE: The size is SIZE_MAX in the original commit, but it would require backporting a
++                 * lot more stuff to support that (the current version of get_process_cmdline() just fails with
++                 * ENOMEM). UINT16_MAX should be enough for practical purposes.
++                 */
++                assert_se(get_process_cmdline(pid, UINT16_MAX, true, &c1) >= 0);
++                assert_se(get_process_cmdline(ppid, UINT16_MAX, true, &c2) >= 0);
++
++                log_info("Parent of " PID_FMT " (%s) is " PID_FMT " (%s).", pid, c1, ppid, c2);
++
++                pid = ppid;
++        }
++}
++
+ int main(int argc, char *argv[]) {
+         log_set_max_level(LOG_DEBUG);
+         log_parse_environment();
+@@ -614,6 +655,7 @@ int main(int argc, char *argv[]) {
+         test_safe_fork();
+         test_pid_to_ptr();
+         test_ioprio_class_from_to_string();
++        test_get_process_ppid();
+ 
+         return 0;
+ }

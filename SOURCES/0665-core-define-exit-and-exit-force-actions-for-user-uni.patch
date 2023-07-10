@@ -1,0 +1,361 @@
+From 19d91eef7f15b654cd96ad5350385e535fab9e2a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 13:28:39 +0200
+Subject: [PATCH] core: define "exit" and "exit-force" actions for user units
+ and only accept that
+
+We would accept e.g. FailureAction=reboot-force in user units and then do an
+exit in the user manager. Let's be stricter, and define "exit"/"exit-force" as
+the only supported actions in user units.
+
+v2:
+- rename 'exit' to 'exit-force' and add new 'exit'
+- add test for the parsing function
+
+(cherry picked from commit 54fcb6192c618726d11404b24b1a1e9ec3169ee1)
+
+Related: #1860899
+---
+ TODO                             |  4 +++
+ man/systemd.unit.xml             | 26 +++++++++-------
+ src/core/dbus-unit.c             | 37 ++++++++++++++++++++++-
+ src/core/emergency-action.c      | 47 ++++++++++++++++++++++-------
+ src/core/emergency-action.h      |  5 ++++
+ src/core/load-fragment.c         | 42 +++++++++++++++++++++++++-
+ src/test/meson.build             |  5 ++++
+ src/test/test-emergency-action.c | 51 ++++++++++++++++++++++++++++++++
+ 8 files changed, 195 insertions(+), 22 deletions(-)
+ create mode 100644 src/test/test-emergency-action.c
+
+diff --git a/TODO b/TODO
+index 3100e067d6..0705b6b08e 100644
+--- a/TODO
++++ b/TODO
+@@ -4,6 +4,10 @@ Bugfixes:
+ 
+ * copy.c: set the right chattrs before copying files and others after
+ 
++* Many manager configuration settings that are only applicable to user
++  manager or system manager can be always set. It would be better to reject
++  them when parsing config.
++
+ External:
+ 
+ * Fedora: add an rpmlint check that verifies that all unit files in the RPM are listed in %systemd_post macros.
+diff --git a/man/systemd.unit.xml b/man/systemd.unit.xml
+index 802db453a4..5772a6684e 100644
+--- a/man/systemd.unit.xml
++++ b/man/systemd.unit.xml
+@@ -877,18 +877,24 @@
+         <term><varname>FailureAction=</varname></term>
+         <term><varname>SuccessAction=</varname></term>
+ 
+-        <listitem><para>Configure the action to take when the unit stops and enters a failed state or inactive
+-        state. Takes one of <option>none</option>, <option>reboot</option>, <option>reboot-force</option>,
+-        <option>reboot-immediate</option>, <option>poweroff</option>, <option>poweroff-force</option> or
+-        <option>poweroff-immediate</option>. If <option>none</option> is set, no action will be triggered.
+-        <option>reboot</option> causes a reboot following the normal shutdown procedure (i.e. equivalent to
+-        <command>systemctl reboot</command>). <option>reboot-force</option> causes a forced reboot which will
+-        terminate all processes forcibly but should cause no dirty file systems on reboot (i.e. equivalent to
+-        <command>systemctl reboot -f</command>) and <option>reboot-immediate</option> causes immediate execution of the
++        <listitem><para>Configure the action to take when the unit stops and enters a failed state or inactive state.
++        Takes one of <option>none</option>, <option>reboot</option>, <option>reboot-force</option>,
++        <option>reboot-immediate</option>, <option>poweroff</option>, <option>poweroff-force</option>,
++        <option>poweroff-immediate</option>, <option>exit</option>, and <option>exit-force</option>. In system mode,
++        all options except <option>exit</option> and <option>exit-force</option> are allowed. In user mode, only
++        <option>none</option>, <option>exit</option>, and <option>exit-force</option> are allowed. Both options default
++        to <option>none</option>.</para>
++
++        <para>If <option>none</option> is set, no action will be triggered. <option>reboot</option> causes a reboot
++        following the normal shutdown procedure (i.e. equivalent to <command>systemctl reboot</command>).
++        <option>reboot-force</option> causes a forced reboot which will terminate all processes forcibly but should
++        cause no dirty file systems on reboot (i.e. equivalent to <command>systemctl reboot -f</command>) and
++        <option>reboot-immediate</option> causes immediate execution of the
+         <citerefentry><refentrytitle>reboot</refentrytitle><manvolnum>2</manvolnum></citerefentry> system call, which
+         might result in data loss. Similarly, <option>poweroff</option>, <option>poweroff-force</option>,
+-        <option>poweroff-immediate</option> have the effect of powering down the system with similar semantics. Both
+-        options default to <option>none</option>.</para></listitem>
++        <option>poweroff-immediate</option> have the effect of powering down the system with similar
++        semantics. <option>exit</option> causes the user manager to exit following the normal shutdown procedure, and
++        <option>exit-force</option> causes it terminate without shutting down services.</para></listitem>
+       </varlistentry>
+ 
+       <varlistentry>
+diff --git a/src/core/dbus-unit.c b/src/core/dbus-unit.c
+index 549a166abc..e7ea9db3ac 100644
+--- a/src/core/dbus-unit.c
++++ b/src/core/dbus-unit.c
+@@ -1564,8 +1564,43 @@ static int bus_unit_set_live_property(
+         return 0;
+ }
+ 
++static int bus_set_transient_emergency_action(
++                Unit *u,
++                const char *name,
++                EmergencyAction *p,
++                sd_bus_message *message,
++                UnitWriteFlags flags,
++                sd_bus_error *error) {
++
++        const char *s;
++        EmergencyAction v;
++        int r;
++        bool system;
++
++        assert(p);
++
++        r = sd_bus_message_read(message, "s", &s);
++        if (r < 0)
++                return r;
++
++        system = MANAGER_IS_SYSTEM(u->manager);
++        r = parse_emergency_action(s, system, &v);
++        if (v < 0)
++                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS,
++                                         v == -EOPNOTSUPP ? "EmergencyAction setting invalid for manager type: %s"
++                                                          : "Invalid %s setting: %s",
++                                         name, s);
++
++        if (!UNIT_WRITE_FLAGS_NOOP(flags)) {
++                *p = v;
++                unit_write_settingf(u, flags, name,
++                                    "%s=%s", name, s);
++        }
++
++        return 1;
++}
++
+ static BUS_DEFINE_SET_TRANSIENT_PARSE(collect_mode, CollectMode, collect_mode_from_string);
+-static BUS_DEFINE_SET_TRANSIENT_PARSE(emergency_action, EmergencyAction, emergency_action_from_string);
+ static BUS_DEFINE_SET_TRANSIENT_PARSE(job_mode, JobMode, job_mode_from_string);
+ 
+ static int bus_set_transient_conditions(
+diff --git a/src/core/emergency-action.c b/src/core/emergency-action.c
+index 766a3b4d2b..00f5996317 100644
+--- a/src/core/emergency-action.c
++++ b/src/core/emergency-action.c
+@@ -39,15 +39,6 @@ int emergency_action(
+                 return -ECANCELED;
+         }
+ 
+-        if (!MANAGER_IS_SYSTEM(m)) {
+-                /* Downgrade all options to simply exiting if we run
+-                 * in user mode */
+-
+-                log_warning("Exiting: %s", reason);
+-                m->exit_code = MANAGER_EXIT;
+-                return -ECANCELED;
+-        }
+-
+         switch (action) {
+ 
+         case EMERGENCY_ACTION_REBOOT:
+@@ -80,11 +71,26 @@ int emergency_action(
+                 (void) reboot(RB_AUTOBOOT);
+                 break;
+ 
++        case EMERGENCY_ACTION_EXIT:
++                assert(MANAGER_IS_USER(m));
++
++                log_and_status(m, "Exiting", reason);
++
++                (void) manager_add_job_by_name_and_warn(m, JOB_START, SPECIAL_EXIT_TARGET, JOB_REPLACE_IRREVERSIBLY, NULL, NULL);
++                break;
++
+         case EMERGENCY_ACTION_POWEROFF:
+                 log_and_status(m, "Powering off", reason);
+                 (void) manager_add_job_by_name_and_warn(m, JOB_START, SPECIAL_POWEROFF_TARGET, JOB_REPLACE_IRREVERSIBLY, NULL, NULL);
+                 break;
+ 
++        case EMERGENCY_ACTION_EXIT_FORCE:
++                assert(MANAGER_IS_USER(m));
++
++                log_and_status(m, "Exiting immediately", reason);
++                m->exit_code = MANAGER_EXIT;
++                break;
++
+         case EMERGENCY_ACTION_POWEROFF_FORCE:
+                 log_and_status(m, "Forcibly powering off", reason);
+                 m->exit_code = MANAGER_POWEROFF;
+@@ -113,6 +119,27 @@ static const char* const emergency_action_table[_EMERGENCY_ACTION_MAX] = {
+         [EMERGENCY_ACTION_REBOOT_IMMEDIATE] = "reboot-immediate",
+         [EMERGENCY_ACTION_POWEROFF] = "poweroff",
+         [EMERGENCY_ACTION_POWEROFF_FORCE] = "poweroff-force",
+-        [EMERGENCY_ACTION_POWEROFF_IMMEDIATE] = "poweroff-immediate"
++        [EMERGENCY_ACTION_POWEROFF_IMMEDIATE] = "poweroff-immediate",
++        [EMERGENCY_ACTION_EXIT] = "exit",
++        [EMERGENCY_ACTION_EXIT_FORCE] = "exit-force",
+ };
+ DEFINE_STRING_TABLE_LOOKUP(emergency_action, EmergencyAction);
++
++int parse_emergency_action(
++                const char *value,
++                bool system,
++                EmergencyAction *ret) {
++
++        EmergencyAction x;
++
++        x = emergency_action_from_string(value);
++        if (x < 0)
++                return -EINVAL;
++
++        if ((system && x >= _EMERGENCY_ACTION_FIRST_USER_ACTION) ||
++            (!system && x != EMERGENCY_ACTION_NONE && x < _EMERGENCY_ACTION_FIRST_USER_ACTION))
++                return -EOPNOTSUPP;
++
++        *ret = x;
++        return 0;
++}
+diff --git a/src/core/emergency-action.h b/src/core/emergency-action.h
+index 61791f176f..646ccc4e6b 100644
+--- a/src/core/emergency-action.h
++++ b/src/core/emergency-action.h
+@@ -13,6 +13,9 @@ typedef enum EmergencyAction {
+         EMERGENCY_ACTION_POWEROFF,
+         EMERGENCY_ACTION_POWEROFF_FORCE,
+         EMERGENCY_ACTION_POWEROFF_IMMEDIATE,
++        EMERGENCY_ACTION_EXIT,
++        _EMERGENCY_ACTION_FIRST_USER_ACTION = EMERGENCY_ACTION_EXIT,
++        EMERGENCY_ACTION_EXIT_FORCE,
+         _EMERGENCY_ACTION_MAX,
+         _EMERGENCY_ACTION_INVALID = -1
+ } EmergencyAction;
+@@ -24,3 +27,5 @@ int emergency_action(Manager *m, EmergencyAction action, const char *reboot_arg,
+ 
+ const char* emergency_action_to_string(EmergencyAction i) _const_;
+ EmergencyAction emergency_action_from_string(const char *s) _pure_;
++
++int parse_emergency_action(const char *value, bool system, EmergencyAction *ret);
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index e0d7b8f7f8..c102ffb9f0 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -77,7 +77,6 @@ DEFINE_CONFIG_PARSE(config_parse_socket_protocol, supported_socket_protocol_from
+ DEFINE_CONFIG_PARSE(config_parse_exec_secure_bits, secure_bits_from_string, "Failed to parse secure bits");
+ DEFINE_CONFIG_PARSE_ENUM(config_parse_collect_mode, collect_mode, CollectMode, "Failed to parse garbage collection mode");
+ DEFINE_CONFIG_PARSE_ENUM(config_parse_device_policy, cgroup_device_policy, CGroupDevicePolicy, "Failed to parse device policy");
+-DEFINE_CONFIG_PARSE_ENUM(config_parse_emergency_action, emergency_action, EmergencyAction, "Failed to parse failure action specifier");
+ DEFINE_CONFIG_PARSE_ENUM(config_parse_exec_keyring_mode, exec_keyring_mode, ExecKeyringMode, "Failed to parse keyring mode");
+ DEFINE_CONFIG_PARSE_ENUM(config_parse_exec_utmp_mode, exec_utmp_mode, ExecUtmpMode, "Failed to parse utmp mode");
+ DEFINE_CONFIG_PARSE_ENUM(config_parse_job_mode, job_mode, JobMode, "Failed to parse job mode");
+@@ -4253,6 +4252,47 @@ int config_parse_job_running_timeout_sec(
+         return 0;
+ }
+ 
++int config_parse_emergency_action(
++                const char* unit,
++                const char *filename,
++                unsigned line,
++                const char *section,
++                unsigned section_line,
++                const char *lvalue,
++                int ltype,
++                const char *rvalue,
++                void *data,
++                void *userdata) {
++
++        Manager *m = NULL;
++        EmergencyAction *x = data;
++        int r;
++
++        assert(filename);
++        assert(lvalue);
++        assert(rvalue);
++        assert(data);
++
++        if (unit)
++                m = ((Unit*) userdata)->manager;
++        else
++                m = data;
++
++        r = parse_emergency_action(rvalue, MANAGER_IS_SYSTEM(m), x);
++        if (r < 0) {
++                if (r == -EOPNOTSUPP)
++                        log_syntax(unit, LOG_ERR, filename, line, r,
++                                   "%s= specified as %s mode action, ignoring: %s",
++                                   lvalue, MANAGER_IS_SYSTEM(m) ? "user" : "system", rvalue);
++                else
++                        log_syntax(unit, LOG_ERR, filename, line, r,
++                                   "Failed to parse %s=, ignoring: %s", lvalue, rvalue);
++                return 0;
++        }
++
++        return 0;
++}
++
+ #define FOLLOW_MAX 8
+ 
+ static int open_follow(char **filename, FILE **_f, Set *names, char **_final) {
+diff --git a/src/test/meson.build b/src/test/meson.build
+index 7b310d4ec7..40cf56d73d 100644
+--- a/src/test/meson.build
++++ b/src/test/meson.build
+@@ -65,6 +65,11 @@ tests += [
+           libshared],
+          []],
+ 
++        [['src/test/test-emergency-action.c'],
++         [libcore,
++          libshared],
++         []],
++
+         [['src/test/test-job-type.c'],
+          [libcore,
+           libshared],
+diff --git a/src/test/test-emergency-action.c b/src/test/test-emergency-action.c
+new file mode 100644
+index 0000000000..493b23227e
+--- /dev/null
++++ b/src/test/test-emergency-action.c
+@@ -0,0 +1,51 @@
++/* SPDX-License-Identifier: LGPL-2.1+ */
++
++#include "emergency-action.h"
++#include "tests.h"
++
++static void test_parse_emergency_action(void) {
++        EmergencyAction x;
++
++        log_info("/* %s */", __func__);
++
++        assert_se(parse_emergency_action("none", false, &x) == 0);
++        assert_se(x == EMERGENCY_ACTION_NONE);
++        assert_se(parse_emergency_action("reboot", false, &x) == -EOPNOTSUPP);
++        assert_se(parse_emergency_action("reboot-force", false, &x) == -EOPNOTSUPP);
++        assert_se(parse_emergency_action("reboot-immediate", false, &x) == -EOPNOTSUPP);
++        assert_se(parse_emergency_action("poweroff", false, &x) == -EOPNOTSUPP);
++        assert_se(parse_emergency_action("poweroff-force", false, &x) == -EOPNOTSUPP);
++        assert_se(parse_emergency_action("poweroff-immediate", false, &x) == -EOPNOTSUPP);
++        assert_se(x == EMERGENCY_ACTION_NONE);
++        assert_se(parse_emergency_action("exit", false, &x) == 0);
++        assert_se(x == EMERGENCY_ACTION_EXIT);
++        assert_se(parse_emergency_action("exit-force", false, &x) == 0);
++        assert_se(x == EMERGENCY_ACTION_EXIT_FORCE);
++        assert_se(parse_emergency_action("exit-forcee", false, &x) == -EINVAL);
++
++        assert_se(parse_emergency_action("none", true, &x) == 0);
++        assert_se(x == EMERGENCY_ACTION_NONE);
++        assert_se(parse_emergency_action("reboot", true, &x) == 0);
++        assert_se(x == EMERGENCY_ACTION_REBOOT);
++        assert_se(parse_emergency_action("reboot-force", true, &x) == 0);
++        assert_se(x == EMERGENCY_ACTION_REBOOT_FORCE);
++        assert_se(parse_emergency_action("reboot-immediate", true, &x) == 0);
++        assert_se(x == EMERGENCY_ACTION_REBOOT_IMMEDIATE);
++        assert_se(parse_emergency_action("poweroff", true, &x) == 0);
++        assert_se(x == EMERGENCY_ACTION_POWEROFF);
++        assert_se(parse_emergency_action("poweroff-force", true, &x) == 0);
++        assert_se(x == EMERGENCY_ACTION_POWEROFF_FORCE);
++        assert_se(parse_emergency_action("poweroff-immediate", true, &x) == 0);
++        assert_se(parse_emergency_action("exit", true, &x) == -EOPNOTSUPP);
++        assert_se(parse_emergency_action("exit-force", true, &x) == -EOPNOTSUPP);
++        assert_se(parse_emergency_action("exit-forcee", true, &x) == -EINVAL);
++        assert_se(x == EMERGENCY_ACTION_POWEROFF_IMMEDIATE);
++}
++
++int main(int argc, char **argv) {
++        test_setup_logging(LOG_INFO);
++
++        test_parse_emergency_action();
++
++        return EXIT_SUCCESS;
++}

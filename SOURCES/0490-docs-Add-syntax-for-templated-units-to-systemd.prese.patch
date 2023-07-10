@@ -1,0 +1,55 @@
+From 55df2fd634f900419b718ed354132cc86cd533dd Mon Sep 17 00:00:00 2001
+From: Joerg Behrmann <behrmann@physik.fu-berlin.de>
+Date: Tue, 10 Mar 2020 16:34:13 +0100
+Subject: [PATCH] docs: Add syntax for templated units to systemd.preset man
+ page
+
+This documents the syntax
+
+     enable template@.service foo bar baz
+
+that was introduced in #9901 to preset templated units.
+
+(cherry picked from commit 1f667d8a7cff4355cd23ebebeb4d7179e3498eb8)
+
+Related: #1812972
+---
+ man/systemd.preset.xml | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/man/systemd.preset.xml b/man/systemd.preset.xml
+index cf807bd4c8..df401f00f3 100644
+--- a/man/systemd.preset.xml
++++ b/man/systemd.preset.xml
+@@ -71,8 +71,11 @@
+     either the word <literal>enable</literal> or
+     <literal>disable</literal> followed by a space and a unit name
+     (possibly with shell style wildcards), separated by newlines.
+-    Empty lines and lines whose first non-whitespace character is # or
+-    ; are ignored.</para>
++    Empty lines and lines whose first non-whitespace character is <literal>#</literal> or
++    <literal>;</literal> are ignored. Multiple instance names for unit
++    templates may be specified as a space separated list at the end of
++    the line instead of the customary position between <literal>@</literal>
++    and the unit suffix.</para>
+ 
+     <para>Presets must refer to the "real" unit file, and not to any aliases. See
+     <citerefentry><refentrytitle>systemd.unit</refentrytitle><manvolnum>5</manvolnum></citerefentry>
+@@ -124,6 +127,17 @@ disable *</programlisting>
+     <literal>99-</literal>, it will be read last and hence can easily
+     be overridden by spin or administrator preset policy.</para>
+ 
++    <example>
++      <title>Enable multiple template instances</title>
++
++      <programlisting># /usr/lib/systemd/system-preset/80-dirsrv.preset
++
++enable dirsrv@.service foo bar baz</programlisting>
++    </example>
++
++    <para>This enables all three of <filename>dirsrv@foo.service</filename>,
++    <filename>dirsrv@bar.service</filename> and <filename>dirsrv@baz.service</filename>.</para>
++
+     <example>
+       <title>A GNOME spin</title>
+ 

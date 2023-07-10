@@ -1,0 +1,49 @@
+From 8c81776212d0aa44f5ae20635079bd6ce76d16ac Mon Sep 17 00:00:00 2001
+From: Daan De Meyer <daan.j.demeyer@gmail.com>
+Date: Tue, 19 Oct 2021 10:45:48 +0100
+Subject: [PATCH] core: Delay start rate limit check when starting a unit
+
+Doing start rate limit checks before doing condition checks made
+condition check failures count towards the start rate limit which
+broke existing assumptions (see #21025). Run the rate limit checks
+after the condition checks again to restore the previous behaviour.
+
+(cherry picked from commit ce2146f5256659c7fb53a7d5b9dc551252e27e7e)
+
+Related: #2065322
+---
+ src/core/unit.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/src/core/unit.c b/src/core/unit.c
+index 4fd9af87b7..b825e2418c 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -1729,13 +1729,6 @@ int unit_start(Unit *u) {
+ 
+         assert(u);
+ 
+-        /* Check our ability to start early so that failure conditions don't cause us to enter a busy loop. */
+-        if (UNIT_VTABLE(u)->can_start) {
+-                r = UNIT_VTABLE(u)->can_start(u);
+-                if (r < 0)
+-                        return r;
+-        }
+-
+         /* If this is already started, then this will succeed. Note that this will even succeed if this unit
+          * is not startable by the user. This is relied on to detect when we need to wait for units and when
+          * waiting is finished. */
+@@ -1790,6 +1783,13 @@ int unit_start(Unit *u) {
+                 return unit_start(following);
+         }
+ 
++        /* Check start rate limiting early so that failure conditions don't cause us to enter a busy loop. */
++        if (UNIT_VTABLE(u)->can_start) {
++                r = UNIT_VTABLE(u)->can_start(u);
++                if (r < 0)
++                        return r;
++        }
++
+         /* If it is stopped, but we cannot start it, then fail */
+         if (!UNIT_VTABLE(u)->start)
+                 return -EBADR;

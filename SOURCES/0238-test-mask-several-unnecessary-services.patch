@@ -1,0 +1,252 @@
+From c748b95f5a00b6d9c46026c3d251c40437e6b64a Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Thu, 1 Nov 2018 17:26:36 +0900
+Subject: [PATCH] test: mask several unnecessary services
+
+This may make CIs run faster.
+
+(cherry picked from commit 056ae88152a722bdbea54ff33db815d585c8b9c6)
+
+Related: #1761519
+---
+ test/TEST-02-CRYPTSETUP/test.sh    | 8 ++++++++
+ test/TEST-03-JOBS/test.sh          | 8 ++++++++
+ test/TEST-04-JOURNAL/test.sh       | 8 ++++++++
+ test/TEST-05-RLIMITS/test.sh       | 8 ++++++++
+ test/TEST-07-ISSUE-1981/test.sh    | 8 ++++++++
+ test/TEST-11-ISSUE-3166/test.sh    | 8 ++++++++
+ test/TEST-12-ISSUE-3171/test.sh    | 8 ++++++++
+ test/TEST-13-NSPAWN-SMOKE/test.sh  | 8 ++++++++
+ test/TEST-18-FAILUREACTION/test.sh | 7 +++++++
+ test/TEST-19-DELEGATE/test.sh      | 8 ++++++++
+ test/TEST-20-MAINPIDGAMES/test.sh  | 8 ++++++++
+ test/TEST-23-TYPE-EXEC/test.sh     | 8 ++++++++
+ 12 files changed, 95 insertions(+)
+
+diff --git a/test/TEST-02-CRYPTSETUP/test.sh b/test/TEST-02-CRYPTSETUP/test.sh
+index c38e56f72e..97eb2f409e 100755
+--- a/test/TEST-02-CRYPTSETUP/test.sh
++++ b/test/TEST-02-CRYPTSETUP/test.sh
+@@ -45,6 +45,14 @@ test_setup() {
+ 
+         setup_basic_environment
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         # setup the testsuite service
+         cat >$initdir/etc/systemd/system/testsuite.service <<EOF
+ [Unit]
+diff --git a/test/TEST-03-JOBS/test.sh b/test/TEST-03-JOBS/test.sh
+index 08e5cfe6c8..93a387df59 100755
+--- a/test/TEST-03-JOBS/test.sh
++++ b/test/TEST-03-JOBS/test.sh
+@@ -19,6 +19,14 @@ test_setup() {
+ 
+         setup_basic_environment
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         # setup the testsuite service
+         cat >$initdir/etc/systemd/system/testsuite.service <<EOF
+ [Unit]
+diff --git a/test/TEST-04-JOURNAL/test.sh b/test/TEST-04-JOURNAL/test.sh
+index 30e7b181b2..80e5fb0a73 100755
+--- a/test/TEST-04-JOURNAL/test.sh
++++ b/test/TEST-04-JOURNAL/test.sh
+@@ -18,6 +18,14 @@ test_setup() {
+ 
+         setup_basic_environment
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         # setup the testsuite service
+         cat >$initdir/etc/systemd/system/testsuite.service <<EOF
+ [Unit]
+diff --git a/test/TEST-05-RLIMITS/test.sh b/test/TEST-05-RLIMITS/test.sh
+index a1b855c5fb..711f87f585 100755
+--- a/test/TEST-05-RLIMITS/test.sh
++++ b/test/TEST-05-RLIMITS/test.sh
+@@ -18,6 +18,14 @@ test_setup() {
+ 
+         setup_basic_environment
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         cat >$initdir/etc/systemd/system.conf <<EOF
+ [Manager]
+ DefaultLimitNOFILE=10000:16384
+diff --git a/test/TEST-07-ISSUE-1981/test.sh b/test/TEST-07-ISSUE-1981/test.sh
+index 88d143e479..8d3ed04712 100755
+--- a/test/TEST-07-ISSUE-1981/test.sh
++++ b/test/TEST-07-ISSUE-1981/test.sh
+@@ -21,6 +21,14 @@ test_setup() {
+ 
+         setup_basic_environment
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         # setup the testsuite service
+         cat >$initdir/etc/systemd/system/testsuite.service <<EOF
+ [Unit]
+diff --git a/test/TEST-11-ISSUE-3166/test.sh b/test/TEST-11-ISSUE-3166/test.sh
+index 8aae4d5ed9..e6e96101aa 100755
+--- a/test/TEST-11-ISSUE-3166/test.sh
++++ b/test/TEST-11-ISSUE-3166/test.sh
+@@ -20,6 +20,14 @@ test_setup() {
+         setup_basic_environment
+         dracut_install false touch
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         # setup the testsuite service
+         cat >$initdir/etc/systemd/system/testsuite.service <<EOF
+ [Unit]
+diff --git a/test/TEST-12-ISSUE-3171/test.sh b/test/TEST-12-ISSUE-3171/test.sh
+index 559fa469cd..915cc21cd8 100755
+--- a/test/TEST-12-ISSUE-3171/test.sh
++++ b/test/TEST-12-ISSUE-3171/test.sh
+@@ -20,6 +20,14 @@ test_setup() {
+         setup_basic_environment
+         dracut_install cat mv stat nc
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         # setup the testsuite service
+         cat >$initdir/etc/systemd/system/testsuite.service <<EOF
+ [Unit]
+diff --git a/test/TEST-13-NSPAWN-SMOKE/test.sh b/test/TEST-13-NSPAWN-SMOKE/test.sh
+index a676384bfc..cec59fa24d 100755
+--- a/test/TEST-13-NSPAWN-SMOKE/test.sh
++++ b/test/TEST-13-NSPAWN-SMOKE/test.sh
+@@ -20,6 +20,14 @@ test_setup() {
+         setup_basic_environment
+         dracut_install busybox chmod rmdir unshare ip sysctl
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         cp create-busybox-container $initdir/
+ 
+         ./create-busybox-container $initdir/nc-container
+diff --git a/test/TEST-18-FAILUREACTION/test.sh b/test/TEST-18-FAILUREACTION/test.sh
+index e48ba9bac3..783b3aac6e 100755
+--- a/test/TEST-18-FAILUREACTION/test.sh
++++ b/test/TEST-18-FAILUREACTION/test.sh
+@@ -35,6 +35,13 @@ EOF
+     ) || return 1
+     setup_nspawn_root
+ 
++    # mask some services that we do not want to run in these tests
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++
+     ddebug "umount $TESTDIR/root"
+     umount $TESTDIR/root
+ }
+diff --git a/test/TEST-19-DELEGATE/test.sh b/test/TEST-19-DELEGATE/test.sh
+index 841a29c06f..ef1d99932a 100755
+--- a/test/TEST-19-DELEGATE/test.sh
++++ b/test/TEST-19-DELEGATE/test.sh
+@@ -20,6 +20,14 @@ test_setup() {
+ 
+         setup_basic_environment
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         # setup the testsuite service
+         cat >$initdir/etc/systemd/system/testsuite.service <<EOF
+ [Unit]
+diff --git a/test/TEST-20-MAINPIDGAMES/test.sh b/test/TEST-20-MAINPIDGAMES/test.sh
+index b14083a256..4ec8081478 100755
+--- a/test/TEST-20-MAINPIDGAMES/test.sh
++++ b/test/TEST-20-MAINPIDGAMES/test.sh
+@@ -17,6 +17,14 @@ test_setup() {
+ 
+         setup_basic_environment
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         # setup the testsuite service
+         cat >$initdir/etc/systemd/system/testsuite.service <<EOF
+ [Unit]
+diff --git a/test/TEST-23-TYPE-EXEC/test.sh b/test/TEST-23-TYPE-EXEC/test.sh
+index bdcea239a7..2e76451f5b 100755
+--- a/test/TEST-23-TYPE-EXEC/test.sh
++++ b/test/TEST-23-TYPE-EXEC/test.sh
+@@ -17,6 +17,14 @@ test_setup() {
+ 
+         setup_basic_environment
+ 
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
+         # setup the testsuite service
+         cat >$initdir/etc/systemd/system/testsuite.service <<EOF
+ [Unit]

@@ -1,0 +1,42 @@
+From 4c5fdbde7e745126f31542a70b45cc4faec094d2 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 30 Oct 2019 20:26:50 +0100
+Subject: [PATCH] sd-event: refuse running default event loops in any other
+ thread than the one they are default for
+
+(cherry picked from commit e544601536ac13a288d7476f4400c7b0f22b7ea1)
+
+Related: #1819868
+---
+ TODO                               | 1 -
+ src/libsystemd/sd-event/sd-event.c | 5 +++++
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/TODO b/TODO
+index 8f78000089..3100e067d6 100644
+--- a/TODO
++++ b/TODO
+@@ -581,7 +581,6 @@ Features:
+   - allow multiple signal handlers per signal?
+   - document chaining of signal handler for SIGCHLD and child handlers
+   - define more intervals where we will shift wakeup intervals around in, 1h, 6h, 24h, ...
+-  - generate a failure of a default event loop is executed out-of-thread
+   - maybe add support for inotify events (which we can do safely now, with O_PATH)
+ 
+ * investigate endianness issues of UUID vs. GUID
+diff --git a/src/libsystemd/sd-event/sd-event.c b/src/libsystemd/sd-event/sd-event.c
+index 88641879cc..537a0b81d4 100644
+--- a/src/libsystemd/sd-event/sd-event.c
++++ b/src/libsystemd/sd-event/sd-event.c
+@@ -3360,6 +3360,11 @@ _public_ int sd_event_prepare(sd_event *e) {
+         assert_return(e->state != SD_EVENT_FINISHED, -ESTALE);
+         assert_return(e->state == SD_EVENT_INITIAL, -EBUSY);
+ 
++        /* Let's check that if we are a default event loop we are executed in the correct thread. We only do
++         * this check here once, since gettid() is typically not cached, and thus want to minimize
++         * syscalls */
++        assert_return(!e->default_event_ptr || e->tid == gettid(), -EREMOTEIO);
++
+         if (e->exit_requested)
+                 goto pending;
+ 

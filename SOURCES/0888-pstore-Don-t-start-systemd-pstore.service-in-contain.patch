@@ -1,0 +1,27 @@
+From 653a635086cfeaf0af12da3a722b0ebe2029b927 Mon Sep 17 00:00:00 2001
+From: Balint Reczey <balint.reczey@canonical.com>
+Date: Mon, 16 Dec 2019 19:03:19 +0100
+Subject: [PATCH] pstore: Don't start systemd-pstore.service in containers
+
+Usually it is not useful and can also fail making
+boot-and-services autopkgtest fail.
+
+(cherry picked from commit 287f506c32f3f4a48ba020408f964cb0f964d752)
+
+Related: #2158832
+---
+ units/systemd-pstore.service.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/units/systemd-pstore.service.in b/units/systemd-pstore.service.in
+index dde21bc33e..89f34afe34 100644
+--- a/units/systemd-pstore.service.in
++++ b/units/systemd-pstore.service.in
+@@ -11,6 +11,7 @@
+ Description=Platform Persistent Storage Archival
+ Documentation=man:systemd-pstore(8)
+ ConditionDirectoryNotEmpty=/sys/fs/pstore
++ConditionVirtualization=!container
+ DefaultDependencies=no
+ Wants=systemd-remount-fs.service
+ After=systemd-remount-fs.service

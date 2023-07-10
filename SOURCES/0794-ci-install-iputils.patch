@@ -1,0 +1,25 @@
+From 128d784dacb456f9ea675911e88d4b47925bda0d Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Wed, 20 Jul 2022 10:24:36 +0200
+Subject: [PATCH] ci: install iputils
+
+Required by test-bpf.
+
+rhel-only
+Related: #2087152
+---
+ .github/workflows/unit_tests.sh | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/.github/workflows/unit_tests.sh b/.github/workflows/unit_tests.sh
+index c1311310fb..3859433720 100755
+--- a/.github/workflows/unit_tests.sh
++++ b/.github/workflows/unit_tests.sh
+@@ -11,6 +11,7 @@ ADDITIONAL_DEPS=(
+         dnsmasq
+         e2fsprogs
+         hostname
++        iputils
+         libasan
+         libubsan
+         nc

@@ -1,0 +1,403 @@
+From 11df25536319a4c0f3276c2218054243d9ee213c Mon Sep 17 00:00:00 2001
+From: Filipe Brandenburger <filbranden@google.com>
+Date: Fri, 2 Nov 2018 09:21:57 -0700
+Subject: [PATCH] core: add CPUQuotaPeriodSec=
+
+This new setting allows configuration of CFS period on the CPU cgroup, instead
+of using a hardcoded default of 100ms.
+
+Tested:
+- Legacy cgroup + Unified cgroup
+- systemctl set-property
+- systemctl show
+- Confirmed that the cgroup settings (such as cpu.cfs_period_ns) were set
+  appropriately, including updating the CPU quota (cpu.cfs_quota_ns) when
+  CPUQuotaPeriodSec= is updated.
+- Checked that clamping works properly when either period or (quota * period)
+  are below the resolution of 1ms, or if period is above the max of 1s.
+
+(cherry picked from commit 10f28641115733c61754342d5dcbe70b083bea4b)
+
+Resolves: #1770379
+---
+ doc/TRANSIENT-SETTINGS.md             |  1 +
+ man/systemd.resource-control.xml      | 19 +++++++++
+ src/core/cgroup.c                     | 61 ++++++++++++++++++++++-----
+ src/core/cgroup.h                     |  3 ++
+ src/core/dbus-cgroup.c                | 23 ++++++++++
+ src/core/load-fragment-gperf.gperf.m4 |  1 +
+ src/core/load-fragment.c              |  1 +
+ src/shared/bus-unit-util.c            | 14 ++++++
+ src/test/meson.build                  |  5 +++
+ src/test/test-cgroup-cpu.c            | 38 +++++++++++++++++
+ 10 files changed, 155 insertions(+), 11 deletions(-)
+ create mode 100644 src/test/test-cgroup-cpu.c
+
+diff --git a/doc/TRANSIENT-SETTINGS.md b/doc/TRANSIENT-SETTINGS.md
+index 23fe84e4d1..0d2d3e9065 100644
+--- a/doc/TRANSIENT-SETTINGS.md
++++ b/doc/TRANSIENT-SETTINGS.md
+@@ -218,6 +218,7 @@ All cgroup/resource control settings are available for transient units
+ ✓ CPUShares=
+ ✓ StartupCPUShares=
+ ✓ CPUQuota=
++✓ CPUQuotaPeriodSec=
+ ✓ AllowedCPUs=
+ ✓ AllowedMemoryNodes=
+ ✓ MemoryAccounting=
+diff --git a/man/systemd.resource-control.xml b/man/systemd.resource-control.xml
+index b0064bf98f..cfe19a6574 100644
+--- a/man/systemd.resource-control.xml
++++ b/man/systemd.resource-control.xml
+@@ -231,6 +231,25 @@
+         </listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>CPUQuotaPeriodSec=</varname></term>
++
++        <listitem>
++          <para>Assign the duration over which the CPU time quota specified by <varname>CPUQuota=</varname> is measured.
++          Takes a time duration value in seconds, with an optional suffix such as "ms" for milliseconds (or "s" for seconds.)
++          The default setting is 100ms. The period is clamped to the range supported by the kernel, which is [1ms, 1000ms].
++          Additionally, the period is adjusted up so that the quota interval is also at least 1ms.
++          Setting <varname>CPUQuotaPeriodSec=</varname> to an empty value resets it to the default.</para>
++
++          <para>This controls the second field of <literal>cpu.max</literal> attribute on the unified control group hierarchy
++          and <literal>cpu.cfs_period_us</literal> on legacy. For details about these control group attributes, see
++          <ulink url="https://www.kernel.org/doc/Documentation/cgroup-v2.txt">cgroup-v2.txt</ulink> and
++          <ulink url="https://www.kernel.org/doc/Documentation/scheduler/sched-design-CFS.txt">sched-design-CFS.txt</ulink>.</para>
++
++          <para>Example: <varname>CPUQuotaPeriodSec=10ms</varname> to request that the CPU quota is measured in periods of 10ms.</para>
++        </listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>MemoryAccounting=</varname></term>
+ 
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index 7aa7db9261..45fd64a394 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -23,7 +23,7 @@
+ #include "string-util.h"
+ #include "virt.h"
+ 
+-#define CGROUP_CPU_QUOTA_PERIOD_USEC ((usec_t) 100 * USEC_PER_MSEC)
++#define CGROUP_CPU_QUOTA_DEFAULT_PERIOD_USEC ((usec_t) 100 * USEC_PER_MSEC)
+ 
+ bool manager_owns_root_cgroup(Manager *m) {
+         assert(m);
+@@ -77,6 +77,7 @@ void cgroup_context_init(CGroupContext *c) {
+                 .cpu_weight = CGROUP_WEIGHT_INVALID,
+                 .startup_cpu_weight = CGROUP_WEIGHT_INVALID,
+                 .cpu_quota_per_sec_usec = USEC_INFINITY,
++                .cpu_quota_period_usec = USEC_INFINITY,
+ 
+                 .cpu_shares = CGROUP_CPU_SHARES_INVALID,
+                 .startup_cpu_shares = CGROUP_CPU_SHARES_INVALID,
+@@ -190,6 +191,7 @@ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix) {
+         CGroupDeviceAllow *a;
+         IPAddressAccessItem *iaai;
+         char u[FORMAT_TIMESPAN_MAX];
++        char v[FORMAT_TIMESPAN_MAX];
+ 
+         assert(c);
+         assert(f);
+@@ -211,6 +213,7 @@ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix) {
+                 "%sCPUShares=%" PRIu64 "\n"
+                 "%sStartupCPUShares=%" PRIu64 "\n"
+                 "%sCPUQuotaPerSecSec=%s\n"
++                "%sCPUQuotaPeriodSec=%s\n"
+                 "%sAllowedCPUs=%s\n"
+                 "%sAllowedMemoryNodes=%s\n"
+                 "%sIOWeight=%" PRIu64 "\n"
+@@ -236,6 +239,7 @@ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix) {
+                 prefix, c->cpu_shares,
+                 prefix, c->startup_cpu_shares,
+                 prefix, format_timespan(u, sizeof(u), c->cpu_quota_per_sec_usec, 1),
++                prefix, format_timespan(v, sizeof(v), c->cpu_quota_period_usec, 1),
+                 prefix, cpuset_cpus,
+                 prefix, cpuset_mems,
+                 prefix, c->io_weight,
+@@ -515,7 +519,40 @@ static uint64_t cgroup_context_cpu_shares(CGroupContext *c, ManagerState state)
+                 return CGROUP_CPU_SHARES_DEFAULT;
+ }
+ 
+-static void cgroup_apply_unified_cpu_config(Unit *u, uint64_t weight, uint64_t quota) {
++usec_t cgroup_cpu_adjust_period(usec_t period, usec_t quota, usec_t resolution, usec_t max_period) {
++        /* kernel uses a minimum resolution of 1ms, so both period and (quota * period)
++         * need to be higher than that boundary. quota is specified in USecPerSec.
++         * Additionally, period must be at most max_period. */
++        assert(quota > 0);
++
++        return MIN(MAX3(period, resolution, resolution * USEC_PER_SEC / quota), max_period);
++}
++
++static usec_t cgroup_cpu_adjust_period_and_log(Unit *u, usec_t period, usec_t quota) {
++        usec_t new_period;
++
++        if (quota == USEC_INFINITY)
++                /* Always use default period for infinity quota. */
++                return CGROUP_CPU_QUOTA_DEFAULT_PERIOD_USEC;
++
++        if (period == USEC_INFINITY)
++                /* Default period was requested. */
++                period = CGROUP_CPU_QUOTA_DEFAULT_PERIOD_USEC;
++
++        /* Clamp to interval [1ms, 1s] */
++        new_period = cgroup_cpu_adjust_period(period, quota, USEC_PER_MSEC, USEC_PER_SEC);
++
++        if (new_period != period) {
++                char v[FORMAT_TIMESPAN_MAX];
++                log_unit_full(u, LOG_WARNING, 0,
++                              "Clamping CPU interval for cpu.max: period is now %s",
++                              format_timespan(v, sizeof(v), new_period, 1));
++        }
++
++        return new_period;
++}
++
++static void cgroup_apply_unified_cpu_config(Unit *u, uint64_t weight, uint64_t quota, usec_t period) {
+         char buf[MAX(DECIMAL_STR_MAX(uint64_t) + 1, (DECIMAL_STR_MAX(usec_t) + 1) * 2)];
+         int r;
+ 
+@@ -525,11 +562,12 @@ static void cgroup_apply_unified_cpu_config(Unit *u, uint64_t weight, uint64_t q
+                 log_unit_full(u, IN_SET(r, -ENOENT, -EROFS, -EACCES) ? LOG_DEBUG : LOG_WARNING, r,
+                               "Failed to set cpu.weight: %m");
+ 
++        period = cgroup_cpu_adjust_period_and_log(u, period, quota);
+         if (quota != USEC_INFINITY)
+                 xsprintf(buf, USEC_FMT " " USEC_FMT "\n",
+-                         quota * CGROUP_CPU_QUOTA_PERIOD_USEC / USEC_PER_SEC, CGROUP_CPU_QUOTA_PERIOD_USEC);
++                         MAX(quota * period / USEC_PER_SEC, USEC_PER_MSEC), period);
+         else
+-                xsprintf(buf, "max " USEC_FMT "\n", CGROUP_CPU_QUOTA_PERIOD_USEC);
++                xsprintf(buf, "max " USEC_FMT "\n", period);
+ 
+         r = cg_set_attribute("cpu", u->cgroup_path, "cpu.max", buf);
+ 
+@@ -538,7 +576,7 @@ static void cgroup_apply_unified_cpu_config(Unit *u, uint64_t weight, uint64_t q
+                               "Failed to set cpu.max: %m");
+ }
+ 
+-static void cgroup_apply_legacy_cpu_config(Unit *u, uint64_t shares, uint64_t quota) {
++static void cgroup_apply_legacy_cpu_config(Unit *u, uint64_t shares, uint64_t quota, usec_t period) {
+         char buf[MAX(DECIMAL_STR_MAX(uint64_t), DECIMAL_STR_MAX(usec_t)) + 1];
+         int r;
+ 
+@@ -548,20 +586,21 @@ static void cgroup_apply_legacy_cpu_config(Unit *u, uint64_t shares, uint64_t qu
+                 log_unit_full(u, IN_SET(r, -ENOENT, -EROFS, -EACCES) ? LOG_DEBUG : LOG_WARNING, r,
+                               "Failed to set cpu.shares: %m");
+ 
+-        xsprintf(buf, USEC_FMT "\n", CGROUP_CPU_QUOTA_PERIOD_USEC);
++        period = cgroup_cpu_adjust_period_and_log(u, period, quota);
++
++        xsprintf(buf, USEC_FMT "\n", period);
+         r = cg_set_attribute("cpu", u->cgroup_path, "cpu.cfs_period_us", buf);
+         if (r < 0)
+                 log_unit_full(u, IN_SET(r, -ENOENT, -EROFS, -EACCES) ? LOG_DEBUG : LOG_WARNING, r,
+                               "Failed to set cpu.cfs_period_us: %m");
+ 
+         if (quota != USEC_INFINITY) {
+-                xsprintf(buf, USEC_FMT "\n", quota * CGROUP_CPU_QUOTA_PERIOD_USEC / USEC_PER_SEC);
+-                r = cg_set_attribute("cpu", u->cgroup_path, "cpu.cfs_quota_us", buf);
+-        } else
++                xsprintf(buf, USEC_FMT "\n", MAX(quota * period / USEC_PER_SEC, USEC_PER_MSEC));
+                 r = cg_set_attribute("cpu", u->cgroup_path, "cpu.cfs_quota_us", "-1");
+         if (r < 0)
+                 log_unit_full(u, IN_SET(r, -ENOENT, -EROFS, -EACCES) ? LOG_DEBUG : LOG_WARNING, r,
+                               "Failed to set cpu.cfs_quota_us: %m");
++        }
+ }
+ 
+ static uint64_t cgroup_cpu_shares_to_weight(uint64_t shares) {
+@@ -815,7 +854,7 @@ static void cgroup_context_apply(
+                         } else
+                                 weight = CGROUP_WEIGHT_DEFAULT;
+ 
+-                        cgroup_apply_unified_cpu_config(u, weight, c->cpu_quota_per_sec_usec);
++                        cgroup_apply_unified_cpu_config(u, weight, c->cpu_quota_per_sec_usec, c->cpu_quota_period_usec);
+                 } else {
+                         uint64_t shares;
+ 
+@@ -831,7 +870,7 @@ static void cgroup_context_apply(
+                         else
+                                 shares = CGROUP_CPU_SHARES_DEFAULT;
+ 
+-                        cgroup_apply_legacy_cpu_config(u, shares, c->cpu_quota_per_sec_usec);
++                        cgroup_apply_legacy_cpu_config(u, shares, c->cpu_quota_per_sec_usec, c->cpu_quota_period_usec);
+                 }
+         }
+ 
+diff --git a/src/core/cgroup.h b/src/core/cgroup.h
+index f7365b4c46..2ba57d3ded 100644
+--- a/src/core/cgroup.h
++++ b/src/core/cgroup.h
+@@ -84,6 +84,7 @@ struct CGroupContext {
+         uint64_t cpu_weight;
+         uint64_t startup_cpu_weight;
+         usec_t cpu_quota_per_sec_usec;
++        usec_t cpu_quota_period_usec;
+ 
+         CPUSet cpuset_cpus;
+         CPUSet cpuset_mems;
+@@ -136,6 +137,8 @@ typedef enum CGroupIPAccountingMetric {
+ typedef struct Unit Unit;
+ typedef struct Manager Manager;
+ 
++usec_t cgroup_cpu_adjust_period(usec_t period, usec_t quota, usec_t resolution, usec_t max_period);
++
+ void cgroup_context_init(CGroupContext *c);
+ void cgroup_context_done(CGroupContext *c);
+ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix);
+diff --git a/src/core/dbus-cgroup.c b/src/core/dbus-cgroup.c
+index a1d3014d61..c8b918e45d 100644
+--- a/src/core/dbus-cgroup.c
++++ b/src/core/dbus-cgroup.c
+@@ -334,6 +334,7 @@ const sd_bus_vtable bus_cgroup_vtable[] = {
+         SD_BUS_PROPERTY("CPUShares", "t", NULL, offsetof(CGroupContext, cpu_shares), 0),
+         SD_BUS_PROPERTY("StartupCPUShares", "t", NULL, offsetof(CGroupContext, startup_cpu_shares), 0),
+         SD_BUS_PROPERTY("CPUQuotaPerSecUSec", "t", bus_property_get_usec, offsetof(CGroupContext, cpu_quota_per_sec_usec), 0),
++        SD_BUS_PROPERTY("CPUQuotaPeriodUSec", "t", bus_property_get_usec, offsetof(CGroupContext, cpu_quota_period_usec), 0),
+         SD_BUS_PROPERTY("AllowedCPUs", "ay", property_get_cpuset, offsetof(CGroupContext, cpuset_cpus), 0),
+         SD_BUS_PROPERTY("AllowedMemoryNodes", "ay", property_get_cpuset, offsetof(CGroupContext, cpuset_mems), 0),
+         SD_BUS_PROPERTY("IOAccounting", "b", bus_property_get_bool, offsetof(CGroupContext, io_accounting), 0),
+@@ -725,6 +726,28 @@ int bus_cgroup_set_property(
+ 
+                 return 1;
+ 
++        } else if (streq(name, "CPUQuotaPeriodUSec")) {
++                uint64_t u64;
++
++                r = sd_bus_message_read(message, "t", &u64);
++                if (r < 0)
++                        return r;
++
++                if (!UNIT_WRITE_FLAGS_NOOP(flags)) {
++                        c->cpu_quota_period_usec = u64;
++                        unit_invalidate_cgroup(u, CGROUP_MASK_CPU);
++                        if (c->cpu_quota_period_usec == USEC_INFINITY)
++                                unit_write_setting(u, flags, "CPUQuotaPeriodSec", "CPUQuotaPeriodSec=");
++                        else {
++                                char v[FORMAT_TIMESPAN_MAX];
++                                unit_write_settingf(u, flags, "CPUQuotaPeriodSec",
++                                                    "CPUQuotaPeriodSec=%s",
++                                                    format_timespan(v, sizeof(v), c->cpu_quota_period_usec, 1));
++                        }
++                }
++
++                return 1;
++
+         } else if (STR_IN_SET(name, "AllowedCPUs", "AllowedMemoryNodes")) {
+                 const void *a;
+                 size_t n;
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index 23879c001f..4defa82ac1 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -169,6 +169,7 @@ $1.StartupCPUWeight,             config_parse_cg_weight,             0,
+ $1.CPUShares,                    config_parse_cpu_shares,            0,                             offsetof($1, cgroup_context.cpu_shares)
+ $1.StartupCPUShares,             config_parse_cpu_shares,            0,                             offsetof($1, cgroup_context.startup_cpu_shares)
+ $1.CPUQuota,                     config_parse_cpu_quota,             0,                             offsetof($1, cgroup_context)
++$1.CPUQuotaPeriodSec,            config_parse_sec_def_infinity,      0,                             offsetof($1, cgroup_context.cpu_quota_period_usec)
+ $1.MemoryAccounting,             config_parse_bool,                  0,                             offsetof($1, cgroup_context.memory_accounting)
+ $1.MemoryLow,                    config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+ $1.MemoryHigh,                   config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index 1e22013b75..762b106007 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -55,6 +55,7 @@
+ #include "unit-name.h"
+ #include "unit-printf.h"
+ #include "user-util.h"
++#include "time-util.h"
+ #include "web-util.h"
+ 
+ static int supported_socket_protocol_from_string(const char *s) {
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index 3c1ecf2027..ec45d6f86d 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -480,6 +480,20 @@ static int bus_append_cgroup_property(sd_bus_message *m, const char *field, cons
+                 return 1;
+         }
+ 
++        if (streq(field, "CPUQuotaPeriodSec")) {
++                usec_t u = USEC_INFINITY;
++
++                r = parse_sec_def_infinity(eq, &u);
++                if (r < 0)
++                        return log_error_errno(r, "CPU quota period '%s' invalid.", eq);
++
++                r = sd_bus_message_append(m, "(sv)", "CPUQuotaPeriodUSec", "t", u);
++                if (r < 0)
++                        return bus_log_create_error(r);
++
++                return 1;
++        }
++
+         if (streq(field, "DeviceAllow")) {
+ 
+                 if (isempty(eq))
+diff --git a/src/test/meson.build b/src/test/meson.build
+index ead000e30c..22264d034c 100644
+--- a/src/test/meson.build
++++ b/src/test/meson.build
+@@ -513,6 +513,11 @@ tests += [
+          [],
+          '', 'manual'],
+ 
++        [['src/test/test-cgroup-cpu.c'],
++         [libcore,
++          libshared],
++         []],
++
+         [['src/test/test-cgroup-mask.c',
+           'src/test/test-helper.c'],
+          [libcore,
+diff --git a/src/test/test-cgroup-cpu.c b/src/test/test-cgroup-cpu.c
+new file mode 100644
+index 0000000000..a445acc955
+--- /dev/null
++++ b/src/test/test-cgroup-cpu.c
+@@ -0,0 +1,38 @@
++/* SPDX-License-Identifier: LGPL-2.1+ */
++
++#include "cgroup.h"
++#include "log.h"
++
++static void test_cgroup_cpu_adjust_period(void) {
++        log_info("/* %s */", __func__);
++
++        /* Period 1ms, quota 40% -> Period 2.5ms */
++        assert_se(2500 == cgroup_cpu_adjust_period(USEC_PER_MSEC, 400 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 10ms, quota 10% -> keep. */
++        assert_se(10 * USEC_PER_MSEC == cgroup_cpu_adjust_period(10 * USEC_PER_MSEC, 100 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 1ms, quota 1000% -> keep. */
++        assert_se(USEC_PER_MSEC == cgroup_cpu_adjust_period(USEC_PER_MSEC, 10000 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 100ms, quota 30% -> keep. */
++        assert_se(100 * USEC_PER_MSEC == cgroup_cpu_adjust_period(100 * USEC_PER_MSEC, 300 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 5s, quota 40% -> adjust to 1s. */
++        assert_se(USEC_PER_SEC == cgroup_cpu_adjust_period(5 * USEC_PER_SEC, 400 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 2s, quota 250% -> adjust to 1s. */
++        assert_se(USEC_PER_SEC == cgroup_cpu_adjust_period(2 * USEC_PER_SEC, 2500 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 10us, quota 5,000,000% -> adjust to 1ms. */
++        assert_se(USEC_PER_MSEC == cgroup_cpu_adjust_period(10, 50000000 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 10ms, quota 50,000% -> keep. */
++        assert_se(10 * USEC_PER_MSEC == cgroup_cpu_adjust_period(10 * USEC_PER_MSEC, 500000 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 10ms, quota 1% -> adjust to 100ms. */
++        assert_se(100 * USEC_PER_MSEC == cgroup_cpu_adjust_period(10 * USEC_PER_MSEC, 10 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 10ms, quota .001% -> adjust to 1s. */
++        assert_se(1 * USEC_PER_SEC == cgroup_cpu_adjust_period(10 * USEC_PER_MSEC, 10, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 0ms, quota 200% -> adjust to 1ms. */
++        assert_se(1 * USEC_PER_MSEC == cgroup_cpu_adjust_period(0, 2 * USEC_PER_SEC, USEC_PER_MSEC, USEC_PER_SEC));
++        /* Period 0ms, quota 40% -> adjust to 2.5ms. */
++        assert_se(2500 == cgroup_cpu_adjust_period(0, 400 * USEC_PER_MSEC, USEC_PER_MSEC, USEC_PER_SEC));
++}
++
++int main(int argc, char *argv[]) {
++        test_cgroup_cpu_adjust_period();
++        return 0;
++}

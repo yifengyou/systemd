@@ -1,0 +1,24 @@
+From a7247899f156761934bcb4b380861b3d3ec5449f Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Mon, 22 Jul 2019 14:09:12 +0900
+Subject: [PATCH] pstore: run only when /sys/fs/pstore is not empty
+
+(cherry picked from commit 6d4f213b1f6afb2901f0d97cec0e28e20809b713)
+
+Related: #2158832
+---
+ units/systemd-pstore.service.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/units/systemd-pstore.service.in b/units/systemd-pstore.service.in
+index fec2b1aebf..dde21bc33e 100644
+--- a/units/systemd-pstore.service.in
++++ b/units/systemd-pstore.service.in
+@@ -10,6 +10,7 @@
+ [Unit]
+ Description=Platform Persistent Storage Archival
+ Documentation=man:systemd-pstore(8)
++ConditionDirectoryNotEmpty=/sys/fs/pstore
+ DefaultDependencies=no
+ Wants=systemd-remount-fs.service
+ After=systemd-remount-fs.service

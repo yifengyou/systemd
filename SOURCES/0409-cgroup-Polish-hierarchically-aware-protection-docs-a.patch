@@ -1,0 +1,56 @@
+From 556375ae1d8d0b460d691888f2fb7ea520fe9a6b Mon Sep 17 00:00:00 2001
+From: Chris Down <chris@chrisdown.name>
+Date: Tue, 30 Apr 2019 14:22:04 -0400
+Subject: [PATCH] cgroup: Polish hierarchically aware protection docs a bit
+
+I missed adding a section in `systemd.resource-control` about
+DefaultMemoryMin in #12332.
+
+Also, add a NEWS entry going over the general concept.
+
+(cherry picked from commit acdb4b5236f38bbefbcc4a47fdbb9cd558b4b5c5)
+
+Related: #1763435
+---
+ doc/TRANSIENT-SETTINGS.md        | 1 +
+ man/systemd.resource-control.xml | 8 ++++++--
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/doc/TRANSIENT-SETTINGS.md b/doc/TRANSIENT-SETTINGS.md
+index 5a8fa0727e..1a4e79190a 100644
+--- a/doc/TRANSIENT-SETTINGS.md
++++ b/doc/TRANSIENT-SETTINGS.md
+@@ -222,6 +222,7 @@ All cgroup/resource control settings are available for transient units
+ ✓ AllowedCPUs=
+ ✓ AllowedMemoryNodes=
+ ✓ MemoryAccounting=
++✓ DefaultMemoryMin=
+ ✓ MemoryMin=
+ ✓ DefaultMemoryLow=
+ ✓ MemoryLow=
+diff --git a/man/systemd.resource-control.xml b/man/systemd.resource-control.xml
+index 27f16001dd..d3bff29169 100644
+--- a/man/systemd.resource-control.xml
++++ b/man/systemd.resource-control.xml
+@@ -283,6 +283,10 @@
+ 
+           <para>This setting is supported only if the unified control group hierarchy is used and disables
+           <varname>MemoryLimit=</varname>.</para>
++
++          <para>Units may have their children use a default <literal>memory.min</literal> value by specifying
++          <varname>DefaultMemoryMin=</varname>, which has the same semantics as <varname>MemoryMin=</varname>. This setting
++          does not affect <literal>memory.min</literal> in the unit itself.</para>
+         </listitem>
+       </varlistentry>
+ 
+@@ -306,8 +310,8 @@
+           <para>This setting is supported only if the unified control group hierarchy is used and disables
+           <varname>MemoryLimit=</varname>.</para>
+ 
+-          <para>Units may can have their children use a default <literal>memory.low</literal> value by specifying
+-          <varname>DefaultMemoryLow=</varname>, which has the same usage as <varname>MemoryLow=</varname>. This setting
++          <para>Units may have their children use a default <literal>memory.low</literal> value by specifying
++          <varname>DefaultMemoryLow=</varname>, which has the same semantics as <varname>MemoryLow=</varname>. This setting
+           does not affect <literal>memory.low</literal> in the unit itself.</para>
+         </listitem>
+       </varlistentry>

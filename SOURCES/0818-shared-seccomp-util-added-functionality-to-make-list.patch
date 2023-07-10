@@ -1,0 +1,156 @@
+From eaad892c513806801e3d2055788fa202372b3f15 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Fri, 21 Aug 2020 17:21:04 +0200
+Subject: [PATCH] shared/seccomp-util: added functionality to make list of
+ filtred syscalls
+
+While at it, start removing the "seccomp_" prefix from our
+own functions. It is used by libseccomp.
+
+(cherry picked from commit 000c05207d68658b76af9e1caf9aa3a4e3fa697b)
+
+Related: #2040247
+---
+ src/nspawn/nspawn-seccomp.c |  9 +++++++--
+ src/shared/seccomp-util.c   | 39 ++++++++++++++++++++++++++++++-------
+ src/shared/seccomp-util.h   |  8 +++++++-
+ 3 files changed, 46 insertions(+), 10 deletions(-)
+
+diff --git a/src/nspawn/nspawn-seccomp.c b/src/nspawn/nspawn-seccomp.c
+index 17abfcec26..2b4a65e875 100644
+--- a/src/nspawn/nspawn-seccomp.c
++++ b/src/nspawn/nspawn-seccomp.c
+@@ -148,13 +148,18 @@ static int seccomp_add_default_syscall_filter(
+                 if (whitelist[i].capability != 0 && (cap_list_retain & (1ULL << whitelist[i].capability)) == 0)
+                         continue;
+ 
+-                r = seccomp_add_syscall_filter_item(ctx, whitelist[i].name, SCMP_ACT_ALLOW, syscall_blacklist, false);
++                r = seccomp_add_syscall_filter_item(ctx,
++                                                    whitelist[i].name,
++                                                    SCMP_ACT_ALLOW,
++                                                    syscall_blacklist,
++                                                    false,
++                                                    NULL);
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to add syscall filter item %s: %m", whitelist[i].name);
+         }
+ 
+         STRV_FOREACH(p, syscall_whitelist) {
+-                r = seccomp_add_syscall_filter_item(ctx, *p, SCMP_ACT_ALLOW, syscall_blacklist, false);
++                r = seccomp_add_syscall_filter_item(ctx, *p, SCMP_ACT_ALLOW, syscall_blacklist, false, NULL);
+                 if (r < 0)
+                         log_warning_errno(r, "Failed to add rule for system call %s on %s, ignoring: %m",
+                                           *p, seccomp_arch_to_string(arch));
+diff --git a/src/shared/seccomp-util.c b/src/shared/seccomp-util.c
+index 710a734715..56075d92e0 100644
+--- a/src/shared/seccomp-util.c
++++ b/src/shared/seccomp-util.c
+@@ -874,15 +874,31 @@ const SyscallFilterSet *syscall_filter_set_find(const char *name) {
+         return NULL;
+ }
+ 
+-static int seccomp_add_syscall_filter_set(scmp_filter_ctx seccomp, const SyscallFilterSet *set, uint32_t action, char **exclude, bool log_missing);
++static int add_syscall_filter_set(
++                scmp_filter_ctx seccomp,
++                const SyscallFilterSet *set,
++                uint32_t action,
++                char **exclude,
++                bool log_missing,
++                char ***added);
++
++int seccomp_add_syscall_filter_item(
++                scmp_filter_ctx *seccomp,
++                const char *name,
++                uint32_t action,
++                char **exclude,
++                bool log_missing,
++                char ***added) {
+ 
+-int seccomp_add_syscall_filter_item(scmp_filter_ctx *seccomp, const char *name, uint32_t action, char **exclude, bool log_missing) {
+         assert(seccomp);
+         assert(name);
+ 
+         if (strv_contains(exclude, name))
+                 return 0;
+ 
++        /* Any syscalls that are handled are added to the *added strv. The pointer
++         * must be either NULL or point to a valid pre-initialized possibly-empty strv. */
++
+         if (name[0] == '@') {
+                 const SyscallFilterSet *other;
+ 
+@@ -892,7 +908,7 @@ int seccomp_add_syscall_filter_item(scmp_filter_ctx *seccomp, const char *name,
+                         return -EINVAL;
+                 }
+ 
+-                return seccomp_add_syscall_filter_set(seccomp, other, action, exclude, log_missing);
++                return add_syscall_filter_set(seccomp, other, action, exclude, log_missing, added);
+ 
+         } else {
+                 int id, r;
+@@ -916,25 +932,34 @@ int seccomp_add_syscall_filter_item(scmp_filter_ctx *seccomp, const char *name,
+                                 return r;
+                 }
+ 
++                if (added) {
++                        r = strv_extend(added, name);
++                        if (r < 0)
++                                return r;
++                }
++
+                 return 0;
+         }
+ }
+ 
+-static int seccomp_add_syscall_filter_set(
++static int add_syscall_filter_set(
+                 scmp_filter_ctx seccomp,
+                 const SyscallFilterSet *set,
+                 uint32_t action,
+                 char **exclude,
+-                bool log_missing) {
++                bool log_missing,
++                char ***added) {
+ 
+         const char *sys;
+         int r;
+ 
++        /* Any syscalls that are handled are added to the *added strv. It needs to be initialized. */
++
+         assert(seccomp);
+         assert(set);
+ 
+         NULSTR_FOREACH(sys, set->value) {
+-                r = seccomp_add_syscall_filter_item(seccomp, sys, action, exclude, log_missing);
++                r = seccomp_add_syscall_filter_item(seccomp, sys, action, exclude, log_missing, added);
+                 if (r < 0)
+                         return r;
+         }
+@@ -960,7 +985,7 @@ int seccomp_load_syscall_filter_set(uint32_t default_action, const SyscallFilter
+                 if (r < 0)
+                         return r;
+ 
+-                r = seccomp_add_syscall_filter_set(seccomp, set, action, NULL, log_missing);
++                r = add_syscall_filter_set(seccomp, set, action, NULL, log_missing, NULL);
+                 if (r < 0)
+                         return log_debug_errno(r, "Failed to add filter set: %m");
+ 
+diff --git a/src/shared/seccomp-util.h b/src/shared/seccomp-util.h
+index 541ba1e067..291b2bffe0 100644
+--- a/src/shared/seccomp-util.h
++++ b/src/shared/seccomp-util.h
+@@ -59,7 +59,13 @@ const SyscallFilterSet *syscall_filter_set_find(const char *name);
+ 
+ int seccomp_filter_set_add(Hashmap *s, bool b, const SyscallFilterSet *set);
+ 
+-int seccomp_add_syscall_filter_item(scmp_filter_ctx *ctx, const char *name, uint32_t action, char **exclude, bool log_missing);
++int seccomp_add_syscall_filter_item(
++                scmp_filter_ctx *ctx,
++                const char *name,
++                uint32_t action,
++                char **exclude,
++                bool log_missing,
++                char ***added);
+ 
+ int seccomp_load_syscall_filter_set(uint32_t default_action, const SyscallFilterSet *set, uint32_t action, bool log_missing);
+ int seccomp_load_syscall_filter_set_raw(uint32_t default_action, Hashmap* set, uint32_t action, bool log_missing);

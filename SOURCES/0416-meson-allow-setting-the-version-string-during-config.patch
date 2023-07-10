@@ -1,0 +1,86 @@
+From 0065f2bf838dd0c24ec7be41439b4c0ba650029c Mon Sep 17 00:00:00 2001
+From: Jan Synacek <jsynacek@redhat.com>
+Date: Wed, 19 Feb 2020 15:36:13 +0100
+Subject: [PATCH] meson: allow setting the version string during configuration
+
+Very loosely based on upstream commits e1ca734edd17a90a325d5b566a4ea96e66c206e5
+and 681bd2c524ed71ac04045c90884ba8d55eee7b66.
+
+Resolves: #1804252
+---
+ meson.build          | 15 +++++++++++----
+ meson_options.txt    |  3 +++
+ src/udev/udev-ctrl.c |  5 ++++-
+ 3 files changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index c8ae1e15bd..0ba3f924ea 100644
+--- a/meson.build
++++ b/meson.build
+@@ -15,17 +15,24 @@ project('systemd', 'c',
+ libsystemd_version = '0.23.0'
+ libudev_version = '1.6.11'
+ 
++dist_version = get_option('version-tag')
++if dist_version == ''
++        dist_version = meson.project_version()
++else
++        dist_version = meson.project_version() + ' (' + dist_version + ')'
++endif
++
+ # We need the same data in two different formats, ugh!
+ # Also, for hysterical reasons, we use different variable
+ # names, sometimes. Not all variables are included in every
+ # set. Ugh, ugh, ugh!
+ conf = configuration_data()
+-conf.set_quoted('PACKAGE_STRING',  meson.project_name() + ' ' + meson.project_version())
+-conf.set_quoted('PACKAGE_VERSION', meson.project_version())
++conf.set_quoted('PACKAGE_STRING',  meson.project_name() + ' ' + dist_version)
++conf.set_quoted('PACKAGE_VERSION', dist_version)
+ 
+ substs = configuration_data()
+ substs.set('PACKAGE_URL',          'https://www.freedesktop.org/wiki/Software/systemd')
+-substs.set('PACKAGE_VERSION',      meson.project_version())
++substs.set('PACKAGE_VERSION',      dist_version)
+ 
+ #####################################################################
+ 
+@@ -2871,7 +2878,7 @@ run_target(
+ ############################################################
+ 
+ status = [
+-        '@0@ @1@'.format(meson.project_name(), meson.project_version()),
++        '@0@ @1@'.format(meson.project_name(), dist_version),
+ 
+         'split /usr:                        @0@'.format(split_usr),
+         'split bin-sbin:                    @0@'.format(split_bin),
+diff --git a/meson_options.txt b/meson_options.txt
+index 563b11f0a2..0996891177 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -1,6 +1,9 @@
+ # -*- mode: meson -*-
+ # SPDX-License-Identifier: LGPL-2.1+
+ 
++option('version-tag', type : 'string',
++       description : 'override the version string')
++
+ option('split-usr', type : 'combo', choices : ['auto', 'true', 'false'],
+        description : '''/bin, /sbin aren't symlinks into /usr''')
+ option('split-bin', type : 'combo', choices : ['auto', 'true', 'false'],
+diff --git a/src/udev/udev-ctrl.c b/src/udev/udev-ctrl.c
+index efe7297f04..5382ce0d26 100644
+--- a/src/udev/udev-ctrl.c
++++ b/src/udev/udev-ctrl.c
+@@ -239,7 +239,10 @@ static int ctrl_send(struct udev_ctrl *uctrl, enum udev_ctrl_msg_type type, int
+         int err = 0;
+ 
+         memzero(&ctrl_msg_wire, sizeof(struct udev_ctrl_msg_wire));
+-        strcpy(ctrl_msg_wire.version, "udev-" PACKAGE_VERSION);
++        /* jsynacek: As PACKAGE_VERSION is populated from the spec file with %{version}-%{release},
++         * it might not fit entirely into the version field. */
++        strncpy(ctrl_msg_wire.version, "udev-" PACKAGE_VERSION, 16-5);
++        ctrl_msg_wire.version[15] = '\0';
+         ctrl_msg_wire.magic = UDEV_CTRL_MAGIC;
+         ctrl_msg_wire.type = type;
+ 

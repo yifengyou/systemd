@@ -1,0 +1,32 @@
+From 65e96327360ab41d44d5383dcecc82a19fad198c Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Fri, 22 Feb 2019 15:50:55 +0100
+Subject: [PATCH] logind: don't print warning when user@.service template is
+ masked
+
+User instance of systemd is optional feature and if user@.service
+template is masked then administrator most likely doesn't want --user
+instances of systemd for logged in users. We don't need to be verbose
+about it.
+
+(cherry picked from commit 03b6fa0c5b51b0d39334ff6ba183a3391443bcf6)
+
+Resolves: #1880270
+---
+ src/login/logind-user.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index 8c4cd54a29..56b8066f12 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -326,7 +326,8 @@ static int user_start_service(User *u) {
+                         &job);
+         if (r < 0)
+                 /* we don't fail due to this, let's try to continue */
+-                log_error_errno(r, "Failed to start user service, ignoring: %s", bus_error_message(&error, r));
++                log_full_errno(sd_bus_error_has_name(&error, BUS_ERROR_UNIT_MASKED) ? LOG_DEBUG : LOG_WARNING, r,
++                               "Failed to start user service '%s', ignoring: %s", u->service, bus_error_message(&error, r));
+         else
+                 u->service_job = job;
+ 

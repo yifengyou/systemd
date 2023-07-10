@@ -1,0 +1,555 @@
+From b55c9b8e717d1967e6aa16c1e2646fc81d899ab7 Mon Sep 17 00:00:00 2001
+From: Pavel Hrdina <phrdina@redhat.com>
+Date: Mon, 29 Jul 2019 17:50:05 +0200
+Subject: [PATCH] cgroup: introduce support for cgroup v2 CPUSET controller
+
+Introduce support for configuring cpus and mems for processes using
+cgroup v2 CPUSET controller.  This allows users to limit which cpus
+and memory NUMA nodes can be used by processes to better utilize
+system resources.
+
+The cgroup v2 interfaces to control it are cpuset.cpus and cpuset.mems
+where the requested configuration is written.  However, it doesn't mean
+that the requested configuration will be actually used as parent cgroup
+may limit the cpus or mems as well.  In order to reflect the real
+configuration cgroup v2 provides read-only files cpuset.cpus.effective
+and cpuset.mems.effective which are exported to users as well.
+
+(cherry picked from commit 047f5d63d7a1ab75073f8485e2f9b550d25b0772)
+
+Related: #1724617
+---
+ doc/TRANSIENT-SETTINGS.md             |  2 +
+ man/systemd.resource-control.xml      | 30 +++++++++++++
+ src/basic/cgroup-util.c               |  1 +
+ src/basic/cgroup-util.h               |  2 +
+ src/core/cgroup.c                     | 63 +++++++++++++++++++++++++++
+ src/core/cgroup.h                     |  5 +++
+ src/core/dbus-cgroup.c                | 59 +++++++++++++++++++++++++
+ src/core/dbus-unit.c                  | 48 ++++++++++++++++++++
+ src/core/load-fragment-gperf.gperf.m4 |  2 +
+ src/core/load-fragment.c              | 38 ++++++++++++++++
+ src/core/load-fragment.h              |  2 +
+ src/shared/bus-unit-util.c            | 16 +++++++
+ src/systemctl/systemctl.c             |  2 +-
+ src/test/test-cgroup-mask.c           |  3 +-
+ 14 files changed, 271 insertions(+), 2 deletions(-)
+
+diff --git a/doc/TRANSIENT-SETTINGS.md b/doc/TRANSIENT-SETTINGS.md
+index c2b5c0dcce..0b2ad66dcb 100644
+--- a/doc/TRANSIENT-SETTINGS.md
++++ b/doc/TRANSIENT-SETTINGS.md
+@@ -218,6 +218,8 @@ All cgroup/resource control settings are available for transient units
+ ✓ CPUShares=
+ ✓ StartupCPUShares=
+ ✓ CPUQuota=
++✓ AllowedCPUs=
++✓ AllowedMemoryNodes=
+ ✓ MemoryAccounting=
+ ✓ MemoryLow=
+ ✓ MemoryHigh=
+diff --git a/man/systemd.resource-control.xml b/man/systemd.resource-control.xml
+index 370c110592..4329742e94 100644
+--- a/man/systemd.resource-control.xml
++++ b/man/systemd.resource-control.xml
+@@ -201,6 +201,36 @@
+         </listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>AllowedCPUs=</varname></term>
++
++        <listitem>
++          <para>Restrict processes to be executed on specific CPUs. Takes a list of CPU indices or ranges separated by either
++          whitespace or commas. CPU ranges are specified by the lower and upper CPU indices separated by a dash.</para>
++
++          <para>Setting <varname>AllowedCPUs=</varname> doesn't guarantee that all of the CPUs will be used by the processes
++          as it may be limited by parent units. The effective configuration is reported as <varname>EffectiveCPUs=</varname>.</para>
++
++          <para>This setting is supported only with the unified control group hierarchy.</para>
++        </listitem>
++      </varlistentry>
++
++      <varlistentry>
++        <term><varname>AllowedMemoryNodes=</varname></term>
++
++        <listitem>
++          <para>Restrict processes to be executed on specific memory NUMA nodes. Takes a list of memory NUMA nodes indices
++          or ranges separated by either whitespace or commas. Memory NUMA nodes ranges are specified by the lower and upper
++          CPU indices separated by a dash.</para>
++
++          <para>Setting <varname>AllowedMemoryNodes=</varname> doesn't guarantee that all of the memory NUMA nodes will
++          be used by the processes as it may be limited by parent units. The effective configuration is reported as
++          <varname>EffectiveMemoryNodes=</varname>.</para>
++
++          <para>This setting is supported only with the unified control group hierarchy.</para>
++        </listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>MemoryAccounting=</varname></term>
+ 
+diff --git a/src/basic/cgroup-util.c b/src/basic/cgroup-util.c
+index 038ece4b06..6f47c3aacb 100644
+--- a/src/basic/cgroup-util.c
++++ b/src/basic/cgroup-util.c
+@@ -2763,6 +2763,7 @@ bool fd_is_cgroup_fs(int fd) {
+ static const char *cgroup_controller_table[_CGROUP_CONTROLLER_MAX] = {
+         [CGROUP_CONTROLLER_CPU] = "cpu",
+         [CGROUP_CONTROLLER_CPUACCT] = "cpuacct",
++        [CGROUP_CONTROLLER_CPUSET] = "cpuset",
+         [CGROUP_CONTROLLER_IO] = "io",
+         [CGROUP_CONTROLLER_BLKIO] = "blkio",
+         [CGROUP_CONTROLLER_MEMORY] = "memory",
+diff --git a/src/basic/cgroup-util.h b/src/basic/cgroup-util.h
+index 26e3ae0404..b414600dca 100644
+--- a/src/basic/cgroup-util.h
++++ b/src/basic/cgroup-util.h
+@@ -21,6 +21,7 @@
+ typedef enum CGroupController {
+         CGROUP_CONTROLLER_CPU,
+         CGROUP_CONTROLLER_CPUACCT,    /* v1 only */
++        CGROUP_CONTROLLER_CPUSET,     /* v2 only */
+         CGROUP_CONTROLLER_IO,         /* v2 only */
+         CGROUP_CONTROLLER_BLKIO,      /* v1 only */
+         CGROUP_CONTROLLER_MEMORY,
+@@ -36,6 +37,7 @@ typedef enum CGroupController {
+ typedef enum CGroupMask {
+         CGROUP_MASK_CPU = CGROUP_CONTROLLER_TO_MASK(CGROUP_CONTROLLER_CPU),
+         CGROUP_MASK_CPUACCT = CGROUP_CONTROLLER_TO_MASK(CGROUP_CONTROLLER_CPUACCT),
++        CGROUP_MASK_CPUSET = CGROUP_CONTROLLER_TO_MASK(CGROUP_CONTROLLER_CPUSET),
+         CGROUP_MASK_IO = CGROUP_CONTROLLER_TO_MASK(CGROUP_CONTROLLER_IO),
+         CGROUP_MASK_BLKIO = CGROUP_CONTROLLER_TO_MASK(CGROUP_CONTROLLER_BLKIO),
+         CGROUP_MASK_MEMORY = CGROUP_CONTROLLER_TO_MASK(CGROUP_CONTROLLER_MEMORY),
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index 76eafdc082..664d269483 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -161,9 +161,14 @@ void cgroup_context_done(CGroupContext *c) {
+ 
+         c->ip_address_allow = ip_address_access_free_all(c->ip_address_allow);
+         c->ip_address_deny = ip_address_access_free_all(c->ip_address_deny);
++
++        cpu_set_reset(&c->cpuset_cpus);
++        cpu_set_reset(&c->cpuset_mems);
+ }
+ 
+ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix) {
++        _cleanup_free_ char *cpuset_cpus = NULL;
++        _cleanup_free_ char *cpuset_mems = NULL;
+         CGroupIODeviceLimit *il;
+         CGroupIODeviceWeight *iw;
+         CGroupBlockIODeviceBandwidth *b;
+@@ -177,6 +182,9 @@ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix) {
+ 
+         prefix = strempty(prefix);
+ 
++        cpuset_cpus = cpu_set_to_range_string(&c->cpuset_cpus);
++        cpuset_mems = cpu_set_to_range_string(&c->cpuset_mems);
++
+         fprintf(f,
+                 "%sCPUAccounting=%s\n"
+                 "%sIOAccounting=%s\n"
+@@ -189,6 +197,8 @@ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix) {
+                 "%sCPUShares=%" PRIu64 "\n"
+                 "%sStartupCPUShares=%" PRIu64 "\n"
+                 "%sCPUQuotaPerSecSec=%s\n"
++                "%sAllowedCPUs=%s\n"
++                "%sAllowedMemoryNodes=%s\n"
+                 "%sIOWeight=%" PRIu64 "\n"
+                 "%sStartupIOWeight=%" PRIu64 "\n"
+                 "%sBlockIOWeight=%" PRIu64 "\n"
+@@ -212,6 +222,8 @@ void cgroup_context_dump(CGroupContext *c, FILE* f, const char *prefix) {
+                 prefix, c->cpu_shares,
+                 prefix, c->startup_cpu_shares,
+                 prefix, format_timespan(u, sizeof(u), c->cpu_quota_per_sec_usec, 1),
++                prefix, cpuset_cpus,
++                prefix, cpuset_mems,
+                 prefix, c->io_weight,
+                 prefix, c->startup_io_weight,
+                 prefix, c->blockio_weight,
+@@ -541,6 +553,21 @@ static uint64_t cgroup_cpu_weight_to_shares(uint64_t weight) {
+                      CGROUP_CPU_SHARES_MIN, CGROUP_CPU_SHARES_MAX);
+ }
+ 
++static void cgroup_apply_unified_cpuset(Unit *u, CPUSet cpus, const char *name) {
++        _cleanup_free_ char *buf = NULL;
++        int r;
++
++        buf = cpu_set_to_range_string(&cpus);
++        if (!buf)
++            return;
++
++        r = cg_set_attribute("cpuset", u->cgroup_path, name, buf);
++        if (r < 0)
++                log_unit_full(u, IN_SET(r, -ENOENT, -EROFS, -EACCES) ? LOG_DEBUG : LOG_WARNING, r,
++                              "Failed to set %s: %m", name);
++
++}
++
+ static bool cgroup_context_has_io_config(CGroupContext *c) {
+         return c->io_accounting ||
+                 c->io_weight != CGROUP_WEIGHT_INVALID ||
+@@ -766,6 +793,11 @@ static void cgroup_context_apply(
+                 }
+         }
+ 
++        if ((apply_mask & CGROUP_MASK_CPUSET) && !is_root) {
++                cgroup_apply_unified_cpuset(u, c->cpuset_cpus, "cpuset.cpus");
++                cgroup_apply_unified_cpuset(u, c->cpuset_mems, "cpuset.mems");
++        }
++
+         if (apply_mask & CGROUP_MASK_IO) {
+                 bool has_io = cgroup_context_has_io_config(c);
+                 bool has_blockio = cgroup_context_has_blockio_config(c);
+@@ -1068,6 +1100,9 @@ CGroupMask cgroup_context_get_mask(CGroupContext *c) {
+             c->cpu_quota_per_sec_usec != USEC_INFINITY)
+                 mask |= CGROUP_MASK_CPUACCT | CGROUP_MASK_CPU;
+ 
++        if (c->cpuset_cpus.set || c->cpuset_mems.set)
++                mask |= CGROUP_MASK_CPUSET;
++
+         if (cgroup_context_has_io_config(c) || cgroup_context_has_blockio_config(c))
+                 mask |= CGROUP_MASK_IO | CGROUP_MASK_BLKIO;
+ 
+@@ -2697,4 +2732,32 @@ static const char* const cgroup_device_policy_table[_CGROUP_DEVICE_POLICY_MAX] =
+         [CGROUP_STRICT] = "strict",
+ };
+ 
++int unit_get_cpuset(Unit *u, CPUSet *cpus, const char *name) {
++        _cleanup_free_ char *v = NULL;
++        int r;
++
++        assert(u);
++        assert(cpus);
++
++        if (!u->cgroup_path)
++                return -ENODATA;
++
++        if ((u->cgroup_realized_mask & CGROUP_MASK_CPUSET) == 0)
++                return -ENODATA;
++
++        r = cg_all_unified();
++        if (r < 0)
++                return r;
++        if (r == 0)
++                return -ENODATA;
++        if (r > 0)
++                r = cg_get_attribute("cpuset", u->cgroup_path, name, &v);
++        if (r == -ENOENT)
++                return -ENODATA;
++        if (r < 0)
++                return r;
++
++        return parse_cpu_set_full(v, cpus, false, NULL, NULL, 0, NULL);
++}
++
+ DEFINE_STRING_TABLE_LOOKUP(cgroup_device_policy, CGroupDevicePolicy);
+diff --git a/src/core/cgroup.h b/src/core/cgroup.h
+index 2d2ff6fc3c..da10575394 100644
+--- a/src/core/cgroup.h
++++ b/src/core/cgroup.h
+@@ -4,6 +4,7 @@
+ #include <stdbool.h>
+ 
+ #include "cgroup-util.h"
++#include "cpu-set-util.h"
+ #include "ip-address-access.h"
+ #include "list.h"
+ #include "time-util.h"
+@@ -77,6 +78,9 @@ struct CGroupContext {
+         uint64_t startup_cpu_weight;
+         usec_t cpu_quota_per_sec_usec;
+ 
++        CPUSet cpuset_cpus;
++        CPUSet cpuset_mems;
++
+         uint64_t io_weight;
+         uint64_t startup_io_weight;
+         LIST_HEAD(CGroupIODeviceWeight, io_device_weights);
+@@ -205,3 +209,4 @@ const char* cgroup_device_policy_to_string(CGroupDevicePolicy i) _const_;
+ CGroupDevicePolicy cgroup_device_policy_from_string(const char *s) _pure_;
+ 
+ bool unit_cgroup_delegate(Unit *u);
++int unit_get_cpuset(Unit *u, CPUSet *cpus, const char *name);
+diff --git a/src/core/dbus-cgroup.c b/src/core/dbus-cgroup.c
+index 540bc77aed..30d4e83932 100644
+--- a/src/core/dbus-cgroup.c
++++ b/src/core/dbus-cgroup.c
+@@ -53,6 +53,27 @@ static int property_get_delegate_controllers(
+         return sd_bus_message_close_container(reply);
+ }
+ 
++static int property_get_cpuset(
++                sd_bus *bus,
++                const char *path,
++                const char *interface,
++                const char *property,
++                sd_bus_message *reply,
++                void *userdata,
++                sd_bus_error *error) {
++
++        CPUSet *cpus = userdata;
++        _cleanup_free_ uint8_t *array = NULL;
++        size_t allocated;
++
++        assert(bus);
++        assert(reply);
++        assert(cpus);
++
++        (void) cpu_set_to_dbus(cpus, &array, &allocated);
++        return sd_bus_message_append_array(reply, 'y', array, allocated);
++}
++
+ static int property_get_io_device_weight(
+                 sd_bus *bus,
+                 const char *path,
+@@ -283,6 +304,8 @@ const sd_bus_vtable bus_cgroup_vtable[] = {
+         SD_BUS_PROPERTY("CPUShares", "t", NULL, offsetof(CGroupContext, cpu_shares), 0),
+         SD_BUS_PROPERTY("StartupCPUShares", "t", NULL, offsetof(CGroupContext, startup_cpu_shares), 0),
+         SD_BUS_PROPERTY("CPUQuotaPerSecUSec", "t", bus_property_get_usec, offsetof(CGroupContext, cpu_quota_per_sec_usec), 0),
++        SD_BUS_PROPERTY("AllowedCPUs", "ay", property_get_cpuset, offsetof(CGroupContext, cpuset_cpus), 0),
++        SD_BUS_PROPERTY("AllowedMemoryNodes", "ay", property_get_cpuset, offsetof(CGroupContext, cpuset_mems), 0),
+         SD_BUS_PROPERTY("IOAccounting", "b", bus_property_get_bool, offsetof(CGroupContext, io_accounting), 0),
+         SD_BUS_PROPERTY("IOWeight", "t", NULL, offsetof(CGroupContext, io_weight), 0),
+         SD_BUS_PROPERTY("StartupIOWeight", "t", NULL, offsetof(CGroupContext, startup_io_weight), 0),
+@@ -671,6 +694,42 @@ int bus_cgroup_set_property(
+ 
+                 return 1;
+ 
++        } else if (STR_IN_SET(name, "AllowedCPUs", "AllowedMemoryNodes")) {
++                const void *a;
++                size_t n;
++                _cleanup_(cpu_set_reset) CPUSet new_set = {};
++
++                r = sd_bus_message_read_array(message, 'y', &a, &n);
++                if (r < 0)
++                        return r;
++
++                r = cpu_set_from_dbus(a, n, &new_set);
++                if (r < 0)
++                        return r;
++
++                if (!UNIT_WRITE_FLAGS_NOOP(flags)) {
++                        _cleanup_free_ char *setstr = NULL;
++                        _cleanup_free_ char *data = NULL;
++                        CPUSet *set;
++
++                        setstr = cpu_set_to_range_string(&new_set);
++
++                        if (streq(name, "AllowedCPUs"))
++                                set = &c->cpuset_cpus;
++                        else
++                                set = &c->cpuset_mems;
++
++                        if (asprintf(&data, "%s=%s", name, setstr) < 0)
++                                return -ENOMEM;
++
++                        cpu_set_reset(set);
++                        cpu_set_add_all(set, &new_set);
++                        unit_invalidate_cgroup(u, CGROUP_MASK_CPUSET);
++                        unit_write_setting(u, flags, name, data);
++                }
++
++                return 1;
++
+         } else if ((iol_type = cgroup_io_limit_type_from_string(name)) >= 0) {
+                 const char *path;
+                 unsigned n = 0;
+diff --git a/src/core/dbus-unit.c b/src/core/dbus-unit.c
+index c5bca10979..aa15e47754 100644
+--- a/src/core/dbus-unit.c
++++ b/src/core/dbus-unit.c
+@@ -752,6 +752,52 @@ static int property_get_cpu_usage(
+         return sd_bus_message_append(reply, "t", ns);
+ }
+ 
++static int property_get_cpuset_cpus(
++                sd_bus *bus,
++                const char *path,
++                const char *interface,
++                const char *property,
++                sd_bus_message *reply,
++                void *userdata,
++                sd_bus_error *error) {
++
++        Unit *u = userdata;
++        _cleanup_(cpu_set_reset) CPUSet cpus = {};
++        _cleanup_free_ uint8_t *array = NULL;
++        size_t allocated;
++
++        assert(bus);
++        assert(reply);
++        assert(u);
++
++        (void) unit_get_cpuset(u, &cpus, "cpuset.cpus.effective");
++        (void) cpu_set_to_dbus(&cpus, &array, &allocated);
++        return sd_bus_message_append_array(reply, 'y', array, allocated);
++}
++
++static int property_get_cpuset_mems(
++                sd_bus *bus,
++                const char *path,
++                const char *interface,
++                const char *property,
++                sd_bus_message *reply,
++                void *userdata,
++                sd_bus_error *error) {
++
++        Unit *u = userdata;
++        _cleanup_(cpu_set_reset) CPUSet mems = {};
++        _cleanup_free_ uint8_t *array = NULL;
++        size_t allocated;
++
++        assert(bus);
++        assert(reply);
++        assert(u);
++
++        (void) unit_get_cpuset(u, &mems, "cpuset.mems.effective");
++        (void) cpu_set_to_dbus(&mems, &array, &allocated);
++        return sd_bus_message_append_array(reply, 'y', array, allocated);
++}
++
+ static int property_get_cgroup(
+                 sd_bus *bus,
+                 const char *path,
+@@ -1074,6 +1120,8 @@ const sd_bus_vtable bus_unit_cgroup_vtable[] = {
+         SD_BUS_PROPERTY("ControlGroup", "s", property_get_cgroup, 0, 0),
+         SD_BUS_PROPERTY("MemoryCurrent", "t", property_get_current_memory, 0, 0),
+         SD_BUS_PROPERTY("CPUUsageNSec", "t", property_get_cpu_usage, 0, 0),
++        SD_BUS_PROPERTY("EffectiveCPUs", "ay", property_get_cpuset_cpus, 0, 0),
++        SD_BUS_PROPERTY("EffectiveMemoryNodes", "ay", property_get_cpuset_mems, 0, 0),
+         SD_BUS_PROPERTY("TasksCurrent", "t", property_get_current_tasks, 0, 0),
+         SD_BUS_PROPERTY("IPIngressBytes", "t", property_get_ip_counter, 0, 0),
+         SD_BUS_PROPERTY("IPIngressPackets", "t", property_get_ip_counter, 0, 0),
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index 49e938d0ce..ebb44df487 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -167,6 +167,8 @@ $1.StartupCPUWeight,             config_parse_cg_weight,             0,
+ $1.CPUShares,                    config_parse_cpu_shares,            0,                             offsetof($1, cgroup_context.cpu_shares)
+ $1.StartupCPUShares,             config_parse_cpu_shares,            0,                             offsetof($1, cgroup_context.startup_cpu_shares)
+ $1.CPUQuota,                     config_parse_cpu_quota,             0,                             offsetof($1, cgroup_context)
++$1.CPUSetCpus,                   config_parse_cpuset_cpus,           0,                             offsetof($1, cgroup_context)
++$1.CPUSetMems,                   config_parse_cpuset_mems,           0,                             offsetof($1, cgroup_context)
+ $1.MemoryAccounting,             config_parse_bool,                  0,                             offsetof($1, cgroup_context.memory_accounting)
+ $1.MemoryLow,                    config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+ $1.MemoryHigh,                   config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index 35dd595098..6debf82401 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -3011,6 +3011,44 @@ int config_parse_cpu_quota(
+         return 0;
+ }
+ 
++int config_parse_cpuset_cpus(
++                const char *unit,
++                const char *filename,
++                unsigned line,
++                const char *section,
++                unsigned section_line,
++                const char *lvalue,
++                int ltype,
++                const char *rvalue,
++                void *data,
++                void *userdata) {
++
++        CGroupContext *c = data;
++
++        (void) parse_cpu_set_extend(rvalue, &c->cpuset_cpus, true, unit, filename, line, lvalue);
++
++        return 0;
++}
++
++int config_parse_cpuset_mems(
++                const char *unit,
++                const char *filename,
++                unsigned line,
++                const char *section,
++                unsigned section_line,
++                const char *lvalue,
++                int ltype,
++                const char *rvalue,
++                void *data,
++                void *userdata) {
++
++        CGroupContext *c = data;
++
++        (void) parse_cpu_set_extend(rvalue, &c->cpuset_mems, true, unit, filename, line, lvalue);
++
++        return 0;
++}
++
+ int config_parse_memory_limit(
+                 const char *unit,
+                 const char *filename,
+diff --git a/src/core/load-fragment.h b/src/core/load-fragment.h
+index f2ca1b8ee7..6612e1fb32 100644
+--- a/src/core/load-fragment.h
++++ b/src/core/load-fragment.h
+@@ -86,6 +86,8 @@ CONFIG_PARSER_PROTOTYPE(config_parse_set_status);
+ CONFIG_PARSER_PROTOTYPE(config_parse_namespace_path_strv);
+ CONFIG_PARSER_PROTOTYPE(config_parse_temporary_filesystems);
+ CONFIG_PARSER_PROTOTYPE(config_parse_cpu_quota);
++CONFIG_PARSER_PROTOTYPE(config_parse_cpuset_cpus);
++CONFIG_PARSER_PROTOTYPE(config_parse_cpuset_mems);
+ CONFIG_PARSER_PROTOTYPE(config_parse_protect_home);
+ CONFIG_PARSER_PROTOTYPE(config_parse_protect_system);
+ CONFIG_PARSER_PROTOTYPE(config_parse_bus_name);
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index 3c42e97b7a..8f3b463c6b 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -396,6 +396,22 @@ static int bus_append_cgroup_property(sd_bus_message *m, const char *field, cons
+ 
+                 return bus_append_cg_cpu_shares_parse(m, field, eq);
+ 
++        if (STR_IN_SET(field, "AllowedCPUs", "AllowedMemoryNodes")) {
++                _cleanup_(cpu_set_reset) CPUSet cpuset = {};
++                _cleanup_free_ uint8_t *array = NULL;
++                size_t allocated;
++
++                r = parse_cpu_set(eq, &cpuset);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to parse %s value: %s", field, eq);
++
++                r = cpu_set_to_dbus(&cpuset, &array, &allocated);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to serialize CPUSet: %m");
++
++                return bus_append_byte_array(m, field, array, allocated);
++        }
++
+         if (STR_IN_SET(field, "BlockIOWeight", "StartupBlockIOWeight"))
+ 
+                 return bus_append_cg_blkio_weight_parse(m, field, eq);
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index 7274921e6d..a3074bc5e3 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -4892,7 +4892,7 @@ static int print_property(const char *name, sd_bus_message *m, bool value, bool
+                         print_prop(name, "%s", h);
+ 
+                         return 1;
+-                } else if (contents[0] == SD_BUS_TYPE_BYTE && STR_IN_SET(name, "CPUAffinity", "NUMAMask")) {
++                } else if (contents[0] == SD_BUS_TYPE_BYTE && STR_IN_SET(name, "CPUAffinity", "NUMAMask", "AllowedCPUs", "AllowedMemoryNodes", "EffectiveCPUs", "EffectiveMemoryNodes")) {
+                         _cleanup_free_ char *affinity = NULL;
+                         _cleanup_(cpu_set_reset) CPUSet set = {};
+                         const void *a;
+diff --git a/src/test/test-cgroup-mask.c b/src/test/test-cgroup-mask.c
+index d65959edf1..93c3f5d856 100644
+--- a/src/test/test-cgroup-mask.c
++++ b/src/test/test-cgroup-mask.c
+@@ -104,9 +104,10 @@ static void test_cg_mask_to_string_one(CGroupMask mask, const char *t) {
+ 
+ static void test_cg_mask_to_string(void) {
+         test_cg_mask_to_string_one(0, NULL);
+-        test_cg_mask_to_string_one(_CGROUP_MASK_ALL, "cpu cpuacct io blkio memory devices pids");
++        test_cg_mask_to_string_one(_CGROUP_MASK_ALL, "cpu cpuacct cpuset io blkio memory devices pids");
+         test_cg_mask_to_string_one(CGROUP_MASK_CPU, "cpu");
+         test_cg_mask_to_string_one(CGROUP_MASK_CPUACCT, "cpuacct");
++        test_cg_mask_to_string_one(CGROUP_MASK_CPUSET, "cpuset");
+         test_cg_mask_to_string_one(CGROUP_MASK_IO, "io");
+         test_cg_mask_to_string_one(CGROUP_MASK_BLKIO, "blkio");
+         test_cg_mask_to_string_one(CGROUP_MASK_MEMORY, "memory");

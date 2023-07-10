@@ -1,0 +1,43 @@
+From f97c6d921fb6b3d7ba88e064b03d3dd767df9ba1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 15:07:42 +0200
+Subject: [PATCH] core: allow services with no commands but SuccessAction set
+
+(cherry picked from commit 3f00d379fa6221a4570c8cd955afd9b661787db9)
+
+Related: #1860899
+---
+ src/core/service.c | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/src/core/service.c b/src/core/service.c
+index 4da1c5accb..7969bbf071 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -556,8 +556,13 @@ static int service_verify(Service *s) {
+                 }
+         }
+ 
+-        if (!s->exec_command[SERVICE_EXEC_START] && !s->exec_command[SERVICE_EXEC_STOP]) {
+-                log_unit_error(UNIT(s), "Service lacks both ExecStart= and ExecStop= setting. Refusing.");
++        if (!s->exec_command[SERVICE_EXEC_START] && !s->exec_command[SERVICE_EXEC_STOP]
++            && UNIT(s)->success_action == EMERGENCY_ACTION_NONE) {
++                /* FailureAction= only makes sense if one of the start or stop commands is specified.
++                 * SuccessAction= will be executed unconditionally if no commands are specified. Hence,
++                 * either a command or SuccessAction= are required. */
++
++                log_unit_error(UNIT(s), "Service has no ExecStart=, ExecStop=, or SuccessAction=. Refusing.");
+                 return -ENOEXEC;
+         }
+ 
+@@ -566,8 +571,8 @@ static int service_verify(Service *s) {
+                 return -ENOEXEC;
+         }
+ 
+-        if (!s->remain_after_exit && !s->exec_command[SERVICE_EXEC_START]) {
+-                log_unit_error(UNIT(s), "Service has no ExecStart= setting, which is only allowed for RemainAfterExit=yes services. Refusing.");
++        if (!s->remain_after_exit && !s->exec_command[SERVICE_EXEC_START] && UNIT(s)->success_action == EMERGENCY_ACTION_NONE) {
++                log_unit_error(UNIT(s), "Service has no ExecStart= and no SuccessAction= settings and does not have RemainAfterExit=yes set. Refusing.");
+                 return -ENOEXEC;
+         }
+ 

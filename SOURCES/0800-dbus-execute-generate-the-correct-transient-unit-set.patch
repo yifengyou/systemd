@@ -1,0 +1,30 @@
+From 4fbd505c5a15f2b6078dc43e5a1ff999993e8b23 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 26 Nov 2018 21:07:06 +0100
+Subject: [PATCH] dbus-execute: generate the correct transient unit setting
+
+(cherry picked from commit 1704fba92f7b2c92238b0833943669045374daf9)
+
+Related: #2093479
+---
+ src/core/dbus-execute.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index fc433cc96f..00f4aeacef 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -1856,11 +1856,11 @@ int bus_exec_context_set_transient_property(
+ 
+                                 if (streq(name, "StandardErrorFile")) {
+                                         c->std_error = EXEC_OUTPUT_FILE;
+-                                        unit_write_settingf(u, flags|UNIT_ESCAPE_SPECIFIERS, name, "StandardOutput=file:%s", s);
++                                        unit_write_settingf(u, flags|UNIT_ESCAPE_SPECIFIERS, name, "StandardError=file:%s", s);
+                                 } else {
+                                         assert(streq(name, "StandardErrorFileToAppend"));
+                                         c->std_error = EXEC_OUTPUT_FILE_APPEND;
+-                                        unit_write_settingf(u, flags|UNIT_ESCAPE_SPECIFIERS, name, "StandardOutput=append:%s", s);
++                                        unit_write_settingf(u, flags|UNIT_ESCAPE_SPECIFIERS, name, "StandardError=append:%s", s);
+                                 }
+                         }
+                 }

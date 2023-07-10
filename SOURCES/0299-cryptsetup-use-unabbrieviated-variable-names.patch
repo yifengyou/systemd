@@ -1,0 +1,63 @@
+From 0577d8378645c1ecd909b74403cefe31ed569398 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Thu, 1 Aug 2019 08:13:13 +0200
+Subject: [PATCH] cryptsetup: use unabbrieviated variable names
+
+Now that "ret_" has been added to the output variables, we can name
+the internal variables without artificial abbrevs.
+
+(cherry picked from commit 5d2100dc4c32abbce4109e75cbfbbef6e1b2b7b1)
+
+Related: #1763155
+---
+ src/cryptsetup/cryptsetup-generator.c | 26 +++++++++++++-------------
+ 1 file changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/src/cryptsetup/cryptsetup-generator.c b/src/cryptsetup/cryptsetup-generator.c
+index 1e8e3ba00d..7b234e37be 100644
+--- a/src/cryptsetup/cryptsetup-generator.c
++++ b/src/cryptsetup/cryptsetup-generator.c
+@@ -40,30 +40,30 @@ static Hashmap *arg_disks = NULL;
+ static char *arg_default_options = NULL;
+ static char *arg_default_keyfile = NULL;
+ 
+-static int split_keyspec(const char *keyspec, char **keyfile, char **keydev) {
+-        _cleanup_free_ char *kfile = NULL, *kdev = NULL;
+-        char *c;
++static int split_keyspec(const char *keyspec, char **ret_keyfile, char **ret_keydev) {
++        _cleanup_free_ char *keyfile = NULL, *keydev = NULL;
++        const char *c;
+ 
+         assert(keyspec);
+-        assert(keyfile);
+-        assert(keydev);
++        assert(ret_keyfile);
++        assert(ret_keydev);
+ 
+         c = strrchr(keyspec, ':');
+         if (c) {
+-                kfile = strndup(keyspec, c-keyspec);
+-                kdev = strdup(c + 1);
+-                if (!*kfile || !*kdev)
++                keyfile = strndup(keyspec, c-keyspec);
++                keydev = strdup(c + 1);
++                if (!keyfile || !keydev)
+                         return log_oom();
+         } else {
+                 /* No keydev specified */
+-                kfile = strdup(keyspec);
+-                kdev = NULL;
+-                if (!*kfile)
++                keyfile = strdup(keyspec);
++                keydev = NULL;
++                if (!keyfile)
+                         return log_oom();
+         }
+ 
+-        *keyfile = TAKE_PTR(kfile);
+-        *keydev = TAKE_PTR(kdev);
++        *ret_keyfile = TAKE_PTR(keyfile);
++        *ret_keydev = TAKE_PTR(keydev);
+ 
+         return 0;
+ }

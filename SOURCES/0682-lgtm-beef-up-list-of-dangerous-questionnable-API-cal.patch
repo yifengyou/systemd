@@ -1,0 +1,48 @@
+From 8b60932555141e1fe61a343863eae7655c2449a9 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 2 Apr 2019 12:43:47 +0200
+Subject: [PATCH] lgtm: beef up list of dangerous/questionnable API calls not
+ to make
+
+(cherry picked from commit 9b4805421eb2a7319f6507a26febfb9d2cdc3a93)
+
+Related: #2017033
+---
+ .../PotentiallyDangerousFunction.ql           | 22 +++++++++++++++++--
+ 1 file changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql b/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
+index ba80f4ad8c..cd0284b37a 100644
+--- a/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
++++ b/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
+@@ -16,10 +16,28 @@ import cpp
+ predicate potentiallyDangerousFunction(Function f, string message) {
+   (
+     f.getQualifiedName() = "fgets" and
+-    message = "Call to fgets is potentially dangerous. Use read_line() instead."
++    message = "Call to fgets() is potentially dangerous. Use read_line() instead."
+   ) or (
+     f.getQualifiedName() = "strtok" and
+-    message = "Call to strtok is potentially dangerous. Use extract_first_word() instead."
++    message = "Call to strtok() is potentially dangerous. Use extract_first_word() instead."
++  ) or (
++    f.getQualifiedName() = "strsep" and
++    message = "Call to strsep() is potentially dangerous. Use extract_first_word() instead."
++  ) or (
++    f.getQualifiedName() = "dup" and
++    message = "Call to dup() is potentially dangerous. Use fcntl(fd, FD_DUPFD_CLOEXEC, 3) instead."
++  ) or (
++    f.getQualifiedName() = "htonl" and
++    message = "Call to htonl() is confusing. Use htobe32() instead."
++  ) or (
++    f.getQualifiedName() = "htons" and
++    message = "Call to htons() is confusing. Use htobe16() instead."
++  ) or (
++    f.getQualifiedName() = "ntohl" and
++    message = "Call to ntohl() is confusing. Use be32toh() instead."
++  ) or (
++    f.getQualifiedName() = "ntohs" and
++    message = "Call to ntohs() is confusing. Use be16toh() instead."
+   )
+ }
+ 

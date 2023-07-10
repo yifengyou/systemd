@@ -1,0 +1,47 @@
+From bef599d1a0e41afe4b6f1d6dfb6fbc86896ab8c5 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Fri, 16 Nov 2018 23:32:31 +0100
+Subject: [PATCH] journald: check whether sscanf has changed the value
+ corresponding to %n
+
+It's possible for sscanf to receive strings containing all three fields
+and not matching the template at the same time. When this happens the
+value of k doesn't change, which basically means that process_audit_string
+tries to access memory randomly. Sometimes it works and sometimes it doesn't :-)
+
+See also https://bugzilla.redhat.com/show_bug.cgi?id=1059314.
+
+(cherry picked from commit 1dab14aba749b9c5ab8176c5730107b70834240b)
+
+Resolves: #1764560
+---
+ src/journal/journald-audit.c        | 3 ++-
+ test/fuzz/fuzz-journald-audit/crash | 1 +
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+ create mode 100644 test/fuzz/fuzz-journald-audit/crash
+
+diff --git a/src/journal/journald-audit.c b/src/journal/journald-audit.c
+index 7810a0139a..0fd6ab2a84 100644
+--- a/src/journal/journald-audit.c
++++ b/src/journal/journald-audit.c
+@@ -341,11 +341,12 @@ void process_audit_string(Server *s, int type, const char *data, size_t size) {
+         if (!p)
+                 return;
+ 
++        k = 0;
+         if (sscanf(p, "(%" PRIu64 ".%" PRIu64 ":%" PRIu64 "):%n",
+                    &seconds,
+                    &msec,
+                    &id,
+-                   &k) != 3)
++                   &k) != 3 || k == 0)
+                 return;
+ 
+         p += k;
+diff --git a/test/fuzz/fuzz-journald-audit/crash b/test/fuzz/fuzz-journald-audit/crash
+new file mode 100644
+index 0000000000..91bd85ca6e
+--- /dev/null
++++ b/test/fuzz/fuzz-journald-audit/crash
+@@ -0,0 +1 @@
++audit(1542398162.211:744) pid=7376 uid=1000 auid=1000 ses=6 subj=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023 msg='op=PAM:accounting grantors=pam_unix,pam_localuser acct="vagrant" exe="/usr/bin/sudo" hostname=? addr=? terminal=/dev/pts/1 res=success'

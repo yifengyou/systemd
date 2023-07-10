@@ -1,0 +1,122 @@
+From e5121fbb839a36055e5fdab1b9d92dc42f495f29 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 11 Sep 2020 19:49:33 +0200
+Subject: [PATCH] core: propagate triggered unit in more load states
+
+In 4c2ef3276735ad9f7fccf33f5bdcbe7d8751e7ec we enabled propagating
+triggered unit state to the triggering unit for service units in more
+load states, so that we don't accidentally stop tracking state
+correctly.
+
+Do the same for our other triggering unit states: automounts, paths, and
+timers.
+
+Also, make this an assertion rather than a simple test. After all it
+should never happen that we get called for half-loaded units or units of
+the wrong type. The load routines should already have made this
+impossible.
+
+(cherry picked from commit 0377cd2936ae5cac0c9d76a4b58889f121c097c4)
+
+Related: #2065322
+---
+ src/core/automount.c   | 4 ++--
+ src/core/path.c        | 7 +++----
+ src/core/socket.c      | 4 ++--
+ src/core/timer.c       | 4 ++--
+ src/core/transaction.c | 2 +-
+ src/core/unit.h        | 4 ++++
+ 6 files changed, 14 insertions(+), 11 deletions(-)
+
+diff --git a/src/core/automount.c b/src/core/automount.c
+index f212620c8f..c1c513d4a5 100644
+--- a/src/core/automount.c
++++ b/src/core/automount.c
+@@ -492,8 +492,8 @@ static void automount_trigger_notify(Unit *u, Unit *other) {
+         assert(other);
+ 
+         /* Filter out invocations with bogus state */
+-        if (other->load_state != UNIT_LOADED || other->type != UNIT_MOUNT)
+-                return;
++        assert(UNIT_IS_LOAD_COMPLETE(other->load_state));
++        assert(other->type == UNIT_MOUNT);
+ 
+         /* Don't propagate state changes from the mount if we are already down */
+         if (!IN_SET(a->state, AUTOMOUNT_WAITING, AUTOMOUNT_RUNNING))
+diff --git a/src/core/path.c b/src/core/path.c
+index 58f490589d..a7c2e0b7c1 100644
+--- a/src/core/path.c
++++ b/src/core/path.c
+@@ -696,11 +696,10 @@ static void path_trigger_notify(Unit *u, Unit *other) {
+         assert(u);
+         assert(other);
+ 
+-        /* Invoked whenever the unit we trigger changes state or gains
+-         * or loses a job */
++        /* Invoked whenever the unit we trigger changes state or gains or loses a job */
+ 
+-        if (other->load_state != UNIT_LOADED)
+-                return;
++        /* Filter out invocations with bogus state */
++        assert(UNIT_IS_LOAD_COMPLETE(other->load_state));
+ 
+         if (p->state == PATH_RUNNING &&
+             UNIT_IS_INACTIVE_OR_FAILED(unit_active_state(other))) {
+diff --git a/src/core/socket.c b/src/core/socket.c
+index 3589300e68..74c1cc70cb 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -3190,8 +3190,8 @@ static void socket_trigger_notify(Unit *u, Unit *other) {
+         assert(other);
+ 
+         /* Filter out invocations with bogus state */
+-        if (other->load_state != UNIT_LOADED || other->type != UNIT_SERVICE)
+-                return;
++        assert(UNIT_IS_LOAD_COMPLETE(other->load_state));
++        assert(other->type == UNIT_SERVICE);
+ 
+         /* Don't propagate state changes from the service if we are already down */
+         if (!IN_SET(s->state, SOCKET_RUNNING, SOCKET_LISTENING))
+diff --git a/src/core/timer.c b/src/core/timer.c
+index 684180bf99..990f05fee4 100644
+--- a/src/core/timer.c
++++ b/src/core/timer.c
+@@ -745,8 +745,8 @@ static void timer_trigger_notify(Unit *u, Unit *other) {
+         assert(u);
+         assert(other);
+ 
+-        if (other->load_state != UNIT_LOADED)
+-                return;
++        /* Filter out invocations with bogus state */
++        assert(UNIT_IS_LOAD_COMPLETE(other->load_state));
+ 
+         /* Reenable all timers that depend on unit state */
+         LIST_FOREACH(value, v, t->values)
+diff --git a/src/core/transaction.c b/src/core/transaction.c
+index ee5b39fef4..8196aba927 100644
+--- a/src/core/transaction.c
++++ b/src/core/transaction.c
+@@ -915,7 +915,7 @@ int transaction_add_job_and_dependencies(
+ 
+         /* Safety check that the unit is a valid state, i.e. not in UNIT_STUB or UNIT_MERGED which should only be set
+          * temporarily. */
+-        if (!IN_SET(unit->load_state, UNIT_LOADED, UNIT_ERROR, UNIT_NOT_FOUND, UNIT_BAD_SETTING, UNIT_MASKED))
++        if (!UNIT_IS_LOAD_COMPLETE(unit->load_state))
+                 return sd_bus_error_setf(e, BUS_ERROR_LOAD_FAILED, "Unit %s is not loaded properly.", unit->id);
+ 
+         if (type != JOB_STOP) {
+diff --git a/src/core/unit.h b/src/core/unit.h
+index 0cd259411f..b8b914711f 100644
+--- a/src/core/unit.h
++++ b/src/core/unit.h
+@@ -47,6 +47,10 @@ static inline bool UNIT_IS_INACTIVE_OR_FAILED(UnitActiveState t) {
+         return IN_SET(t, UNIT_INACTIVE, UNIT_FAILED);
+ }
+ 
++static inline bool UNIT_IS_LOAD_COMPLETE(UnitLoadState t) {
++        return t >= 0 && t < _UNIT_LOAD_STATE_MAX && t != UNIT_STUB && t != UNIT_MERGED;
++}
++
+ /* Stores the 'reason' a dependency was created as a bit mask, i.e. due to which configuration source it came to be. We
+  * use this so that we can selectively flush out parts of dependencies again. Note that the same dependency might be
+  * created as a result of multiple "reasons", hence the bitmask. */

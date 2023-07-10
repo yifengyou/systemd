@@ -1,0 +1,33 @@
+From b06347d1e85c98507ba386b24e6c7159edf4784f Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 26 Nov 2018 21:07:39 +0100
+Subject: [PATCH] =?UTF-8?q?bus-unit-util:=20properly=20accept=20StandardOu?=
+ =?UTF-8?q?tput=3Dappend:=E2=80=A6=20settings?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+(cherry picked from commit 8d33232ef1ad051b5ed00bd7b5fffb5a19bb83ae)
+
+Resolves: #2093479
+---
+ src/shared/bus-unit-util.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index 9010448aaf..3910dfa812 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -894,9 +894,11 @@ static int bus_append_execute_property(sd_bus_message *m, const char *field, con
+                 } else if ((n = startswith(eq, "file:"))) {
+                         appended = strjoina(field, "File");
+                         r = sd_bus_message_append(m, "(sv)", appended, "s", n);
++                } else if ((n = startswith(eq, "append:"))) {
++                        appended = strjoina(field, "FileToAppend");
++                        r = sd_bus_message_append(m, "(sv)", appended, "s", n);
+                 } else
+                         r = sd_bus_message_append(m, "(sv)", field, "s", eq);
+-
+                 if (r < 0)
+                         return bus_log_create_error(r);
+ 

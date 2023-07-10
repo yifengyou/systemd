@@ -1,0 +1,377 @@
+From d897789b4dc7d115c915842eabf33ed3de20110a Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 7 Aug 2018 13:49:34 +0200
+Subject: [PATCH] logind: optionally watch utmp for login data
+
+This allows us to determine the TTY an ssh session is for, which is
+useful to to proper idle detection for ssh sessions.
+
+Fixes: #9622
+(cherry picked from commit 3d0ef5c7e00155bc74f6f71c34cad518a4ff56ba)
+
+Related: #2122288
+---
+ src/login/logind-core.c    | 143 +++++++++++++++++++++++++++++++++++++
+ src/login/logind-dbus.c    |   5 ++
+ src/login/logind-session.c |  24 +++++++
+ src/login/logind-session.h |  14 +++-
+ src/login/logind.c         |  10 +++
+ src/login/logind.h         |   8 +++
+ 6 files changed, 203 insertions(+), 1 deletion(-)
+
+diff --git a/src/login/logind-core.c b/src/login/logind-core.c
+index 0ed812a2c8..7e33f8e6aa 100644
+--- a/src/login/logind-core.c
++++ b/src/login/logind-core.c
+@@ -5,6 +5,9 @@
+ #include <sys/ioctl.h>
+ #include <sys/types.h>
+ #include <linux/vt.h>
++#if ENABLE_UTMP
++#include <utmpx.h>
++#endif
+ 
+ #include "alloc-util.h"
+ #include "bus-error.h"
+@@ -14,6 +17,7 @@
+ #include "fd-util.h"
+ #include "logind.h"
+ #include "parse-util.h"
++#include "path-util.h"
+ #include "process-util.h"
+ #include "strv.h"
+ #include "terminal-util.h"
+@@ -692,3 +696,142 @@ bool manager_all_buttons_ignored(Manager *m) {
+ 
+         return true;
+ }
++
++int manager_read_utmp(Manager *m) {
++#if ENABLE_UTMP
++        int r;
++
++        assert(m);
++
++        if (utmpxname(_PATH_UTMPX) < 0)
++                return log_error_errno(errno, "Failed to set utmp path to " _PATH_UTMPX ": %m");
++
++        setutxent();
++
++        for (;;) {
++                _cleanup_free_ char *t = NULL;
++                struct utmpx *u;
++                const char *c;
++                Session *s;
++
++                errno = 0;
++                u = getutxent();
++                if (!u) {
++                        if (errno != 0)
++                                log_warning_errno(errno, "Failed to read " _PATH_UTMPX ", ignoring: %m");
++                        r = 0;
++                        break;
++                }
++
++                if (u->ut_type != USER_PROCESS)
++                        continue;
++
++                if (!pid_is_valid(u->ut_pid))
++                        continue;
++
++                t = strndup(u->ut_line, sizeof(u->ut_line));
++                if (!t) {
++                        r = log_oom();
++                        break;
++                }
++
++                c = path_startswith(t, "/dev/");
++                if (c) {
++                        r = free_and_strdup(&t, c);
++                        if (r < 0) {
++                                log_oom();
++                                break;
++                        }
++                }
++
++                if (isempty(t))
++                        continue;
++
++                s = hashmap_get(m->sessions_by_leader, PID_TO_PTR(u->ut_pid));
++                if (!s)
++                        continue;
++
++                if (s->tty_validity == TTY_FROM_UTMP && !streq_ptr(s->tty, t)) {
++                        /* This may happen on multiplexed SSH connection (i.e. 'SSH connection sharing'). In
++                         * this case PAM and utmp sessions don't match. In such a case let's invalidate the TTY
++                         * information and never acquire it again. */
++
++                        s->tty = mfree(s->tty);
++                        s->tty_validity = TTY_UTMP_INCONSISTENT;
++                        log_debug("Session '%s' has inconsistent TTY information, dropping TTY information.", s->id);
++                        continue;
++                }
++
++                /* Never override what we figured out once */
++                if (s->tty || s->tty_validity >= 0)
++                        continue;
++
++                s->tty = TAKE_PTR(t);
++                s->tty_validity = TTY_FROM_UTMP;
++                log_debug("Acquired TTY information '%s' from utmp for session '%s'.", s->tty, s->id);
++        }
++
++        endutxent();
++        return r;
++#else
++        return 0
++#endif
++}
++
++#if ENABLE_UTMP
++static int manager_dispatch_utmp(sd_event_source *s, const struct inotify_event *event, void *userdata) {
++        Manager *m = userdata;
++
++        assert(m);
++
++        /* If there's indication the file itself might have been removed or became otherwise unavailable, then let's
++         * reestablish the watch on whatever there's now. */
++        if ((event->mask & (IN_ATTRIB|IN_DELETE_SELF|IN_MOVE_SELF|IN_Q_OVERFLOW|IN_UNMOUNT)) != 0)
++                manager_connect_utmp(m);
++
++        (void) manager_read_utmp(m);
++        return 0;
++}
++#endif
++
++void manager_connect_utmp(Manager *m) {
++#if ENABLE_UTMP
++        sd_event_source *s = NULL;
++        int r;
++
++        assert(m);
++
++        /* Watch utmp for changes via inotify. We do this to deal with tools such as ssh, which will register the PAM
++         * session early, and acquire a TTY only much later for the connection. Thus during PAM the TTY won't be known
++         * yet. ssh will register itself with utmp when it finally acquired the TTY. Hence, let's make use of this, and
++         * watch utmp for the TTY asynchronously. We use the PAM session's leader PID as key, to find the right entry.
++         *
++         * Yes, relying on utmp is pretty ugly, but it's good enough for informational purposes, as well as idle
++         * detection (which, for tty sessions, relies on the TTY used) */
++
++        r = sd_event_add_inotify(m->event, &s, _PATH_UTMPX, IN_MODIFY|IN_MOVE_SELF|IN_DELETE_SELF|IN_ATTRIB, manager_dispatch_utmp, m);
++        if (r < 0)
++                log_full_errno(r == -ENOENT ? LOG_DEBUG: LOG_WARNING, r, "Failed to create inotify watch on " _PATH_UTMPX ", ignoring: %m");
++        else {
++                r = sd_event_source_set_priority(s, SD_EVENT_PRIORITY_IDLE);
++                if (r < 0)
++                        log_warning_errno(r, "Failed to adjust utmp event source priority, ignoring: %m");
++
++                (void) sd_event_source_set_description(s, "utmp");
++        }
++
++        sd_event_source_unref(m->utmp_event_source);
++        m->utmp_event_source = s;
++#endif
++}
++
++void manager_reconnect_utmp(Manager *m) {
++#if ENABLE_UTMP
++        assert(m);
++
++        if (m->utmp_event_source)
++                return;
++
++        manager_connect_utmp(m);
++#endif
++}
+diff --git a/src/login/logind-dbus.c b/src/login/logind-dbus.c
+index 1bb152bc20..0248042308 100644
+--- a/src/login/logind-dbus.c
++++ b/src/login/logind-dbus.c
+@@ -772,6 +772,9 @@ static int method_create_session(sd_bus_message *message, void *userdata, sd_bus
+                 } while (hashmap_get(m->sessions, id));
+         }
+ 
++        /* If we are not watching utmp aleady, try again */
++        manager_reconnect_utmp(m);
++
+         r = manager_add_user_by_uid(m, uid, &user);
+         if (r < 0)
+                 goto fail;
+@@ -795,6 +798,8 @@ static int method_create_session(sd_bus_message *message, void *userdata, sd_bus
+                         r = -ENOMEM;
+                         goto fail;
+                 }
++
++                session->tty_validity = TTY_FROM_PAM;
+         }
+ 
+         if (!isempty(display)) {
+diff --git a/src/login/logind-session.c b/src/login/logind-session.c
+index 1143a834a4..d666f86d3f 100644
+--- a/src/login/logind-session.c
++++ b/src/login/logind-session.c
+@@ -56,6 +56,7 @@ int session_new(Session **ret, Manager *m, const char *id) {
+                 .fifo_fd = -1,
+                 .vtfd = -1,
+                 .audit_id = AUDIT_SESSION_INVALID,
++                .tty_validity = _TTY_VALIDITY_INVALID,
+         };
+ 
+         s->state_file = strappend("/run/systemd/sessions/", id);
+@@ -219,6 +220,9 @@ int session_save(Session *s) {
+         if (s->tty)
+                 fprintf(f, "TTY=%s\n", s->tty);
+ 
++        if (s->tty_validity >= 0)
++                fprintf(f, "TTY_VALIDITY=%s\n", tty_validity_to_string(s->tty_validity));
++
+         if (s->display)
+                 fprintf(f, "DISPLAY=%s\n", s->display);
+ 
+@@ -355,6 +359,7 @@ static int session_load_devices(Session *s, const char *devices) {
+ int session_load(Session *s) {
+         _cleanup_free_ char *remote = NULL,
+                 *seat = NULL,
++                *tty_validity = NULL,
+                 *vtnr = NULL,
+                 *state = NULL,
+                 *position = NULL,
+@@ -380,6 +385,7 @@ int session_load(Session *s) {
+                            "FIFO",           &s->fifo_path,
+                            "SEAT",           &seat,
+                            "TTY",            &s->tty,
++                           "TTY_VALIDITY",   &tty_validity,
+                            "DISPLAY",        &s->display,
+                            "REMOTE_HOST",    &s->remote_host,
+                            "REMOTE_USER",    &s->remote_user,
+@@ -456,6 +462,16 @@ int session_load(Session *s) {
+                 seat_claim_position(s->seat, s, npos);
+         }
+ 
++        if (tty_validity) {
++                TTYValidity v;
++
++                v = tty_validity_from_string(tty_validity);
++                if (v < 0)
++                        log_debug("Failed to parse TTY validity: %s", tty_validity);
++                else
++                        s->tty_validity = v;
++        }
++
+         if (leader) {
+                 if (parse_pid(leader, &s->leader) >= 0)
+                         (void) audit_session_from_pid(s->leader, &s->audit_id);
+@@ -1368,3 +1384,11 @@ static const char* const kill_who_table[_KILL_WHO_MAX] = {
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP(kill_who, KillWho);
++
++static const char* const tty_validity_table[_TTY_VALIDITY_MAX] = {
++        [TTY_FROM_PAM] = "from-pam",
++        [TTY_FROM_UTMP] = "from-utmp",
++        [TTY_UTMP_INCONSISTENT] = "utmp-inconsistent",
++};
++
++DEFINE_STRING_TABLE_LOOKUP(tty_validity, TTYValidity);
+diff --git a/src/login/logind-session.h b/src/login/logind-session.h
+index 9bd0c96a03..7da845cea3 100644
+--- a/src/login/logind-session.h
++++ b/src/login/logind-session.h
+@@ -46,6 +46,14 @@ enum KillWho {
+         _KILL_WHO_INVALID = -1
+ };
+ 
++typedef enum TTYValidity {
++        TTY_FROM_PAM,
++        TTY_FROM_UTMP,
++        TTY_UTMP_INCONSISTENT, /* may happen on ssh sessions with multiplexed TTYs */
++        _TTY_VALIDITY_MAX,
++        _TTY_VALIDITY_INVALID = -1,
++} TTYValidity;
++
+ struct Session {
+         Manager *manager;
+ 
+@@ -60,8 +68,9 @@ struct Session {
+ 
+         dual_timestamp timestamp;
+ 
+-        char *tty;
+         char *display;
++        char *tty;
++        TTYValidity tty_validity;
+ 
+         bool remote;
+         char *remote_user;
+@@ -159,6 +168,9 @@ SessionClass session_class_from_string(const char *s) _pure_;
+ const char *kill_who_to_string(KillWho k) _const_;
+ KillWho kill_who_from_string(const char *s) _pure_;
+ 
++const char* tty_validity_to_string(TTYValidity t) _const_;
++TTYValidity tty_validity_from_string(const char *s) _pure_;
++
+ int session_prepare_vt(Session *s);
+ void session_restore_vt(Session *s);
+ void session_leave_vt(Session *s);
+diff --git a/src/login/logind.c b/src/login/logind.c
+index 6c208c8e89..25de9a6ab2 100644
+--- a/src/login/logind.c
++++ b/src/login/logind.c
+@@ -132,6 +132,10 @@ static Manager* manager_unref(Manager *m) {
+         sd_event_source_unref(m->udev_button_event_source);
+         sd_event_source_unref(m->lid_switch_ignore_event_source);
+ 
++#if ENABLE_UTMP
++        sd_event_source_unref(m->utmp_event_source);
++#endif
++
+         safe_close(m->console_active_fd);
+ 
+         udev_monitor_unref(m->udev_seat_monitor);
+@@ -1095,6 +1099,9 @@ static int manager_startup(Manager *m) {
+         if (r < 0)
+                 return log_error_errno(r, "Failed to register SIGHUP handler: %m");
+ 
++        /* Connect to utmp */
++        manager_connect_utmp(m);
++
+         /* Connect to console */
+         r = manager_connect_console(m);
+         if (r < 0)
+@@ -1150,6 +1157,9 @@ static int manager_startup(Manager *m) {
+         /* Reserve the special reserved VT */
+         manager_reserve_vt(m);
+ 
++        /* Read in utmp if it exists */
++        manager_read_utmp(m);
++
+         /* And start everything */
+         HASHMAP_FOREACH(seat, m->seats, i)
+                 seat_start(seat);
+diff --git a/src/login/logind.h b/src/login/logind.h
+index d29b01c75b..bb127bf4a5 100644
+--- a/src/login/logind.h
++++ b/src/login/logind.h
+@@ -43,6 +43,10 @@ struct Manager {
+         sd_event_source *udev_vcsa_event_source;
+         sd_event_source *udev_button_event_source;
+ 
++#if ENABLE_UTMP
++        sd_event_source *utmp_event_source;
++#endif
++
+         int console_active_fd;
+ 
+         unsigned n_autovts;
+@@ -150,6 +154,10 @@ bool manager_is_docked_or_external_displays(Manager *m);
+ bool manager_is_on_external_power(void);
+ bool manager_all_buttons_ignored(Manager *m);
+ 
++int manager_read_utmp(Manager *m);
++void manager_connect_utmp(Manager *m);
++void manager_reconnect_utmp(Manager *m);
++
+ extern const sd_bus_vtable manager_vtable[];
+ 
+ int match_job_removed(sd_bus_message *message, void *userdata, sd_bus_error *error);

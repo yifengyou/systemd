@@ -1,0 +1,39 @@
+From 71ebbd2da606c9cb4da694bbcc925078f253f496 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Wed, 6 Oct 2021 00:19:41 +0900
+Subject: [PATCH] core/service: also check path in exec commands
+
+(cherry picked from commit 8688a389cabdff61efe187bb85cc1776de03c460)
+
+Related: #2020239
+---
+ src/core/service.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/service.c b/src/core/service.c
+index 12adf89dd4..ae31973774 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -539,13 +539,21 @@ static int service_verify(Service *s) {
+         for (ServiceExecCommand c = 0; c < _SERVICE_EXEC_COMMAND_MAX; c++) {
+                 ExecCommand *command;
+ 
+-                LIST_FOREACH(command, command, s->exec_command[c])
++                LIST_FOREACH(command, command, s->exec_command[c]) {
++                        if (!path_is_absolute(command->path) && !filename_is_valid(command->path)) {
++                                log_unit_error(UNIT(s),
++                                               "Service %s= binary path \"%s\" is neither a valid executable name nor an absolute path. Refusing.",
++                                               command->path,
++                                               service_exec_command_to_string(c));
++                                return -ENOEXEC;
++                        }
+                         if (strv_isempty(command->argv)) {
+                                 log_unit_error(UNIT(s),
+                                                "Service has an empty argv in %s=. Refusing.",
+                                                service_exec_command_to_string(c));
+                                 return -ENOEXEC;
+                         }
++                }
+         }
+ 
+         if (!s->exec_command[SERVICE_EXEC_START] && !s->exec_command[SERVICE_EXEC_STOP]) {

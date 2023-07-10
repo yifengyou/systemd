@@ -1,0 +1,190 @@
+From adc0a99b18153535ef73cf1b6ce2bc64ca501c81 Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Fri, 4 Oct 2019 17:39:34 -0700
+Subject: [PATCH] shared/dropin: support -.service.d/ top level drop-in for
+ service units
+
+(cherry picked from commit 272467882c9c3c3d4faca5fd7a1f44c5ef2f064)
+
+Resolves: #2051520
+---
+ man/systemd.service.xml            | 13 +++++++++++++
+ man/systemd.special.xml            |  9 +++++++++
+ man/systemd.unit.xml               |  4 ++++
+ src/basic/unit-name.c              |  9 +++++++--
+ src/core/service.c                 |  2 +-
+ src/shared/dropin.c                | 29 ++++++++++++++++++++++++++---
+ test/TEST-15-DROPIN/test-dropin.sh | 15 ++++++++++++++-
+ 7 files changed, 74 insertions(+), 7 deletions(-)
+
+diff --git a/man/systemd.service.xml b/man/systemd.service.xml
+index 1e30a564df..4164402d0e 100644
+--- a/man/systemd.service.xml
++++ b/man/systemd.service.xml
+@@ -62,6 +62,19 @@
+     about the incompatibilities, see the <ulink
+     url="https://www.freedesktop.org/wiki/Software/systemd/Incompatibilities">Incompatibilities
+     with SysV</ulink> document.</para>
++
++    <para>In addition to the various drop-in behaviors described in
++    <citerefentry><refentrytitle>systemd.unit</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
++    services also support a top-level drop-in with <filename>-.service.d/</filename> that allows
++    altering or adding to the settings of all services on the system.
++    The formatting and precedence of applying drop-in configurations follow what is defined in
++    <citerefentry><refentrytitle>systemd.unit</refentrytitle><manvolnum>5</manvolnum></citerefentry>.
++    However, configurations in <filename>-.service.d/</filename> have the lowest precedence compared to settings
++    in the service specific override directories. For example, for <filename>foo-bar-baz.service</filename>,
++    drop-ins in <filename>foo-bar-baz.service.d/</filename> override the ones in
++    <filename>foo-bar-.service.d/</filename>, which override the ones <filename>foo-.service.d/</filename>,
++    which override the ones in <filename>-.service.d/</filename>.
++    </para>
+   </refsect1>
+ 
+   <refsect1>
+diff --git a/man/systemd.special.xml b/man/systemd.special.xml
+index fe6324a4a0..06798cd9e2 100644
+--- a/man/systemd.special.xml
++++ b/man/systemd.special.xml
+@@ -117,6 +117,15 @@
+         </listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><filename>-.service</filename></term>
++        <listitem>
++          <para>This is a reserved unit name used to support top-level drop-ins for services. See
++          <citerefentry><refentrytitle>systemd.service</refentrytitle><manvolnum>5</manvolnum></citerefentry>
++          for details.</para>
++        </listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><filename>basic.target</filename></term>
+         <listitem>
+diff --git a/man/systemd.unit.xml b/man/systemd.unit.xml
+index e80c760dd6..5aa3bd1699 100644
+--- a/man/systemd.unit.xml
++++ b/man/systemd.unit.xml
+@@ -190,6 +190,10 @@
+     over unit files wherever located. Multiple drop-in files with different names are applied in
+     lexicographic order, regardless of which of the directories they reside in.</para>
+ 
++    <para>Service units also support a top-level drop-in directory for modifying the settings of all service units. See
++    <citerefentry><refentrytitle>systemd.service</refentrytitle><manvolnum>5</manvolnum></citerefentry>
++    for details.</para>
++
+     <!-- Note that we do not document .include here, as we consider it mostly obsolete, and want
+          people to use .d/ drop-ins instead. -->
+ 
+diff --git a/src/basic/unit-name.c b/src/basic/unit-name.c
+index 82a666a481..078628d6e8 100644
+--- a/src/basic/unit-name.c
++++ b/src/basic/unit-name.c
+@@ -681,8 +681,13 @@ bool service_unit_name_is_valid(const char *name) {
+ 
+         /* If it's a template or instance, get the prefix as a service name. */
+         if (unit_name_is_valid(name, UNIT_NAME_INSTANCE|UNIT_NAME_TEMPLATE)) {
+-                assert_se(unit_name_to_prefix(name, &prefix) == 0);
+-                assert_se(s = strjoin(prefix, ".service"));
++                if (unit_name_to_prefix(name, &prefix) < 0)
++                        return false;
++
++                s = strjoin(prefix, ".service");
++                if (!s)
++                        return false;
++
+                 service_name = s;
+         }
+ 
+diff --git a/src/core/service.c b/src/core/service.c
+index b7eb10c044..b3ef79228f 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -558,7 +558,7 @@ static int service_verify(Service *s) {
+ 
+         if (!service_unit_name_is_valid(UNIT(s)->id)) {
+                 log_unit_error(UNIT(s), "Service name is invalid or reserved. Refusing.");
+-                return -ENOEXEC;
++                return -EINVAL;
+         }
+ 
+         if (!s->exec_command[SERVICE_EXEC_START] && !s->exec_command[SERVICE_EXEC_STOP]
+diff --git a/src/shared/dropin.c b/src/shared/dropin.c
+index 357c66d800..78ca7f4452 100644
+--- a/src/shared/dropin.c
++++ b/src/shared/dropin.c
+@@ -19,6 +19,7 @@
+ #include "mkdir.h"
+ #include "path-util.h"
+ #include "set.h"
++#include "special.h"
+ #include "string-util.h"
+ #include "strv.h"
+ #include "unit-name.h"
+@@ -232,15 +233,37 @@ int unit_file_find_dropin_paths(
+                 char ***ret) {
+ 
+         _cleanup_strv_free_ char **dirs = NULL;
+-        char *t, **p;
++        UnitType type = _UNIT_TYPE_INVALID;
++        char *name, **p;
+         Iterator i;
+         int r;
+ 
+         assert(ret);
+ 
+-        SET_FOREACH(t, names, i)
++        /* All the names in the unit are of the same type so just grab one. */
++        name = (char*) set_first(names);
++        if (name) {
++                type = unit_name_to_type(name);
++                if (type < 0)
++                        return log_error_errno(EINVAL,
++                                               "Failed to to derive unit type from unit name: %s",
++                                               name);
++        }
++
++        /* Special drop in for -.service. Add this first as it's the most generic
++         * and should be able to be overridden by more specific drop-ins. */
++        if (type == UNIT_SERVICE)
++                STRV_FOREACH(p, lookup_path)
++                        (void) unit_file_find_dirs(original_root,
++                                                   unit_path_cache,
++                                                   *p,
++                                                   SPECIAL_ROOT_SERVICE,
++                                                   dir_suffix,
++                                                   &dirs);
++
++        SET_FOREACH(name, names, i)
+                 STRV_FOREACH(p, lookup_path)
+-                        (void) unit_file_find_dirs(original_root, unit_path_cache, *p, t, dir_suffix, &dirs);
++                        (void) unit_file_find_dirs(original_root, unit_path_cache, *p, name, dir_suffix, &dirs);
+ 
+         if (strv_isempty(dirs)) {
+                 *ret = NULL;
+diff --git a/test/TEST-15-DROPIN/test-dropin.sh b/test/TEST-15-DROPIN/test-dropin.sh
+index ab0a58caea..def2e03304 100755
+--- a/test/TEST-15-DROPIN/test-dropin.sh
++++ b/test/TEST-15-DROPIN/test-dropin.sh
+@@ -102,7 +102,20 @@ test_basic_dropins () {
+         check_ok b Wants c.service
+         systemctl stop a c
+ 
+-        clear_services a b c
++    echo "*** test -.service.d/ top level drop-in"
++    create_services a b
++    check_ko a ExecCondition "/bin/echo a"
++    check_ko b ExecCondition "/bin/echo b"
++    mkdir -p /usr/lib/systemd/system/-.service.d
++    cat >/usr/lib/systemd/system/-.service.d/override.conf <<EOF
++[Service]
++ExecCondition=/bin/echo %n
++EOF
++    check_ok a ExecCondition "/bin/echo a"
++    check_ok b ExecCondition "/bin/echo b"
++    rm -rf /usr/lib/systemd/system/-.service.d
++
++    clear_services a b c
+ }
+ 
+ test_template_dropins () {

@@ -1,0 +1,257 @@
+From 08ac9f7f55c138678c6415139e7510a05a75b81d Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Wed, 14 Oct 2020 16:57:44 +0200
+Subject: [PATCH] udev: introduce udev net_id "naming schemes"
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With this we can stabilize how naming works for network interfaces. A
+user can request through a kernel cmdline option or an env var which
+scheme to follow. The idea is that installers use this to set into stone
+(a very soft stone though) the scheme used during installation so that
+interface naming doesn't change afterwards anymore.
+
+Why use env vars and kernel cmdline options, and not a config file of
+its own?
+
+Well, first of all there's no obvious existing one to use. But more
+importantly: I have the feeling that this logic is kind of an incomplete
+hack, and I simply don't want to do advertise this as a perfectly
+working solution. So far we used env vars for the non-so-official
+options and proper config files for the official stuff. Given how
+incomplete this logic is (i.e. the big variable for naming remains the
+kernel, which might expose sysfs attributes in newer versions that we
+check for and didn't exist in older versions — and other problems like
+this), I am simply not confident in giving this first-class exposure in
+a primary configuration file.
+
+Fixes: #10448
+
+(cherry-picked from commit f7e81fd96fdfe0ac6dcdb72de43f7cb4720e363a)
+
+Related: #1827462
+
+[msekleta: note that we are introducing our own naming schemes based on
+RHEL-8 minor versions. Also we are not backporting all naming scheme
+features that appeared in the original commit. We are backporting only
+features relevant for v239 while original commit also converted
+changes introduced in v240 into naming scheme flags.]
+---
+ doc/ENVIRONMENT.md             |   9 +++
+ man/kernel-command-line.xml    |   1 +
+ man/systemd-udevd.service.xml  |  16 +++++
+ src/udev/udev-builtin-net_id.c | 106 ++++++++++++++++++++++++++++++++-
+ 4 files changed, 130 insertions(+), 2 deletions(-)
+
+diff --git a/doc/ENVIRONMENT.md b/doc/ENVIRONMENT.md
+index 39a36a52cc..1a4aa01ef4 100644
+--- a/doc/ENVIRONMENT.md
++++ b/doc/ENVIRONMENT.md
+@@ -76,6 +76,15 @@ systemd-logind:
+   hibernation is available even if the swap devices do not provide enough room
+   for it.
+ 
++* `$NET_NAMING_SCHEME=` – if set, takes a network naming scheme (i.e. one of
++  v238, v239, v240 …) as parameter. If specified udev's net_id builtin will
++  follow the specified naming scheme when determining stable network interface
++  names. This may be used to revert to naming schemes of older udev versions,
++  in order to provide more stable naming across updates. This environment
++  variable takes precedence over the kernel command line option
++  `net.naming-scheme=`, except if the value is prefixed with `:` in which case
++  the kernel command line option takes precedence, if it is specified as well.
++
+ installed systemd tests:
+ 
+ * `$SYSTEMD_TEST_DATA` — override the location of test data. This is useful if
+diff --git a/man/kernel-command-line.xml b/man/kernel-command-line.xml
+index 4d8cb4e50e..b753d0592c 100644
+--- a/man/kernel-command-line.xml
++++ b/man/kernel-command-line.xml
+@@ -246,6 +246,7 @@
+         <term><varname>udev.event_timeout=</varname></term>
+         <term><varname>rd.udev.event_timeout=</varname></term>
+         <term><varname>net.ifnames=</varname></term>
++        <term><varname>net.naming-scheme=</varname></term>
+ 
+         <listitem>
+           <para>Parameters understood by the device event managing
+diff --git a/man/systemd-udevd.service.xml b/man/systemd-udevd.service.xml
+index 73c77ea690..6449103441 100644
+--- a/man/systemd-udevd.service.xml
++++ b/man/systemd-udevd.service.xml
+@@ -170,6 +170,22 @@
+           when possible. It is enabled by default; specifying 0 disables it.</para>
+         </listitem>
+       </varlistentry>
++      <varlistentry>
++        <term><varname>net.naming-scheme=</varname></term>
++        <listitem>
++          <para>Network interfaces are renamed to give them predictable names when possible (unless
++          <varname>net.ifnames=0</varname> is specified, see above). The names are derived from various device metadata
++          fields. Newer versions of <filename>systemd-udevd.service</filename> take more of these fields into account,
++          improving (and thus possibly changing) the names used for the same devices. With this kernel command line
++          option it is possible to pick a specific version of this algorithm. It expects a naming scheme identifier as
++          argument. Currently the following identifiers are known: <literal>v238</literal>, <literal>v239</literal>,
++          <literal>v240</literal> which each implement the naming scheme that was the default in the indicated systemd
++          version. Note that selecting a specific scheme is not sufficient to fully stabilize interface naming: the
++          naming is generally derived from driver attributes exposed by the kernel. As the kernel is updated,
++          previously missing attributes <filename>systemd-udevd.service</filename> is checking might appear, which
++          affects older name derivation algorithms, too.</para>
++        </listitem>
++      </varlistentry>
+     </variablelist>
+     <!-- when adding entries here, consider also adding them
+          in kernel-command-line.xml -->
+diff --git a/src/udev/udev-builtin-net_id.c b/src/udev/udev-builtin-net_id.c
+index 147e04ab8c..148696183e 100644
+--- a/src/udev/udev-builtin-net_id.c
++++ b/src/udev/udev-builtin-net_id.c
+@@ -96,6 +96,7 @@
+ #include "fileio.h"
+ #include "fs-util.h"
+ #include "parse-util.h"
++#include "proc-cmdline.h"
+ #include "stdio-util.h"
+ #include "string-util.h"
+ #include "udev.h"
+@@ -103,6 +104,52 @@
+ 
+ #define ONBOARD_INDEX_MAX (16*1024-1)
+ 
++/* So here's the deal: net_id is supposed to be an excercise in providing stable names for network devices. However, we
++ * also want to keep updating the naming scheme used in future versions of net_id. These two goals of course are
++ * contradictory: on one hand we want things to not change and on the other hand we want them to improve. Our way out
++ * of this dilemma is to introduce the "naming scheme" concept: each time we improve the naming logic we define a new
++ * flag for it. Then, we keep a list of schemes, each identified by a name associated with the flags it implements. Via
++ * a kernel command line and environment variable we then allow the user to pick the scheme they want us to follow:
++ * installers could "freeze" the used scheme at the moment of installation this way.
++ *
++ * Developers: each time you tweak the naming logic here, define a new flag below, and condition the tweak with
++ * it. Each time we do a release we'll then add a new scheme entry and include all newly defined flags.
++ *
++ * Note that this is only half a solution to the problem though: not only udev/net_id gets updated all the time, the
++ * kernel gets too. And thus a kernel that previously didn't expose some sysfs attribute we look for might eventually
++ * do, and thus affect our naming scheme too. Thus, enforcing a naming scheme will make interfacing more stable across
++ * OS versions, but not fully stabilize them. */
++typedef enum NamingSchemeFlags {
++        /* First, the individual features */
++        NAMING_SR_IOV_V        = 1 << 0, /* Use "v" suffix for SR-IOV, see 609948c7043a40008b8299529c978ed8e11de8f6*/
++        NAMING_NPAR_ARI        = 1 << 1, /* Use NPAR "ARI", see 6bc04997b6eab35d1cb9fa73889892702c27be09 */
++
++        /* And now the masks that combine the features above */
++        NAMING_V238 = 0,
++        NAMING_V239 = NAMING_V238|NAMING_SR_IOV_V|NAMING_NPAR_ARI,
++        NAMING_RHEL_8_0 = NAMING_V239,
++        NAMING_RHEL_8_1 = NAMING_V239,
++        NAMING_RHEL_8_2 = NAMING_V239,
++        NAMING_RHEL_8_3 = NAMING_V239,
++
++        _NAMING_SCHEME_FLAGS_INVALID = -1,
++} NamingSchemeFlags;
++
++typedef struct NamingScheme {
++        const char *name;
++        NamingSchemeFlags flags;
++} NamingScheme;
++
++static const NamingScheme naming_schemes[] = {
++        { "v238", NAMING_V238 },
++        { "v239", NAMING_V239 },
++        { "rhel-8.0", NAMING_RHEL_8_0 },
++        { "rhel-8.1", NAMING_RHEL_8_1 },
++        { "rhel-8.2", NAMING_RHEL_8_2 },
++        { "rhel-8.3", NAMING_RHEL_8_3 },
++        /* … add more schemes here, as the logic to name devices is updated … */
++};
++
+ enum netname_type{
+         NET_UNDEF,
+         NET_PCI,
+@@ -138,6 +185,56 @@ struct virtfn_info {
+         char suffix[IFNAMSIZ];
+ };
+ 
++static const NamingScheme* naming_scheme(void) {
++        static const NamingScheme *cache = NULL;
++        _cleanup_free_ char *buffer = NULL;
++        const char *e, *k;
++
++        if (cache)
++                return cache;
++
++        /* Acquire setting from the kernel command line */
++        (void) proc_cmdline_get_key("net.naming-scheme", 0, &buffer);
++
++        /* Also acquire it from an env var */
++        e = getenv("NET_NAMING_SCHEME");
++        if (e) {
++                if (*e == ':') {
++                        /* If prefixed with ':' the kernel cmdline takes precedence */
++                        k = buffer ?: e + 1;
++                } else
++                        k = e; /* Otherwise the env var takes precedence */
++        } else
++                k = buffer;
++
++        if (k) {
++                size_t i;
++
++                for (i = 0; i < ELEMENTSOF(naming_schemes); i++)
++                        if (streq(naming_schemes[i].name, k)) {
++                                cache = naming_schemes + i;
++                                break;
++                        }
++
++                if (!cache)
++                        log_warning("Unknown interface naming scheme '%s' requested, ignoring.", k);
++        }
++
++        if (cache)
++                log_info("Using interface naming scheme '%s'.", cache->name);
++        else {
++                /* RHEL-only: here we differ from the upstream and if no naming scheme was selected we default to naming from systemd-239 */
++                cache = &naming_schemes[2];
++                log_info("Using default interface naming scheme '%s'.", cache->name);
++        }
++
++        return cache;
++}
++
++static bool naming_scheme_has(NamingSchemeFlags flags) {
++        return FLAGS_SET(naming_scheme()->flags, flags);
++}
++
+ /* skip intermediate virtio devices */
+ static struct udev_device *skip_virtio(struct udev_device *dev) {
+         struct udev_device *parent = dev;
+@@ -299,7 +396,9 @@ static int dev_pci_slot(struct udev_device *dev, struct netnames *names) {
+ 
+         if (sscanf(udev_device_get_sysname(names->pcidev), "%x:%x:%x.%u", &domain, &bus, &slot, &func) != 4)
+                 return -ENOENT;
+-        if (is_pci_ari_enabled(names->pcidev))
++
++        if (naming_scheme_has(NAMING_NPAR_ARI) &&
++            is_pci_ari_enabled(names->pcidev))
+                 /* ARI devices support up to 256 functions on a single device ("slot"), and interpret the
+                  * traditional 5-bit slot and 3-bit function number as a single 8-bit function number,
+                  * where the slot makes up the upper 5 bits. */
+@@ -494,7 +593,8 @@ static int names_pci(struct udev_device *dev, struct netnames *names) {
+                         return -ENOENT;
+         }
+ 
+-        if (get_virtfn_info(dev, names, &vf_info) >= 0) {
++        if (naming_scheme_has(NAMING_SR_IOV_V) &&
++            get_virtfn_info(dev, names, &vf_info) >= 0) {
+                 /* If this is an SR-IOV virtual device, get base name using physical device and add virtfn suffix. */
+                 vf_names.pcidev = vf_info.physfn_pcidev;
+                 dev_pci_onboard(dev, &vf_names);
+@@ -741,6 +841,8 @@ static int builtin_net_id(struct udev_device *dev, int argc, char *argv[], bool
+                         prefix = "ww";
+         }
+ 
++        udev_builtin_add_property(dev, test, "ID_NET_NAMING_SCHEME", naming_scheme()->name);
++
+         err = names_mac(dev, &names);
+         if (err >= 0 && names.mac_valid) {
+                 char str[IFNAMSIZ];

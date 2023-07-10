@@ -1,0 +1,34 @@
+From 4fb6b699b3d69341093830e92838336c0dbd7ea9 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 19 Feb 2019 09:21:42 +0900
+Subject: [PATCH] test-udev: use proper semantics for too long line with
+ continuation
+
+Follow-up for 1e797cf596df50a6bdd8cbf8e9b2467a3a934171.
+
+(cherry picked from commit e37a5d90b0c624b95f8d0c3400288fec60417ec4)
+
+Related: #1642728
+---
+ test/udev-test.pl | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 3a50694fa9..58b5dc85e1 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -39,10 +39,11 @@ for (my $i = 1; $i <= 10000; ++$i) {
+         $rules_10k_tags .= 'KERNEL=="sda", TAG+="test' . $i . "\"\n";
+ }
+ 
+-my $rules_10k_tags_continuation = "";
+-for (my $i = 1; $i <= 10000; ++$i) {
+-        $rules_10k_tags_continuation .= 'KERNEL=="sda", TAG+="test' . $i . "\"\\\n";
++my $rules_10k_tags_continuation = "KERNEL==\"sda\", \\\n";
++for (my $i = 1; $i < 10000; ++$i) {
++        $rules_10k_tags_continuation .= 'TAG+="test' . $i . "\",\\\n";
+ }
++$rules_10k_tags_continuation .= "TAG+=\"test10000\"\\n";
+ 
+ my @tests = (
+         {

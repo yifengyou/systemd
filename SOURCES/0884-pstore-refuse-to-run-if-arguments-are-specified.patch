@@ -1,0 +1,29 @@
+From a35a90322f8587f650aeb72bfbe1ebcc93e503aa Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Mon, 22 Jul 2019 10:43:19 +0200
+Subject: [PATCH] pstore: refuse to run if arguments are specified
+
+(This is why the --help chech passed.)
+
+(cherry picked from commit 22d6bea8820612e6a1483d8b6cfd820f1417ae6b)
+
+Related: #2158832
+---
+ src/pstore/pstore.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/pstore/pstore.c b/src/pstore/pstore.c
+index cafb1804c6..b0b21dedd4 100644
+--- a/src/pstore/pstore.c
++++ b/src/pstore/pstore.c
+@@ -358,6 +358,10 @@ static int run(int argc, char *argv[]) {
+ 
+         log_open();
+ 
++        if (argc > 1)
++                return log_error_errno(-EINVAL,
++                                       "This program takes no arguments.");
++
+         /* Ignore all parse errors */
+         (void) parse_config();
+ 

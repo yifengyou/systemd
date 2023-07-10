@@ -1,0 +1,37 @@
+From e320f72150829228f10ec24f3fba34d5377c5120 Mon Sep 17 00:00:00 2001
+From: Bertrand Jacquin <bertrand@jacquin.bzh>
+Date: Sun, 11 Oct 2020 22:25:56 +0100
+Subject: [PATCH] machine-id-setup: generate machine-id from DMI product ID on
+ Amazon EC2
+
+Amazon EC2 Nitro hypervisor is technically based on KVM[1].
+
+[1] https://aws.amazon.com/ec2/faqs/
+
+(cherry picked from commit 382a46d129899ca9027b07c325102cab173dd563)
+
+Related: #2117948
+---
+ src/core/machine-id-setup.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/core/machine-id-setup.c b/src/core/machine-id-setup.c
+index 11528f83c4..fe2abc4e68 100644
+--- a/src/core/machine-id-setup.c
++++ b/src/core/machine-id-setup.c
+@@ -57,11 +57,11 @@ static int generate_machine_id(const char *root, sd_id128_t *ret) {
+                                 return 0;
+                         }
+ 
+-                } else if (detect_vm() == VIRTUALIZATION_KVM) {
++                } else if (IN_SET(detect_vm(), VIRTUALIZATION_KVM, VIRTUALIZATION_AMAZON, VIRTUALIZATION_QEMU)) {
+ 
+-                        /* If we are not running in a container, see if we are
+-                         * running in qemu/kvm and a machine ID was passed in
+-                         * via -uuid on the qemu/kvm command line */
++                        /* If we are not running in a container, see if we are running in a VM that provides
++                         * a system UUID via the SMBIOS/DMI interfaces.  Such environments include QEMU/KVM
++                         * with the -uuid on the qemu command line or the Amazon EC2 Nitro hypervisor. */
+ 
+                         if (id128_read("/sys/class/dmi/id/product_uuid", ID128_UUID, ret) >= 0) {
+                                 log_info("Initializing machine ID from KVM UUID.");

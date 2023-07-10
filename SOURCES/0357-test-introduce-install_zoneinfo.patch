@@ -1,0 +1,32 @@
+From 73781e52f331f816924232f96c7bfc92ee763e70 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Wed, 12 Sep 2018 18:20:31 +0900
+Subject: [PATCH] test: introduce install_zoneinfo()
+
+But it is not called by default.
+
+(cherry picked from commit 7d10ec1cda8fed20c36b16d2387f529583645cda)
+
+Resolves: #1823767
+---
+ test/test-functions | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/test/test-functions b/test/test-functions
+index f7ca3ad975..4d76ed1f82 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -628,6 +628,13 @@ install_keymaps() {
+     done
+ }
+ 
++install_zoneinfo() {
++    for i in /usr/share/zoneinfo/{,*/,*/*/}*; do
++        [[ -f $i ]] || continue
++        inst $i
++    done
++}
++
+ install_fonts() {
+     for i in \
+         /usr/lib/kbd/consolefonts/eurlatgr* \

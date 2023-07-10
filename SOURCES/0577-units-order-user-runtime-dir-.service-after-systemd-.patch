@@ -1,0 +1,30 @@
+From 1fa9a6bf51a1a1d0fa2ccc23283739d16e9179b4 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 3 Aug 2018 10:42:09 +0200
+Subject: [PATCH] units: order user-runtime-dir@.service after
+ systemd-user-sessions.service
+
+We use systemd-user-sessions.service as barrier when to allow login
+sessions. With this patch user@.service is ordered after that too, so
+that any login related code (which user-runtime-dir@.service is) is
+guaranteed to run after the barrier, and never before.
+
+(cherry picked from commit eb748aef4fbfd03b64938aa471bb8ceda1bc89a8)
+
+Related: #1946453
+---
+ units/user-runtime-dir@.service.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/units/user-runtime-dir@.service.in b/units/user-runtime-dir@.service.in
+index 13b3ed52f8..31354c9bf2 100644
+--- a/units/user-runtime-dir@.service.in
++++ b/units/user-runtime-dir@.service.in
+@@ -9,6 +9,7 @@
+ 
+ [Unit]
+ Description=/run/user/%i mount wrapper
++After=systemd-user-sessions.service
+ StopWhenUnneeded=yes
+ 
+ [Service]

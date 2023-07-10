@@ -1,0 +1,53 @@
+From 3d08c7971a80370f60dd14b068779851e0f82c24 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 30 Apr 2020 18:32:55 +0200
+Subject: [PATCH] test: add test case for locale_is_installed()
+
+(cherry picked from commit b45b0a69bb7ef3e6e66d443eae366b6d1c387cab)
+
+Related: #1755287
+---
+ src/test/test-locale-util.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/src/test/test-locale-util.c b/src/test/test-locale-util.c
+index 0c3f6a62ed..0d50c33ce5 100644
+--- a/src/test/test-locale-util.c
++++ b/src/test/test-locale-util.c
+@@ -34,6 +34,28 @@ static void test_locale_is_valid(void) {
+         assert_se(!locale_is_valid("\x01gar\x02 bage\x03"));
+ }
+ 
++static void test_locale_is_installed(void) {
++        log_info("/* %s */", __func__);
++
++        /* Always available */
++        assert_se(locale_is_installed("POSIX") > 0);
++        assert_se(locale_is_installed("C") > 0);
++
++        /* Might, or might not be installed. */
++        assert_se(locale_is_installed("en_EN.utf8") >= 0);
++        assert_se(locale_is_installed("fr_FR.utf8") >= 0);
++        assert_se(locale_is_installed("fr_FR@euro") >= 0);
++        assert_se(locale_is_installed("fi_FI") >= 0);
++
++        /* Definitely not valid */
++        assert_se(locale_is_installed("") == 0);
++        assert_se(locale_is_installed("/usr/bin/foo") == 0);
++        assert_se(locale_is_installed("\x01gar\x02 bage\x03") == 0);
++
++        /* Definitely not installed */
++        assert_se(locale_is_installed("zz_ZZ") == 0);
++}
++
+ static void test_keymaps(void) {
+         _cleanup_strv_free_ char **kmaps = NULL;
+         char **p;
+@@ -95,6 +117,7 @@ static void dump_special_glyphs(void) {
+ int main(int argc, char *argv[]) {
+         test_get_locales();
+         test_locale_is_valid();
++        test_locale_is_installed();
+         test_keymaps();
+ 
+         dump_special_glyphs();

@@ -1,0 +1,31 @@
+From 5bb3dd9c96b55a4a9da23ed96b5a2681d82dc500 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Wed, 26 Apr 2023 20:07:10 +0200
+Subject: [PATCH] pstore: fix crash and forward dummy arguments instead of NULL
+
+[msekleta: in our version of systemd "const char path*" argument of
+path_join() can't be NULL. Here we don't really want any subdirs paths
+passed into move_file(), but we can't just pass NULL pointers because
+they will be forwarded to path_join(). Hence, let's just pass "/"
+instead.]
+
+rhel-only
+
+Related: #2190153
+---
+ src/pstore/pstore.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/pstore/pstore.c b/src/pstore/pstore.c
+index 9f61e8f7f8..5335c9f92d 100644
+--- a/src/pstore/pstore.c
++++ b/src/pstore/pstore.c
+@@ -366,7 +366,7 @@ static int run(int argc, char *argv[]) {
+ 
+         /* Move left over files out of pstore */
+         for (size_t n = 0; n < list.n_entries; n++)
+-                (void) move_file(&list.entries[n], NULL, NULL);
++                (void) move_file(&list.entries[n], "/", "/");
+ 
+         return 0;
+ }

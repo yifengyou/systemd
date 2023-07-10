@@ -1,0 +1,58 @@
+From f0d9e0cb24958bc11c8d83f0a3de651def2aa1d6 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 30 Apr 2020 18:30:56 +0200
+Subject: [PATCH] locale-util: add new helper locale_is_installed()
+
+This new helper checks whether the specified locale is installed. It's
+distinct from locale_is_valid() which just superficially checks if a
+string looks like something that could be a valid locale.
+
+Heavily inspired by @jsynacek's #13964.
+
+Replaces: #13964
+(cherry picked from commit 23fa786ca67ed3a32930ff1a7b175ac823db187c)
+
+Related: #1755287
+---
+ src/basic/locale-util.c | 15 +++++++++++++++
+ src/basic/locale-util.h |  1 +
+ 2 files changed, 16 insertions(+)
+
+diff --git a/src/basic/locale-util.c b/src/basic/locale-util.c
+index 7cd143ea6f..42ef309ebd 100644
+--- a/src/basic/locale-util.c
++++ b/src/basic/locale-util.c
+@@ -204,6 +204,21 @@ bool locale_is_valid(const char *name) {
+         return true;
+ }
+ 
++int locale_is_installed(const char *name) {
++        if (!locale_is_valid(name))
++                return false;
++
++        if (STR_IN_SET(name, "C", "POSIX")) /* These ones are always OK */
++                return true;
++
++        _cleanup_(freelocalep) locale_t loc =
++                newlocale(LC_ALL_MASK, name, 0);
++        if (loc == (locale_t) 0)
++                return errno == ENOMEM ? -ENOMEM : false;
++
++        return true;
++}
++
+ void init_gettext(void) {
+         setlocale(LC_ALL, "");
+         textdomain(GETTEXT_PACKAGE);
+diff --git a/src/basic/locale-util.h b/src/basic/locale-util.h
+index 368675f286..b40f9c641a 100644
+--- a/src/basic/locale-util.h
++++ b/src/basic/locale-util.h
+@@ -31,6 +31,7 @@ typedef enum LocaleVariable {
+ 
+ int get_locales(char ***l);
+ bool locale_is_valid(const char *name);
++int locale_is_installed(const char *name);
+ 
+ #define _(String) gettext(String)
+ #define N_(String) String

@@ -1,0 +1,157 @@
+From f3c6abebbe4718085fcf17ed3ab0690e379fbb7e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 19 Aug 2020 17:43:23 +0200
+Subject: [PATCH] shared: add @known syscall list
+
+(cherry picked from commit 95aac01259db689dac7d8e5bfafb60e8c70cd734)
+
+Related: #2040247
+---
+ man/systemd.exec.xml                |  4 ++++
+ src/shared/generate-syscall-list.py |  5 +++++
+ src/shared/meson.build              | 11 +++++++++++
+ src/shared/seccomp-util.c           |  6 ++++++
+ src/shared/seccomp-util.h           |  3 ++-
+ src/test/test-seccomp.c             | 19 ++++++++++++-------
+ 6 files changed, 40 insertions(+), 8 deletions(-)
+ create mode 100755 src/shared/generate-syscall-list.py
+
+diff --git a/man/systemd.exec.xml b/man/systemd.exec.xml
+index dc88cf9781..b04b4ba552 100644
+--- a/man/systemd.exec.xml
++++ b/man/systemd.exec.xml
+@@ -1556,6 +1556,10 @@ RestrictNamespaces=~cgroup net</programlisting>
+                 <entry>@timer</entry>
+                 <entry>System calls for scheduling operations by time (<citerefentry project='man-pages'><refentrytitle>alarm</refentrytitle><manvolnum>2</manvolnum></citerefentry>, <citerefentry project='man-pages'><refentrytitle>timer_create</refentrytitle><manvolnum>2</manvolnum></citerefentry>, …)</entry>
+               </row>
++              <row>
++                <entry>@known</entry>
++                <entry>All system calls defined by the kernel. This list is defined statically in systemd based on a kernel version that was available when this systmed version was released. It will become progressively more out-of-date as the kernel is updated.</entry>
++              </row>
+             </tbody>
+           </tgroup>
+         </table>
+diff --git a/src/shared/generate-syscall-list.py b/src/shared/generate-syscall-list.py
+new file mode 100755
+index 0000000000..13a6ae9241
+--- /dev/null
++++ b/src/shared/generate-syscall-list.py
+@@ -0,0 +1,5 @@
++#!/usr/bin/env python
++import sys
++
++for line in open(sys.argv[1]):
++    print('"{}\\0"'.format(line.strip()))
+diff --git a/src/shared/meson.build b/src/shared/meson.build
+index c9dd0a3a4e..fed08571d1 100644
+--- a/src/shared/meson.build
++++ b/src/shared/meson.build
+@@ -109,6 +109,16 @@ shared_sources = files('''
+ test_tables_h = files('test-tables.h')
+ shared_sources += [test_tables_h]
+ 
++generate_syscall_list = find_program('generate-syscall-list.py')
++fname = 'syscall-list.h'
++syscall_list_h = custom_target(
++        fname,
++        input : 'syscall-names.text',
++        output : fname,
++        command : [generate_syscall_list,
++                   '@INPUT@'],
++        capture : true)
++
+ if conf.get('HAVE_ACL') == 1
+         shared_sources += files('acl-util.c')
+ endif
+@@ -119,6 +129,7 @@ endif
+ 
+ if conf.get('HAVE_SECCOMP') == 1
+         shared_sources += files('seccomp-util.c')
++        shared_sources += syscall_list_h
+ endif
+ 
+ if conf.get('HAVE_LIBIPTC') == 1
+diff --git a/src/shared/seccomp-util.c b/src/shared/seccomp-util.c
+index c57c409433..c2b2f2da92 100644
+--- a/src/shared/seccomp-util.c
++++ b/src/shared/seccomp-util.c
+@@ -855,6 +855,12 @@ const SyscallFilterSet syscall_filter_sets[_SYSCALL_FILTER_SET_MAX] = {
+                 "timerfd_settime\0"
+                 "times\0"
+         },
++        [SYSCALL_FILTER_SET_KNOWN] = {
++                .name = "@known",
++                .help = "All known syscalls declared in the kernel",
++                .value =
++#include "syscall-list.h"
++        },
+ };
+ 
+ const SyscallFilterSet *syscall_filter_set_find(const char *name) {
+diff --git a/src/shared/seccomp-util.h b/src/shared/seccomp-util.h
+index 602f092255..541ba1e067 100644
+--- a/src/shared/seccomp-util.h
++++ b/src/shared/seccomp-util.h
+@@ -21,7 +21,7 @@ typedef struct SyscallFilterSet {
+ } SyscallFilterSet;
+ 
+ enum {
+-        /* Please leave DEFAULT first, but sort the rest alphabetically */
++        /* Please leave DEFAULT first and KNOWN last, but sort the rest alphabetically */
+         SYSCALL_FILTER_SET_DEFAULT,
+         SYSCALL_FILTER_SET_AIO,
+         SYSCALL_FILTER_SET_BASIC_IO,
+@@ -49,6 +49,7 @@ enum {
+         SYSCALL_FILTER_SET_SYNC,
+         SYSCALL_FILTER_SET_SYSTEM_SERVICE,
+         SYSCALL_FILTER_SET_TIMER,
++        SYSCALL_FILTER_SET_KNOWN,
+         _SYSCALL_FILTER_SET_MAX
+ };
+ 
+diff --git a/src/test/test-seccomp.c b/src/test/test-seccomp.c
+index 6ec04c4c55..286f01b5ce 100644
+--- a/src/test/test-seccomp.c
++++ b/src/test/test-seccomp.c
+@@ -106,8 +106,10 @@ static void test_filter_sets(void) {
+                 if (pid == 0) { /* Child? */
+                         int fd;
+ 
+-                        /* If we look at the default set (or one that includes it), whitelist instead of blacklist */
+-                        if (IN_SET(i, SYSCALL_FILTER_SET_DEFAULT, SYSCALL_FILTER_SET_SYSTEM_SERVICE))
++                        /* If we look at the default set (or one that includes it), allow-list instead of deny-list */
++                        if (IN_SET(i, SYSCALL_FILTER_SET_DEFAULT,
++                                      SYSCALL_FILTER_SET_SYSTEM_SERVICE,
++                                      SYSCALL_FILTER_SET_KNOWN))
+                                 r = seccomp_load_syscall_filter_set(SCMP_ACT_ERRNO(EUCLEAN), syscall_filter_sets + i, SCMP_ACT_ALLOW, true);
+                         else
+                                 r = seccomp_load_syscall_filter_set(SCMP_ACT_ALLOW, syscall_filter_sets + i, SCMP_ACT_ERRNO(EUCLEAN), true);
+@@ -639,20 +641,23 @@ static void test_lock_personality(void) {
+ }
+ 
+ static void test_filter_sets_ordered(void) {
+-        size_t i;
+-
+         /* Ensure "@default" always remains at the beginning of the list */
+         assert_se(SYSCALL_FILTER_SET_DEFAULT == 0);
+         assert_se(streq(syscall_filter_sets[0].name, "@default"));
+ 
+-        for (i = 0; i < _SYSCALL_FILTER_SET_MAX; i++) {
++        /* Ensure "@known" always remains at the end of the list */
++        assert_se(SYSCALL_FILTER_SET_KNOWN == _SYSCALL_FILTER_SET_MAX - 1);
++        assert_se(streq(syscall_filter_sets[SYSCALL_FILTER_SET_KNOWN].name, "@known"));
++
++        for (size_t i = 0; i < _SYSCALL_FILTER_SET_MAX; i++) {
+                 const char *k, *p = NULL;
+ 
+                 /* Make sure each group has a description */
+                 assert_se(!isempty(syscall_filter_sets[0].help));
+ 
+-                /* Make sure the groups are ordered alphabetically, except for the first entry */
+-                assert_se(i < 2 || strcmp(syscall_filter_sets[i-1].name, syscall_filter_sets[i].name) < 0);
++                /* Make sure the groups are ordered alphabetically, except for the first and last entries */
++                assert_se(i < 2 || i == _SYSCALL_FILTER_SET_MAX - 1 ||
++                          strcmp(syscall_filter_sets[i-1].name, syscall_filter_sets[i].name) < 0);
+ 
+                 NULSTR_FOREACH(k, syscall_filter_sets[i].value) {
+ 

@@ -1,0 +1,164 @@
+From c0aa64901aa4d5d7c917fccf0993819fb1a1262f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 16:34:45 +0200
+Subject: [PATCH] units: allow and use SuccessAction=exit-force in system
+ systemd-exit.service
+
+C.f. 287419c119ef961db487a281162ab037eba70c61: 'systemctl exit 42' can be
+used to set an exit value and pulls in exit.target, which pulls in systemd-exit.service,
+which calls org.fdo.Manager.Exit, which calls method_exit(), which sets the objective
+to MANAGER_EXIT. Allow the same to happen through SuccessAction=exit.
+
+v2: update for 'exit' and 'exit-force'
+(cherry picked from commit a400bd8c2a6285576edf8e2147e1d17aab129501)
+
+Related: #1860899
+---
+ man/systemd.unit.xml                          |  7 +++--
+ src/core/emergency-action.c                   | 27 +++++++++++--------
+ src/test/test-emergency-action.c              |  6 ++---
+ units/meson.build                             |  2 +-
+ ...d-exit.service.in => systemd-exit.service} |  5 +---
+ 5 files changed, 24 insertions(+), 23 deletions(-)
+ rename units/{systemd-exit.service.in => systemd-exit.service} (88%)
+
+diff --git a/man/systemd.unit.xml b/man/systemd.unit.xml
+index 5772a6684e..e80c760dd6 100644
+--- a/man/systemd.unit.xml
++++ b/man/systemd.unit.xml
+@@ -881,9 +881,8 @@
+         Takes one of <option>none</option>, <option>reboot</option>, <option>reboot-force</option>,
+         <option>reboot-immediate</option>, <option>poweroff</option>, <option>poweroff-force</option>,
+         <option>poweroff-immediate</option>, <option>exit</option>, and <option>exit-force</option>. In system mode,
+-        all options except <option>exit</option> and <option>exit-force</option> are allowed. In user mode, only
+-        <option>none</option>, <option>exit</option>, and <option>exit-force</option> are allowed. Both options default
+-        to <option>none</option>.</para>
++        all options are allowed. In user mode, only <option>none</option>, <option>exit</option>, and
++        <option>exit-force</option> are allowed. Both options default to <option>none</option>.</para>
+ 
+         <para>If <option>none</option> is set, no action will be triggered. <option>reboot</option> causes a reboot
+         following the normal shutdown procedure (i.e. equivalent to <command>systemctl reboot</command>).
+@@ -893,7 +892,7 @@
+         <citerefentry><refentrytitle>reboot</refentrytitle><manvolnum>2</manvolnum></citerefentry> system call, which
+         might result in data loss. Similarly, <option>poweroff</option>, <option>poweroff-force</option>,
+         <option>poweroff-immediate</option> have the effect of powering down the system with similar
+-        semantics. <option>exit</option> causes the user manager to exit following the normal shutdown procedure, and
++        semantics. <option>exit</option> causes the manager to exit following the normal shutdown procedure, and
+         <option>exit-force</option> causes it terminate without shutting down services.</para></listitem>
+       </varlistentry>
+ 
+diff --git a/src/core/emergency-action.c b/src/core/emergency-action.c
+index e9e757dfa3..44b92ae6f8 100644
+--- a/src/core/emergency-action.c
++++ b/src/core/emergency-action.c
+@@ -13,6 +13,7 @@
+ #include "special.h"
+ #include "string-table.h"
+ #include "terminal-util.h"
++#include "virt.h"
+ 
+ static void log_and_status(Manager *m, const char *message, const char *reason) {
+         log_warning("%s: %s", message, reason);
+@@ -73,12 +74,14 @@ int emergency_action(
+                 break;
+ 
+         case EMERGENCY_ACTION_EXIT:
+-                assert(MANAGER_IS_USER(m));
+-
+-                log_and_status(m, "Exiting", reason);
++                if (MANAGER_IS_USER(m) || detect_container() > 0) {
++                        log_and_status(m, "Exiting", reason);
++                        (void) manager_add_job_by_name_and_warn(m, JOB_START, SPECIAL_EXIT_TARGET, JOB_REPLACE_IRREVERSIBLY, NULL, NULL);
++                        break;
++                }
+ 
+-                (void) manager_add_job_by_name_and_warn(m, JOB_START, SPECIAL_EXIT_TARGET, JOB_REPLACE_IRREVERSIBLY, NULL, NULL);
+-                break;
++                log_notice("Doing \"poweroff\" action instead of an \"exit\" emergency action.");
++                _fallthrough_;
+ 
+         case EMERGENCY_ACTION_POWEROFF:
+                 log_and_status(m, "Powering off", reason);
+@@ -86,11 +89,14 @@ int emergency_action(
+                 break;
+ 
+         case EMERGENCY_ACTION_EXIT_FORCE:
+-                assert(MANAGER_IS_USER(m));
++                if (MANAGER_IS_USER(m) || detect_container() > 0) {
++                        log_and_status(m, "Exiting immediately", reason);
++                        m->exit_code = MANAGER_EXIT;
++                        break;
++                }
+ 
+-                log_and_status(m, "Exiting immediately", reason);
+-                m->exit_code = MANAGER_EXIT;
+-                break;
++                log_notice("Doing \"poweroff-force\" action instead of an \"exit-force\" emergency action.");
++                _fallthrough_;
+ 
+         case EMERGENCY_ACTION_POWEROFF_FORCE:
+                 log_and_status(m, "Forcibly powering off", reason);
+@@ -137,8 +143,7 @@ int parse_emergency_action(
+         if (x < 0)
+                 return -EINVAL;
+ 
+-        if ((system && x >= _EMERGENCY_ACTION_FIRST_USER_ACTION) ||
+-            (!system && x != EMERGENCY_ACTION_NONE && x < _EMERGENCY_ACTION_FIRST_USER_ACTION))
++        if (!system && x != EMERGENCY_ACTION_NONE && x < _EMERGENCY_ACTION_FIRST_USER_ACTION)
+                 return -EOPNOTSUPP;
+ 
+         *ret = x;
+diff --git a/src/test/test-emergency-action.c b/src/test/test-emergency-action.c
+index 493b23227e..8ce28ed9f5 100644
+--- a/src/test/test-emergency-action.c
++++ b/src/test/test-emergency-action.c
+@@ -36,10 +36,10 @@ static void test_parse_emergency_action(void) {
+         assert_se(parse_emergency_action("poweroff-force", true, &x) == 0);
+         assert_se(x == EMERGENCY_ACTION_POWEROFF_FORCE);
+         assert_se(parse_emergency_action("poweroff-immediate", true, &x) == 0);
+-        assert_se(parse_emergency_action("exit", true, &x) == -EOPNOTSUPP);
+-        assert_se(parse_emergency_action("exit-force", true, &x) == -EOPNOTSUPP);
++        assert_se(parse_emergency_action("exit", true, &x) == 0);
++        assert_se(parse_emergency_action("exit-force", true, &x) == 0);
+         assert_se(parse_emergency_action("exit-forcee", true, &x) == -EINVAL);
+-        assert_se(x == EMERGENCY_ACTION_POWEROFF_IMMEDIATE);
++        assert_se(x == EMERGENCY_ACTION_EXIT_FORCE);
+ }
+ 
+ int main(int argc, char **argv) {
+diff --git a/units/meson.build b/units/meson.build
+index 6fa804148b..a74fa95195 100644
+--- a/units/meson.build
++++ b/units/meson.build
+@@ -86,6 +86,7 @@ units = [
+          'multi-user.target.wants/'],
+         ['systemd-coredump.socket',             'ENABLE_COREDUMP',
+          'sockets.target.wants/'],
++        ['systemd-exit.service',                 ''],
+         ['systemd-initctl.socket',              '',
+          'sockets.target.wants/'],
+         ['systemd-journal-gatewayd.socket',     'ENABLE_REMOTE HAVE_MICROHTTPD'],
+@@ -135,7 +136,6 @@ in_units = [
+         ['systemd-binfmt.service',               'ENABLE_BINFMT',
+          'sysinit.target.wants/'],
+         ['systemd-coredump@.service',            'ENABLE_COREDUMP'],
+-        ['systemd-exit.service',                 ''],
+         ['systemd-firstboot.service',            'ENABLE_FIRSTBOOT',
+          'sysinit.target.wants/'],
+         ['systemd-fsck-root.service',            ''],
+diff --git a/units/systemd-exit.service.in b/units/systemd-exit.service
+similarity index 88%
+rename from units/systemd-exit.service.in
+rename to units/systemd-exit.service
+index 2fb6ebd767..6029b13a05 100644
+--- a/units/systemd-exit.service.in
++++ b/units/systemd-exit.service
+@@ -13,7 +13,4 @@ Documentation=man:systemd.special(7)
+ DefaultDependencies=no
+ Requires=shutdown.target
+ After=shutdown.target
+-
+-[Service]
+-Type=oneshot
+-ExecStart=@SYSTEMCTL@ --force exit
++SuccessAction=exit

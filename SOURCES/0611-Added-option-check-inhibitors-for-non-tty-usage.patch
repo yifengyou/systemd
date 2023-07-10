@@ -1,0 +1,222 @@
+From f875436b93c6c5e83f46ab32429c977db4f0b10c Mon Sep 17 00:00:00 2001
+From: Felix Stupp <felix.stupp@outlook.com>
+Date: Thu, 29 Oct 2020 12:48:48 +0100
+Subject: [PATCH] Added option --check-inhibitors for non-tty usage
+
+As described in #2680, systemctl did ignore inhibitors if it is not
+attached to a tty to allow scripts to ignore inhibitors automatically.
+This pull request preserves this behavior but allows scripts to
+explicit check inhibitors if required.
+
+The new parameter '--check-inhibitors=yes' enables this feature.
+The old parameter '-i'/'--ignore-inhibitors' was deprecated in favor
+of '--check-inhibitors=no', the default behaviour can be specified
+with '--check-inhibitors=auto'.
+The new parameter is also described in the documentations and shell
+completions found here.
+
+(cherry picked from commit b8ebe378b49a31549b8531d4b3177095ef385d55)
+
+Related: #1269726
+---
+ man/systemctl.xml                  | 38 ++++++++++++++++++++----------
+ shell-completion/bash/systemctl.in |  7 ++++--
+ shell-completion/zsh/_systemctl.in |  9 ++++++-
+ src/systemctl/systemctl.c          | 37 +++++++++++++++++++++--------
+ 4 files changed, 65 insertions(+), 26 deletions(-)
+
+diff --git a/man/systemctl.xml b/man/systemctl.xml
+index ed60a0739f..9f0f4d46ea 100644
+--- a/man/systemctl.xml
++++ b/man/systemctl.xml
+@@ -323,23 +323,35 @@
+         </listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><option>--check-inhibitors=</option></term>
++
++        <listitem>
++          <para>When system shutdown or sleep state is request, this option controls how to deal with
++          inhibitor locks. It takes one of <literal>auto</literal>, <literal>yes</literal> or
++          <literal>no</literal>. Defaults to <literal>auto</literal>, which will behave like
++          <literal>yes</literal> for interactive invocations (i.e. from a TTY) and <literal>no</literal>
++          for non-interactive invocations.
++          <literal>yes</literal> will let the request respect inhibitor locks.
++          <literal>no</literal> will let the request ignore inhibitor locks.
++          </para>
++          <para>Applications can establish inhibitor locks to avoid that certain important operations
++          (such as CD burning or suchlike) are interrupted by system shutdown or a sleep state. Any user may
++          take these locks and privileged users may override these locks.
++          If any locks are taken, shutdown and sleep state requests will normally fail (unless privileged)
++          and a list of active locks is printed.
++          However, if <literal>no</literal> is specified or <literal>auto</literal> is specified on a
++          non-interactive requests, the established locks are ignored and not shown, and the operation
++          attempted anyway, possibly requiring additional privileges.
++          May be overriden by <option>--force</option>.</para>
++        </listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><option>-i</option></term>
+-        <term><option>--ignore-inhibitors</option></term>
+ 
+         <listitem>
+-          <para>When system shutdown or a sleep state is requested,
+-          ignore inhibitor locks. Applications can establish inhibitor
+-          locks to avoid that certain important operations (such as CD
+-          burning or suchlike) are interrupted by system shutdown or a
+-          sleep state. Any user may take these locks and privileged
+-          users may override these locks. If any locks are taken,
+-          shutdown and sleep state requests will normally fail
+-          (regardless of whether privileged or not) and a list of active locks
+-          is printed. However, if <option>--ignore-inhibitors</option>
+-          is specified, the locks are ignored and not printed, and the
+-          operation attempted anyway, possibly requiring additional
+-          privileges.</para>
++          <para>Shortcut for <option>--check-inhibitors=no</option>.</para>
+         </listitem>
+       </varlistentry>
+ 
+diff --git a/shell-completion/bash/systemctl.in b/shell-completion/bash/systemctl.in
+index ba51ae0d34..0c7afea57d 100644
+--- a/shell-completion/bash/systemctl.in
++++ b/shell-completion/bash/systemctl.in
+@@ -111,9 +111,9 @@ _systemctl () {
+                [STANDALONE]='--all -a --reverse --after --before --defaults --force -f --full -l --global
+                              --help -h --no-ask-password --no-block --no-legend --no-pager --no-reload --no-wall --now
+                              --quiet -q --system --user --version --runtime --recursive -r --firmware-setup
+-                             --show-types -i --ignore-inhibitors --plain --failed --value --fail --dry-run --wait'
++                             --show-types --plain --failed --value --fail --dry-run --wait'
+                       [ARG]='--host -H --kill-who --property -p --signal -s --type -t --state --job-mode --root
+-                             --preset-mode -n --lines -o --output -M --machine --message'
++                             --preset-mode -n --lines -o --output -M --machine --message --check-inhibitors'
+         )
+ 
+         if __contains_word "--user" ${COMP_WORDS[*]}; then
+@@ -163,6 +163,9 @@ _systemctl () {
+                         --machine|-M)
+                                 comps=$( __get_machines )
+                         ;;
++                        --check-inhibitors)
++                                comps='auto yes no'
++                        ;;
+                 esac
+                 COMPREPLY=( $(compgen -W '$comps' -- "$cur") )
+                 return 0
+diff --git a/shell-completion/zsh/_systemctl.in b/shell-completion/zsh/_systemctl.in
+index 9f576ed77d..b3c51cc843 100644
+--- a/shell-completion/zsh/_systemctl.in
++++ b/shell-completion/zsh/_systemctl.in
+@@ -363,6 +363,13 @@ _job_modes() {
+     _values -s , "${_modes[@]}"
+ }
+ 
++(( $+functions[_systemctl_check_inhibitors] )) ||
++    _systemctl_check_inhibitors() {
++        local -a _modes
++        _modes=(auto yes no)
++        _values -s , "${_modes[@]}"
++    }
++
+ # Build arguments for "systemctl" to be used in completion.
+ local -a _modes; _modes=("--user" "--system")
+ # Use the last mode (they are exclusive and the last one is used).
+@@ -380,7 +387,7 @@ _arguments -s \
+     '--before[Show units ordered before]' \
+     {-l,--full}"[Don't ellipsize unit names on output]" \
+     '--show-types[When showing sockets, show socket type]' \
+-    {-i,--ignore-inhibitors}'[When executing a job, ignore jobs dependencies]' \
++    '--check-inhibitors[Specify if inhibitors should be checked]:mode:_systemctl_check_inhibitors' \
+     {-q,--quiet}'[Suppress output]' \
+     '--no-block[Do not wait until operation finished]' \
+     '--no-legend[Do not print a legend, i.e. the column headers and the footer with hints]' \
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index 8bec798373..8bcbf6bf4b 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -121,7 +121,7 @@ static bool arg_no_wall = false;
+ static bool arg_no_reload = false;
+ static bool arg_value = false;
+ static bool arg_show_types = false;
+-static bool arg_ignore_inhibitors = false;
++static int arg_check_inhibitors = -1;
+ static bool arg_dry_run = false;
+ static bool arg_quiet = false;
+ static bool arg_full = false;
+@@ -3313,17 +3313,19 @@ static int logind_check_inhibitors(enum action a) {
+         char **s;
+         int r;
+ 
+-        if (arg_ignore_inhibitors || arg_force > 0)
++        if (arg_check_inhibitors == 0 || arg_force > 0)
+                 return 0;
+ 
+         if (arg_when > 0)
+                 return 0;
+ 
+-        if (geteuid() == 0)
+-                return 0;
++        if (arg_check_inhibitors < 0) {
++                if (geteuid() == 0)
++                        return 0;
+ 
+-        if (!on_tty())
+-                return 0;
++                if (!on_tty())
++                        return 0;
++        }
+ 
+         if (arg_transport != BUS_TRANSPORT_LOCAL)
+                 return 0;
+@@ -7237,8 +7239,10 @@ static void systemctl_help(void) {
+                "                      When enqueuing a unit job, show full transaction\n"
+                "     --show-types     When showing sockets, explicitly show their type\n"
+                "     --value          When showing properties, only print the value\n"
+-               "  -i --ignore-inhibitors\n"
+-               "                      When shutting down or sleeping, ignore inhibitors\n"
++               "     --check-inhibitors=MODE\n"
++               "                      Specify if checking inhibitors before shutting down,\n"
++               "                      sleeping or hibernating\n"
++               "  -i                  Shortcut for --check-inhibitors=no\n"
+                "     --kill-who=WHO   Who to send signal to\n"
+                "  -s --signal=SIGNAL  Which signal to send\n"
+                "     --now            Start or stop unit in addition to enabling or disabling it\n"
+@@ -7475,6 +7479,7 @@ static int systemctl_parse_argv(int argc, char *argv[]) {
+                 ARG_REVERSE,
+                 ARG_AFTER,
+                 ARG_BEFORE,
++                ARG_CHECK_INHIBITORS,
+                 ARG_DRY_RUN,
+                 ARG_SHOW_TYPES,
+                 ARG_IRREVERSIBLE,
+@@ -7520,7 +7525,8 @@ static int systemctl_parse_argv(int argc, char *argv[]) {
+                 { "fail",                no_argument,       NULL, ARG_FAIL                }, /* compatibility only */
+                 { "irreversible",        no_argument,       NULL, ARG_IRREVERSIBLE        }, /* compatibility only */
+                 { "ignore-dependencies", no_argument,       NULL, ARG_IGNORE_DEPENDENCIES }, /* compatibility only */
+-                { "ignore-inhibitors",   no_argument,       NULL, 'i'                     },
++                { "ignore-inhibitors",   no_argument,       NULL, 'i'                     }, /* compatibility only */
++                { "check-inhibitors",    required_argument, NULL, ARG_CHECK_INHIBITORS    },
+                 { "value",               no_argument,       NULL, ARG_VALUE               },
+                 { "user",                no_argument,       NULL, ARG_USER                },
+                 { "system",              no_argument,       NULL, ARG_SYSTEM              },
+@@ -7813,7 +7819,18 @@ static int systemctl_parse_argv(int argc, char *argv[]) {
+                         break;
+ 
+                 case 'i':
+-                        arg_ignore_inhibitors = true;
++                        arg_check_inhibitors = 0;
++                        break;
++
++                case ARG_CHECK_INHIBITORS:
++                        if (streq(optarg, "auto"))
++                                arg_check_inhibitors = -1;
++                        else {
++                                r = parse_boolean(optarg);
++                                if (r < 0)
++                                        return log_error_errno(r, "Failed to parse --check-inhibitors= argument: %s", optarg);
++                                arg_check_inhibitors = r;
++                        }
+                         break;
+ 
+                 case ARG_PLAIN:

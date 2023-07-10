@@ -1,0 +1,76 @@
+From 5226df888c28ede9219d7f018af02cca1d1f6d2a Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 11 Sep 2018 14:07:53 +0900
+Subject: [PATCH] test-execute: add tests for $RUNTIME_DIRECTORY= or friends
+
+(cherry picked from commit 6088662d57bbd81167bd272d385fdd1044b287ec)
+
+Related: #2049788
+---
+ .../test-execute/exec-dynamicuser-statedir-migrate-step1.service | 1 +
+ .../test-execute/exec-dynamicuser-statedir-migrate-step2.service | 1 +
+ test/test-execute/exec-dynamicuser-statedir.service              | 1 +
+ test/test-execute/exec-runtimedirectory-mode.service             | 1 +
+ test/test-execute/exec-runtimedirectory.service                  | 1 +
+ 5 files changed, 5 insertions(+)
+
+diff --git a/test/test-execute/exec-dynamicuser-statedir-migrate-step1.service b/test/test-execute/exec-dynamicuser-statedir-migrate-step1.service
+index 72e6d7686f..5efc5483b8 100644
+--- a/test/test-execute/exec-dynamicuser-statedir-migrate-step1.service
++++ b/test/test-execute/exec-dynamicuser-statedir-migrate-step1.service
+@@ -10,6 +10,7 @@ ExecStart=test -d /var/lib/test-dynamicuser-migrate
+ ExecStart=test -d /var/lib/test-dynamicuser-migrate2/hoge
+ ExecStart=touch /var/lib/test-dynamicuser-migrate/yay
+ ExecStart=touch /var/lib/test-dynamicuser-migrate2/hoge/yayyay
++ExecStart=/bin/sh -x -c 'test "$$STATE_DIRECTORY" = "%S/test-dynamicuser-migrate:%S/test-dynamicuser-migrate2/hoge"'
+ 
+ Type=oneshot
+ DynamicUser=no
+diff --git a/test/test-execute/exec-dynamicuser-statedir-migrate-step2.service b/test/test-execute/exec-dynamicuser-statedir-migrate-step2.service
+index edb0be7ef8..c72302ffd5 100644
+--- a/test/test-execute/exec-dynamicuser-statedir-migrate-step2.service
++++ b/test/test-execute/exec-dynamicuser-statedir-migrate-step2.service
+@@ -18,6 +18,7 @@ ExecStart=touch /var/lib/test-dynamicuser-migrate/yay
+ ExecStart=touch /var/lib/test-dynamicuser-migrate2/hoge/yayyay
+ ExecStart=touch /var/lib/private/test-dynamicuser-migrate/yay
+ ExecStart=touch /var/lib/private/test-dynamicuser-migrate2/hoge/yayyay
++ExecStart=/bin/sh -x -c 'test "$$STATE_DIRECTORY" = "%S/test-dynamicuser-migrate:%S/test-dynamicuser-migrate2/hoge"'
+ 
+ Type=oneshot
+ DynamicUser=yes
+diff --git a/test/test-execute/exec-dynamicuser-statedir.service b/test/test-execute/exec-dynamicuser-statedir.service
+index f459f3c1eb..2fb7b8660b 100644
+--- a/test/test-execute/exec-dynamicuser-statedir.service
++++ b/test/test-execute/exec-dynamicuser-statedir.service
+@@ -10,6 +10,7 @@ ExecStart=test -f /var/lib/waldo/yay
+ ExecStart=test -f /var/lib/quux/pief/yayyay
+ ExecStart=test -f /var/lib/private/waldo/yay
+ ExecStart=test -f /var/lib/private/quux/pief/yayyay
++ExecStart=/bin/sh -x -c 'test "$$STATE_DIRECTORY" = "%S/waldo:%S/quux/pief"'
+ 
+ # Make sure that /var/lib/private/waldo is really the only writable directory besides the obvious candidates
+ ExecStart=sh -x -c 'test $$(find / \( -path /var/tmp -o -path /tmp -o -path /proc -o -path /dev/mqueue -o -path /dev/shm -o -path /sys/fs/bpf \) -prune -o -type d -writable -print 2>/dev/null | sort -u | tr -d '\\\\n') = /var/lib/private/quux/pief/var/lib/private/waldo'
+diff --git a/test/test-execute/exec-runtimedirectory-mode.service b/test/test-execute/exec-runtimedirectory-mode.service
+index 480f904155..85ae5161c4 100644
+--- a/test/test-execute/exec-runtimedirectory-mode.service
++++ b/test/test-execute/exec-runtimedirectory-mode.service
+@@ -3,6 +3,7 @@ Description=Test for RuntimeDirectoryMode
+ 
+ [Service]
+ ExecStart=/bin/sh -x -c 'mode=$$(stat -c %%a %t/test-exec_runtimedirectory-mode); test "$$mode" = "750"'
++ExecStart=/bin/sh -x -c 'test "$$RUNTIME_DIRECTORY" = "%t/test-exec_runtimedirectory-mode"'
+ Type=oneshot
+ RuntimeDirectory=test-exec_runtimedirectory-mode
+ RuntimeDirectoryMode=0750
+diff --git a/test/test-execute/exec-runtimedirectory.service b/test/test-execute/exec-runtimedirectory.service
+index 6a4383110f..a33044d23c 100644
+--- a/test/test-execute/exec-runtimedirectory.service
++++ b/test/test-execute/exec-runtimedirectory.service
+@@ -4,6 +4,7 @@ Description=Test for RuntimeDirectory
+ [Service]
+ ExecStart=/bin/sh -x -c 'test -d %t/test-exec_runtimedirectory'
+ ExecStart=/bin/sh -x -c 'test -d %t/test-exec_runtimedirectory2/hogehoge'
++ExecStart=/bin/sh -x -c 'test "$$RUNTIME_DIRECTORY" = "%t/test-exec_runtimedirectory:%t/test-exec_runtimedirectory2/hogehoge"'
+ Type=oneshot
+ RuntimeDirectory=test-exec_runtimedirectory
+ RuntimeDirectory=./test-exec_runtimedirectory2///./hogehoge/.

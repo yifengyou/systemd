@@ -1,0 +1,45 @@
+From fdfff847313222eed3306ac605db46d8cbd23212 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Mon, 29 Nov 2021 13:47:24 +0100
+Subject: [PATCH] test,systemctl: use "const char*" instead of "char*"
+
+as iterator for FOREACH_STRING()
+
+The macro iterates through literal strings (i.e. constant strings),
+hence it's more correct to have the iterator const too.
+
+Based on b2238e380e5f2fbcc129643b3fbd66f2828fd57c.
+
+Related: #2017033
+---
+ src/systemctl/systemctl.c | 3 ++-
+ src/test/test-execute.c   | 2 +-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index 3dd7c1522f..b967550b97 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -7011,7 +7011,8 @@ static int run_editor(char **paths) {
+         if (r == 0) {
+                 const char **args;
+                 char *editor, **editor_args = NULL;
+-                char **tmp_path, **original_path, *p;
++                char **tmp_path, **original_path;
++                const char *p;
+                 size_t n_editor_args = 0, i = 1;
+                 size_t argc;
+ 
+diff --git a/src/test/test-execute.c b/src/test/test-execute.c
+index 5303652b93..7581d5ed68 100644
+--- a/src/test/test-execute.c
++++ b/src/test/test-execute.c
+@@ -146,7 +146,7 @@ invalid:
+ }
+ 
+ static bool is_inaccessible_available(void) {
+-        char *p;
++        const char *p;
+ 
+         FOREACH_STRING(p,
+                 "/run/systemd/inaccessible/reg",

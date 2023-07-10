@@ -1,0 +1,233 @@
+From 24439b08e3a3437b423553c385cde1d4cddf18f6 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Mon, 8 Aug 2022 09:13:50 +0200
+Subject: [PATCH] logind: add option to stop idle sessions after specified
+ timeout
+
+Thanks to Jan Pazdziora <jpazdziora@redhat.com> for providing a patch
+which implemeted a PoC of this feature.
+
+(cherry picked from commit 82325af3ae41bc7efb3d5cd8f56a4652fef498c2)
+
+Resolves: #2122288
+---
+ man/logind.conf.xml          | 11 ++++++
+ src/login/logind-core.c      |  2 +
+ src/login/logind-dbus.c      |  1 +
+ src/login/logind-gperf.gperf |  1 +
+ src/login/logind-session.c   | 72 +++++++++++++++++++++++++++++++++---
+ src/login/logind-session.h   |  2 +
+ src/login/logind.conf.in     |  1 +
+ src/login/logind.h           |  2 +
+ 8 files changed, 86 insertions(+), 6 deletions(-)
+
+diff --git a/man/logind.conf.xml b/man/logind.conf.xml
+index 0cf8a7d1f2..00b5b1f2e8 100644
+--- a/man/logind.conf.xml
++++ b/man/logind.conf.xml
+@@ -333,6 +333,17 @@
+         are excluded from the effect of this setting. Defaults to <literal>no</literal>.</para></listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>StopIdleSessionSec=</varname></term>
++
++        <listitem><para>Specifies a timeout in seconds, or a time span value after which
++        <filename>systemd-logind</filename> checks the idle state of all sessions. Every session that is idle for
++        longer then the timeout will be stopped. Defaults to <literal>infinity</literal>
++        (<filename>systemd-logind</filename> is not checking the idle state of sessions). For details about the syntax
++        of time spans, see
++        <citerefentry><refentrytitle>systemd.time</refentrytitle><manvolnum>7</manvolnum></citerefentry>.
++        </para></listitem>
++      </varlistentry>
+     </variablelist>
+   </refsect1>
+ 
+diff --git a/src/login/logind-core.c b/src/login/logind-core.c
+index a1943b6f9d..abe6eecffb 100644
+--- a/src/login/logind-core.c
++++ b/src/login/logind-core.c
+@@ -58,6 +58,8 @@ void manager_reset_config(Manager *m) {
+ 
+         m->kill_only_users = strv_free(m->kill_only_users);
+         m->kill_exclude_users = strv_free(m->kill_exclude_users);
++
++        m->stop_idle_session_usec = USEC_INFINITY;
+ }
+ 
+ int manager_parse_config_file(Manager *m) {
+diff --git a/src/login/logind-dbus.c b/src/login/logind-dbus.c
+index 01bfef4ff7..81aacb4eed 100644
+--- a/src/login/logind-dbus.c
++++ b/src/login/logind-dbus.c
+@@ -2720,6 +2720,7 @@ const sd_bus_vtable manager_vtable[] = {
+         SD_BUS_PROPERTY("SessionsMax", "t", NULL, offsetof(Manager, sessions_max), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("NCurrentSessions", "t", property_get_hashmap_size, offsetof(Manager, sessions), 0),
+         SD_BUS_PROPERTY("UserTasksMax", "t", property_get_compat_user_tasks_max, 0, SD_BUS_VTABLE_PROPERTY_CONST|SD_BUS_VTABLE_HIDDEN),
++        SD_BUS_PROPERTY("StopIdleSessionUSec", "t", NULL, offsetof(Manager, stop_idle_session_usec), SD_BUS_VTABLE_PROPERTY_CONST),
+ 
+         SD_BUS_METHOD_WITH_NAMES("GetSession",
+                                  "s",
+diff --git a/src/login/logind-gperf.gperf b/src/login/logind-gperf.gperf
+index 8829ce7d85..214ac5c4a3 100644
+--- a/src/login/logind-gperf.gperf
++++ b/src/login/logind-gperf.gperf
+@@ -42,3 +42,4 @@ Login.RemoveIPC,                    config_parse_bool,                  0, offse
+ Login.InhibitorsMax,                config_parse_uint64,                0, offsetof(Manager, inhibitors_max)
+ Login.SessionsMax,                  config_parse_uint64,                0, offsetof(Manager, sessions_max)
+ Login.UserTasksMax,                 config_parse_compat_user_tasks_max, 0, offsetof(Manager, user_tasks_max)
++Login.StopIdleSessionSec,           config_parse_sec_fix_0,             0, offsetof(Manager, stop_idle_session_usec)
+diff --git a/src/login/logind-session.c b/src/login/logind-session.c
+index cc838ca383..56f40fbec4 100644
+--- a/src/login/logind-session.c
++++ b/src/login/logind-session.c
+@@ -29,6 +29,7 @@
+ #include "string-table.h"
+ #include "strv.h"
+ #include "terminal-util.h"
++#include "time-util.h"
+ #include "user-util.h"
+ #include "util.h"
+ 
+@@ -139,6 +140,8 @@ Session* session_free(Session *s) {
+ 
+         free(s->state_file);
+ 
++        sd_event_source_unref(s->stop_on_idle_event_source);
++
+         return mfree(s);
+ }
+ 
+@@ -658,6 +661,55 @@ static int session_start_scope(Session *s, sd_bus_message *properties, sd_bus_er
+         return 0;
+ }
+ 
++static int session_dispatch_stop_on_idle(sd_event_source *source, uint64_t t, void *userdata) {
++        Session *s = userdata;
++        dual_timestamp ts;
++        int r, idle;
++
++        assert(s);
++
++        if (s->stopping)
++                return 0;
++
++        idle = session_get_idle_hint(s, &ts);
++        if (idle) {
++                log_debug("Session \"%s\" of user \"%s\" is idle, stopping.", s->id, s->user->name);
++
++                return session_stop(s, /* force */ true);
++        }
++
++        r = sd_event_source_set_time(source, usec_add(ts.monotonic, s->manager->stop_idle_session_usec));
++        if (r < 0)
++                return log_error_errno(r, "Failed to configure stop on idle session event source: %m");
++
++        r = sd_event_source_set_enabled(source, SD_EVENT_ONESHOT);
++        if (r < 0)
++                return log_error_errno(r, "Failed to enable stop on idle session event source: %m");
++
++        return 1;
++}
++
++static int session_setup_stop_on_idle_timer(Session *s) {
++        int r;
++
++        assert(s);
++
++        if (s->manager->stop_idle_session_usec == USEC_INFINITY)
++                return 0;
++
++        r = sd_event_add_time_relative(
++                        s->manager->event,
++                        &s->stop_on_idle_event_source,
++                        CLOCK_MONOTONIC,
++                        s->manager->stop_idle_session_usec,
++                        0,
++                        session_dispatch_stop_on_idle, s);
++        if (r < 0)
++                return log_error_errno(r, "Failed to add stop on idle session event source: %m");
++
++        return 0;
++}
++
+ int session_start(Session *s, sd_bus_message *properties, sd_bus_error *error) {
+         int r;
+ 
+@@ -680,6 +732,10 @@ int session_start(Session *s, sd_bus_message *properties, sd_bus_error *error) {
+         if (r < 0)
+                 return r;
+ 
++        r = session_setup_stop_on_idle_timer(s);
++        if (r < 0)
++                return r;
++
+         log_struct(s->class == SESSION_BACKGROUND ? LOG_DEBUG : LOG_INFO,
+                    "MESSAGE_ID=" SD_MESSAGE_SESSION_START_STR,
+                    "SESSION_ID=%s", s->id,
+@@ -917,7 +973,7 @@ static int get_process_ctty_atime(pid_t pid, usec_t *atime) {
+ }
+ 
+ int session_get_idle_hint(Session *s, dual_timestamp *t) {
+-        usec_t atime = 0, n;
++        usec_t atime = 0, dtime = 0;
+         int r;
+ 
+         assert(s);
+@@ -961,12 +1017,16 @@ found_atime:
+         if (t)
+                 dual_timestamp_from_realtime(t, atime);
+ 
+-        n = now(CLOCK_REALTIME);
+-
+-        if (s->manager->idle_action_usec <= 0)
+-                return 0;
++        if (s->manager->idle_action_usec > 0 && s->manager->stop_idle_session_usec != USEC_INFINITY)
++                dtime = MIN(s->manager->idle_action_usec, s->manager->stop_idle_session_usec);
++        else if (s->manager->idle_action_usec > 0)
++                dtime = s->manager->idle_action_usec;
++        else if (s->manager->stop_idle_session_usec != USEC_INFINITY)
++                dtime = s->manager->stop_idle_session_usec;
++        else
++                return false;
+ 
+-        return atime + s->manager->idle_action_usec <= n;
++        return usec_add(atime, dtime) <= now(CLOCK_REALTIME);
+ }
+ 
+ void session_set_idle_hint(Session *s, bool b) {
+diff --git a/src/login/logind-session.h b/src/login/logind-session.h
+index 8c7d0301f2..6678441bb9 100644
+--- a/src/login/logind-session.h
++++ b/src/login/logind-session.h
+@@ -112,6 +112,8 @@ struct Session {
+         Hashmap *devices;
+         sd_bus_track *track;
+ 
++        sd_event_source *stop_on_idle_event_source;
++
+         LIST_FIELDS(Session, sessions_by_user);
+         LIST_FIELDS(Session, sessions_by_seat);
+ 
+diff --git a/src/login/logind.conf.in b/src/login/logind.conf.in
+index c7346f9819..a62c2b0b57 100644
+--- a/src/login/logind.conf.in
++++ b/src/login/logind.conf.in
+@@ -35,3 +35,4 @@
+ #RemoveIPC=no
+ #InhibitorsMax=8192
+ #SessionsMax=8192
++#StopIdleSessionSec=infinity
+diff --git a/src/login/logind.h b/src/login/logind.h
+index 7f94dea2f6..606adf4fe6 100644
+--- a/src/login/logind.h
++++ b/src/login/logind.h
+@@ -102,6 +102,8 @@ struct Manager {
+         usec_t idle_action_not_before_usec;
+         HandleAction idle_action;
+ 
++        usec_t stop_idle_session_usec;
++
+         HandleAction handle_power_key;
+         HandleAction handle_suspend_key;
+         HandleAction handle_hibernate_key;

@@ -1,0 +1,41 @@
+From b7f9d757dd6f276203b8b04f0c0ba1c61bcf8937 Mon Sep 17 00:00:00 2001
+From: Jan Synacek <jsynacek@redhat.com>
+Date: Wed, 18 Dec 2019 09:41:29 +0100
+Subject: [PATCH] rules: reintroduce 60-alias-kmsg.rules
+
+Resolves:#1739353
+rhel-only
+---
+ rules/60-alias-kmsg.rules | 10 ++++++++++
+ rules/meson.build         |  1 +
+ 2 files changed, 11 insertions(+)
+ create mode 100644 rules/60-alias-kmsg.rules
+
+diff --git a/rules/60-alias-kmsg.rules b/rules/60-alias-kmsg.rules
+new file mode 100644
+index 0000000000..9c7236a730
+--- /dev/null
++++ b/rules/60-alias-kmsg.rules
+@@ -0,0 +1,10 @@
++SUBSYSTEM!="block", GOTO="log_end"
++KERNEL=="loop*|ram*", GOTO="log_end"
++ACTION=="remove", GOTO="log_end"
++ENV{DM_UDEV_DISABLE_OTHER_RULES_FLAG}=="1", GOTO="log_end"
++ENV{DM_UDEV_DISABLE_DISK_RULES_FLAG}=="1", GOTO="log_end"
++
++IMPORT{cmdline}="udev.alias"
++ENV{udev.alias}=="1", RUN+="/bin/sh -c 'echo udev-alias: $name \($links\) > /dev/kmsg'"
++
++LABEL="log_end"
+diff --git a/rules/meson.build b/rules/meson.build
+index 6363f8bf2e..7b5b2472de 100644
+--- a/rules/meson.build
++++ b/rules/meson.build
+@@ -3,6 +3,7 @@
+ rules = files('''
+         40-redhat.rules
+         40-elevator.rules
++        60-alias-kmsg.rules
+         60-block.rules
+         60-cdrom_id.rules
+         60-drm.rules

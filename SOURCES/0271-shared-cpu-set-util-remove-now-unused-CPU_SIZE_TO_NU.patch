@@ -1,0 +1,29 @@
+From d6935e61de30967aa82b7722f36193ba782b75e4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Sun, 19 May 2019 18:08:39 +0200
+Subject: [PATCH] shared/cpu-set-util: remove now-unused CPU_SIZE_TO_NUM()
+
+(cherry picked from commit b12ef7141648be40fd8c4b0209a742f2151736d9)
+
+Related: #1734787
+---
+ src/basic/cpu-set-util.h | 6 ------
+ 1 file changed, 6 deletions(-)
+
+diff --git a/src/basic/cpu-set-util.h b/src/basic/cpu-set-util.h
+index 3c546beb55..20612a8876 100644
+--- a/src/basic/cpu-set-util.h
++++ b/src/basic/cpu-set-util.h
+@@ -9,12 +9,6 @@
+ 
+ #include "macro.h"
+ 
+-#ifdef __NCPUBITS
+-#define CPU_SIZE_TO_NUM(n) ((n) * __NCPUBITS)
+-#else
+-#define CPU_SIZE_TO_NUM(n) ((n) * sizeof(cpu_set_t) * 8)
+-#endif
+-
+ DEFINE_TRIVIAL_CLEANUP_FUNC(cpu_set_t*, CPU_FREE);
+ #define _cleanup_cpu_free_ _cleanup_(CPU_FREEp)
+ 

@@ -1,0 +1,35 @@
+From b0574acc0bddceb0af47f6cce327a87041ab4b52 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Sun, 11 Nov 2018 12:33:06 +0100
+Subject: [PATCH] journalctl: do not treat EINTR as an error when waiting for
+ events
+
+Fixup for 2a1e0f2228bbdfbc18635e959f47df7da50b62fe. Fixes #10724.
+
+Reproducer: start 'journalctl -f' in a terminal window, change window size.
+(cherry picked from commit 8e143a123276a9636987b08f555603927ca9e186)
+
+Resolves: #2161683
+---
+ src/journal/journalctl.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/journal/journalctl.c b/src/journal/journalctl.c
+index fa83dce562..228cfe7e49 100644
+--- a/src/journal/journalctl.c
++++ b/src/journal/journalctl.c
+@@ -2084,8 +2084,13 @@ static int wait_for_change(sd_journal *j, int poll_fd) {
+         if (r < 0)
+                 return log_error_errno(r, "Failed to determine journal waiting time: %m");
+ 
+-        if (ppoll(pollfds, ELEMENTSOF(pollfds), timeout == USEC_INFINITY ? NULL : timespec_store(&ts, timeout), NULL) < 0)
++        if (ppoll(pollfds, ELEMENTSOF(pollfds),
++                  timeout == USEC_INFINITY ? NULL : timespec_store(&ts, timeout), NULL) < 0) {
++                if (errno == EINTR)
++                        return 0;
++
+                 return log_error_errno(errno, "Couldn't wait for journal event: %m");
++        }
+ 
+         if (pollfds[1].revents & (POLLHUP|POLLERR)) { /* STDOUT has been closed? */
+                 log_debug("Standard output has been closed.");

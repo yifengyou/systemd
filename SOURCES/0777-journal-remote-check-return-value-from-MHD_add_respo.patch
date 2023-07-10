@@ -1,0 +1,94 @@
+From c20e06c1c0319e3759a11bf9051a8041898f79b2 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Sun, 7 Mar 2021 12:08:06 +0100
+Subject: [PATCH] journal-remote: check return value from
+ MHD_add_response_header
+
+Sadly, the API does not allow us to distinguish oom from invalid settings.
+If the call fails, let's assume oom happened.
+
+Coverity CID#1444714.
+
+(cherry picked from commit 60d9c4f3b972ce70dfadc0a3f1a478a056c2ea7a)
+
+Resolves: #2051981
+---
+ src/journal-remote/journal-gatewayd.c | 22 ++++++++++++++++------
+ src/journal-remote/microhttpd-util.c  |  3 ++-
+ 2 files changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/src/journal-remote/journal-gatewayd.c b/src/journal-remote/journal-gatewayd.c
+index 3a167ab890..54446ff7b5 100644
+--- a/src/journal-remote/journal-gatewayd.c
++++ b/src/journal-remote/journal-gatewayd.c
+@@ -492,7 +492,9 @@ static int request_handler_entries(
+         if (!response)
+                 return respond_oom(connection);
+ 
+-        MHD_add_response_header(response, "Content-Type", mime_types[m->mode]);
++        if (MHD_add_response_header(response, "Content-Type", mime_types[m->mode]) == MHD_NO)
++                return respond_oom(connection);
++
+         return MHD_queue_response(connection, MHD_HTTP_OK, response);
+ }
+ 
+@@ -627,7 +629,9 @@ static int request_handler_fields(
+         if (!response)
+                 return respond_oom(connection);
+ 
+-        MHD_add_response_header(response, "Content-Type", mime_types[m->mode == OUTPUT_JSON ? OUTPUT_JSON : OUTPUT_SHORT]);
++        if (MHD_add_response_header(response, "Content-Type", mime_types[m->mode == OUTPUT_JSON ? OUTPUT_JSON : OUTPUT_SHORT]) == MHD_NO)
++                return respond_oom(connection);
++
+         return MHD_queue_response(connection, MHD_HTTP_OK, response);
+ }
+ 
+@@ -650,8 +654,10 @@ static int request_handler_redirect(
+                 return respond_oom(connection);
+         }
+ 
+-        MHD_add_response_header(response, "Content-Type", "text/html");
+-        MHD_add_response_header(response, "Location", target);
++        if (MHD_add_response_header(response, "Content-Type", "text/html") == MHD_NO ||
++            MHD_add_response_header(response, "Location", target) == MHD_NO)
++                return respond_oom(connection);
++
+         return MHD_queue_response(connection, MHD_HTTP_MOVED_PERMANENTLY, response);
+ }
+ 
+@@ -680,7 +686,9 @@ static int request_handler_file(
+                 return respond_oom(connection);
+         TAKE_FD(fd);
+ 
+-        MHD_add_response_header(response, "Content-Type", mime_type);
++        if (MHD_add_response_header(response, "Content-Type", mime_type) == MHD_NO)
++                return respond_oom(connection);
++
+         return MHD_queue_response(connection, MHD_HTTP_OK, response);
+ }
+ 
+@@ -781,7 +789,9 @@ static int request_handler_machine(
+                 return respond_oom(connection);
+         TAKE_PTR(json);
+ 
+-        MHD_add_response_header(response, "Content-Type", "application/json");
++        if (MHD_add_response_header(response, "Content-Type", "application/json") == MHD_NO)
++                return respond_oom(connection);
++
+         return MHD_queue_response(connection, MHD_HTTP_OK, response);
+ }
+ 
+diff --git a/src/journal-remote/microhttpd-util.c b/src/journal-remote/microhttpd-util.c
+index 2ae5172fe9..fdfeaeb2f5 100644
+--- a/src/journal-remote/microhttpd-util.c
++++ b/src/journal-remote/microhttpd-util.c
+@@ -40,7 +40,8 @@ static int mhd_respond_internal(struct MHD_Connection *connection,
+                 return MHD_NO;
+ 
+         log_debug("Queueing response %u: %s", code, buffer);
+-        MHD_add_response_header(response, "Content-Type", "text/plain");
++        if (MHD_add_response_header(response, "Content-Type", "text/plain") == MHD_NO)
++                return MHD_NO;
+         return MHD_queue_response(connection, code, response);
+ }
+ 

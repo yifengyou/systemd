@@ -1,0 +1,28 @@
+From 537055fc407d7cff32ddd3414a6900ccff579c46 Mon Sep 17 00:00:00 2001
+From: Cyprien Laplace <claplace@vmware.com>
+Date: Thu, 14 Nov 2019 09:42:14 -0500
+Subject: [PATCH] basic: add vmware hypervisor detection from device-tree
+
+Allow ConditionVirtualization=vmware to work on ESXi on arm VMs
+using device-tree.
+
+(cherry picked from commit 4d4ac92c928fcbc60b85fcbf8370af3883ee63db)
+
+Resolves: #1959150
+---
+ src/basic/virt.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/basic/virt.c b/src/basic/virt.c
+index 0b88005ed6..8d862b6d67 100644
+--- a/src/basic/virt.c
++++ b/src/basic/virt.c
+@@ -122,6 +122,8 @@ static int detect_vm_device_tree(void) {
+                 return VIRTUALIZATION_KVM;
+         else if (strstr(hvtype, "xen"))
+                 return VIRTUALIZATION_XEN;
++        else if (strstr(hvtype, "vmware"))
++                return VIRTUALIZATION_VMWARE;
+         else
+                 return VIRTUALIZATION_VM_OTHER;
+ #else

@@ -1,0 +1,162 @@
+From 2b390a10d826f060a672d9f01c6ad43714691274 Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Tue, 8 Jun 2021 00:04:35 -0700
+Subject: [PATCH] test: add extended test for triggering mount rate limit
+
+It's hard to trigger the failure to exit the rate limit state in
+isolation as it needs multiple event sources in order to show that it
+gets stuck in the queue. Hence why this is an extended test.
+
+(cherry picked from commit 0c81900965a72b29eb76e0737ed899b925ee75b6)
+
+Related: #1940973
+---
+ test/TEST-60-MOUNT-RATELIMIT/Makefile     |  1 +
+ test/TEST-60-MOUNT-RATELIMIT/test.sh      | 48 +++++++++++++++
+ test/TEST-60-MOUNT-RATELIMIT/testsuite.sh | 73 +++++++++++++++++++++++
+ 3 files changed, 122 insertions(+)
+ create mode 120000 test/TEST-60-MOUNT-RATELIMIT/Makefile
+ create mode 100755 test/TEST-60-MOUNT-RATELIMIT/test.sh
+ create mode 100755 test/TEST-60-MOUNT-RATELIMIT/testsuite.sh
+
+diff --git a/test/TEST-60-MOUNT-RATELIMIT/Makefile b/test/TEST-60-MOUNT-RATELIMIT/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-60-MOUNT-RATELIMIT/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-60-MOUNT-RATELIMIT/test.sh b/test/TEST-60-MOUNT-RATELIMIT/test.sh
+new file mode 100755
+index 0000000000..e3c9288546
+--- /dev/null
++++ b/test/TEST-60-MOUNT-RATELIMIT/test.sh
+@@ -0,0 +1,48 @@
++#!/usr/bin/env bash
++set -e
++TEST_DESCRIPTION="Test that mount/unmount storms can enter/exit rate limit state and will not leak units"
++
++. $TEST_BASE_DIR/test-functions
++
++test_setup() {
++    create_empty_image
++    mkdir -p $TESTDIR/root
++    mount ${LOOPDEV}p1 $TESTDIR/root
++
++    (
++        LOG_LEVEL=5
++        eval $(udevadm info --export --query=env --name=${LOOPDEV}p2)
++
++        setup_basic_environment
++
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
++        # setup the testsuite service
++        cat >$initdir/etc/systemd/system/testsuite.service <<EOF
++[Unit]
++Description=Testsuite service
++
++[Service]
++ExecStart=/bin/bash -x /testsuite.sh
++Type=oneshot
++StandardOutput=tty
++StandardError=tty
++NotifyAccess=all
++EOF
++        cp testsuite.sh $initdir/
++
++        setup_testsuite
++    ) || return 1
++    setup_nspawn_root
++
++    ddebug "umount $TESTDIR/root"
++    umount $TESTDIR/root
++}
++
++do_test "$@"
+diff --git a/test/TEST-60-MOUNT-RATELIMIT/testsuite.sh b/test/TEST-60-MOUNT-RATELIMIT/testsuite.sh
+new file mode 100755
+index 0000000000..8158754667
+--- /dev/null
++++ b/test/TEST-60-MOUNT-RATELIMIT/testsuite.sh
+@@ -0,0 +1,73 @@
++#!/usr/bin/env bash
++set -eux
++set -o pipefail
++
++systemd-analyze log-level debug
++systemd-analyze log-target journal
++
++NUM_DIRS=20
++
++# mount/unmount enough times to trigger the /proc/self/mountinfo parsing rate limiting
++
++for ((i = 0; i < NUM_DIRS; i++)); do
++    mkdir "/tmp/meow${i}"
++done
++
++for ((i = 0; i < NUM_DIRS; i++)); do
++    mount -t tmpfs tmpfs "/tmp/meow${i}"
++done
++
++systemctl daemon-reload
++systemctl list-units -t mount tmp-meow* | grep -q tmp-meow
++
++for ((i = 0; i < NUM_DIRS; i++)); do
++    umount "/tmp/meow${i}"
++done
++
++# figure out if we have entered the rate limit state
++
++exited_rl=0
++timeout="$(date -ud "2 minutes" +%s)"
++while [[ $(date -u +%s) -le ${timeout} ]]; do
++    if journalctl -u init.scope | grep -q "(mount-monitor-dispatch) entered rate limit"; then
++        entered_rl=1
++        break
++    fi
++    sleep 5
++done
++
++# if the infra is slow we might not enter the rate limit state; in that case skip the exit check
++
++if [ "${entered_rl}" = "1" ]; then
++    exited_rl=0
++    timeout="$(date -ud "2 minutes" +%s)"
++    while [[ $(date -u +%s) -le ${timeout} ]]; do
++        if journalctl -u init.scope | grep -q "(mount-monitor-dispatch) left rate limit"; then
++            exited_rl=1
++            break
++        fi
++        sleep 5
++    done
++
++    if [ "${exited_rl}" = "0" ]; then
++        exit 24
++    fi
++fi
++
++# give some time for units to settle so we don't race between exiting the rate limit state and cleaning up the units
++
++sleep 60
++systemctl daemon-reload
++sleep 60
++
++# verify that the mount units are always cleaned up at the end
++
++if systemctl list-units -t mount tmp-meow* | grep -q tmp-meow; then
++    exit 42
++fi
++
++systemd-analyze log-level info
++
++echo OK >/testok
++
++exit 0

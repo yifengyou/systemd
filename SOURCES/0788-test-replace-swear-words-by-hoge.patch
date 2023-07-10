@@ -1,0 +1,54 @@
+From 48b22b82853c6697669b078de5eae35728fbba30 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 11 Sep 2018 13:41:09 +0900
+Subject: [PATCH] test: replace swear words by 'hoge'
+
+(cherry picked from commit a2917d3d2a3ce926f74b63aa60a47f838a8e1f83)
+
+Related: #2049788
+---
+ src/test/test-cgroup-util.c |  2 +-
+ src/test/test-strv.c        | 10 +++++-----
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/src/test/test-cgroup-util.c b/src/test/test-cgroup-util.c
+index 60d7bb19cb..2cb93ad0be 100644
+--- a/src/test/test-cgroup-util.c
++++ b/src/test/test-cgroup-util.c
+@@ -296,7 +296,7 @@ static void test_shift_path(void) {
+         test_shift_path_one("/foobar/waldo", "/", "/foobar/waldo");
+         test_shift_path_one("/foobar/waldo", "", "/foobar/waldo");
+         test_shift_path_one("/foobar/waldo", "/foobar", "/waldo");
+-        test_shift_path_one("/foobar/waldo", "/fuckfuck", "/foobar/waldo");
++        test_shift_path_one("/foobar/waldo", "/hogehoge", "/foobar/waldo");
+ }
+ 
+ static void test_mask_supported(void) {
+diff --git a/src/test/test-strv.c b/src/test/test-strv.c
+index 9e7d98500f..165a5de91d 100644
+--- a/src/test/test-strv.c
++++ b/src/test/test-strv.c
+@@ -279,18 +279,18 @@ static void test_strv_split_nulstr(void) {
+ 
+ static void test_strv_parse_nulstr(void) {
+         _cleanup_strv_free_ char **l = NULL;
+-        const char nulstr[] = "fuck\0fuck2\0fuck3\0\0fuck5\0\0xxx";
++        const char nulstr[] = "hoge\0hoge2\0hoge3\0\0hoge5\0\0xxx";
+ 
+         l = strv_parse_nulstr(nulstr, sizeof(nulstr)-1);
+         assert_se(l);
+         puts("Parse nulstr:");
+         strv_print(l);
+ 
+-        assert_se(streq(l[0], "fuck"));
+-        assert_se(streq(l[1], "fuck2"));
+-        assert_se(streq(l[2], "fuck3"));
++        assert_se(streq(l[0], "hoge"));
++        assert_se(streq(l[1], "hoge2"));
++        assert_se(streq(l[2], "hoge3"));
+         assert_se(streq(l[3], ""));
+-        assert_se(streq(l[4], "fuck5"));
++        assert_se(streq(l[4], "hoge5"));
+         assert_se(streq(l[5], ""));
+         assert_se(streq(l[6], "xxx"));
+ }

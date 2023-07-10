@@ -1,0 +1,77 @@
+From 48ab0db62ab23307e9f35a862a9c9b33ba3ef261 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Thu, 23 Apr 2020 14:53:54 +0200
+Subject: [PATCH] shared: add NULL callback check in one more place
+
+Follow-up for 9f65637308.
+
+(cherry picked from commit d3d53e5cd143bf96d1eb0e254f16fa8d458d38ce)
+
+Related: #1830861
+---
+ src/shared/bus-wait-for-units.c | 31 +++++++++++++------------------
+ 1 file changed, 13 insertions(+), 18 deletions(-)
+
+diff --git a/src/shared/bus-wait-for-units.c b/src/shared/bus-wait-for-units.c
+index 63ba3fd422..ba97922764 100644
+--- a/src/shared/bus-wait-for-units.c
++++ b/src/shared/bus-wait-for-units.c
+@@ -80,6 +80,15 @@ static WaitForItem *wait_for_item_free(WaitForItem *item) {
+ 
+ DEFINE_TRIVIAL_CLEANUP_FUNC(WaitForItem*, wait_for_item_free);
+ 
++static void call_unit_callback_and_wait(BusWaitForUnits *d, WaitForItem *item, bool good) {
++        d->current = item;
++
++        if (item->unit_callback)
++                item->unit_callback(d, item->bus_path, good, item->userdata);
++
++        wait_for_item_free(item);
++}
++
+ static void bus_wait_for_units_clear(BusWaitForUnits *d) {
+         WaitForItem *item;
+ 
+@@ -88,13 +97,8 @@ static void bus_wait_for_units_clear(BusWaitForUnits *d) {
+         d->slot_disconnected = sd_bus_slot_unref(d->slot_disconnected);
+         d->bus = sd_bus_unref(d->bus);
+ 
+-        while ((item = hashmap_first(d->items))) {
+-                d->current = item;
+-
+-                if (item->unit_callback)
+-                        item->unit_callback(d, item->bus_path, false, item->userdata);
+-                wait_for_item_free(item);
+-        }
++        while ((item = hashmap_first(d->items)))
++                call_unit_callback_and_wait(d, item, false);
+ 
+         d->items = hashmap_free(d->items);
+ }
+@@ -213,13 +217,7 @@ static void wait_for_item_check_ready(WaitForItem *item) {
+                         return;
+         }
+ 
+-        if (item->unit_callback) {
+-                d->current = item;
+-                item->unit_callback(d, item->bus_path, true, item->userdata);
+-        }
+-
+-        wait_for_item_free(item);
+-
++        call_unit_callback_and_wait(d, item, true);
+         bus_wait_for_units_check_ready(d);
+ }
+ 
+@@ -304,10 +302,7 @@ static int on_get_all_properties(sd_bus_message *m, void *userdata, sd_bus_error
+                 log_debug_errno(sd_bus_error_get_errno(error), "GetAll() failed for %s: %s",
+                                 item->bus_path, error->message);
+ 
+-                d->current = item;
+-                item->unit_callback(d, item->bus_path, false, item->userdata);
+-                wait_for_item_free(item);
+-
++                call_unit_callback_and_wait(d, item, false);
+                 bus_wait_for_units_check_ready(d);
+                 return 0;
+         }

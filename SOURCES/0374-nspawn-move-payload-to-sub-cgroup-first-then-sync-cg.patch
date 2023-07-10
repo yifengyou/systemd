@@ -1,0 +1,36 @@
+From 8ee1465520ad49892a0a378626ef93abc03f4d4e Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 5 Mar 2019 18:57:53 +0100
+Subject: [PATCH] nspawn: move payload to sub-cgroup first, then sync cgroup
+ trees
+
+if we sync the legacy and unified trees before moving to the right
+subcgroup then ultimately the cgroup paths in the hierarchies will be
+out-of-sync... Hence, let's move the payload first, and sync then.
+
+Addresses: https://github.com/systemd/systemd/pull/9762#issuecomment-441187979
+(cherry picked from commit 27da7ef0d09e00eae821f3ef26e1a666fe7aa087)
+
+Resolves: #1837094
+---
+ src/nspawn/nspawn.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index 08255b5724..8cb7591f0e 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -3960,11 +3960,11 @@ static int run(int master,
+         } else if (arg_slice || arg_property)
+                 log_notice("Machine and scope registration turned off, --slice= and --property= settings will have no effect.");
+ 
+-        r = sync_cgroup(*pid, arg_unified_cgroup_hierarchy, arg_uid_shift);
++        r = create_subcgroup(*pid, arg_keep_unit, arg_unified_cgroup_hierarchy);
+         if (r < 0)
+                 return r;
+ 
+-        r = create_subcgroup(*pid, arg_keep_unit, arg_unified_cgroup_hierarchy);
++        r = sync_cgroup(*pid, arg_unified_cgroup_hierarchy, arg_uid_shift);
+         if (r < 0)
+                 return r;
+ 

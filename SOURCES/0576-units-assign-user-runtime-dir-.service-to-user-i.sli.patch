@@ -1,0 +1,25 @@
+From 64975b046d5a0877690aa6de9389b8234ee1cfab Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 3 Aug 2018 10:45:31 +0200
+Subject: [PATCH] units: assign user-runtime-dir@.service to user-%i.slice
+
+This service won't use much resources, but it's certainly nicer to see
+it attached th the user's slice along with user@.service, so that
+everything we run for a specific user is properly bound into one unit.
+
+(cherry picked from commit 1193c11a04b3ecc29925904fbeb5d64834bce73e)
+
+Related: #1946453
+---
+ units/user-runtime-dir@.service.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/units/user-runtime-dir@.service.in b/units/user-runtime-dir@.service.in
+index 8c02beda3b..13b3ed52f8 100644
+--- a/units/user-runtime-dir@.service.in
++++ b/units/user-runtime-dir@.service.in
+@@ -15,3 +15,4 @@ StopWhenUnneeded=yes
+ ExecStart=@rootlibexecdir@/systemd-user-runtime-dir start %i
+ ExecStop=@rootlibexecdir@/systemd-user-runtime-dir stop %i
+ RemainAfterExit=true
++Slice=user-%i.slice

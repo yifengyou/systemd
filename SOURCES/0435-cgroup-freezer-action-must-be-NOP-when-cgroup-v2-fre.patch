@@ -1,0 +1,48 @@
+From 45d093a37b6f8c2ceae9bfd090c5265f35413b46 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Tue, 8 Sep 2020 14:51:39 +0200
+Subject: [PATCH] cgroup: freezer action must be NOP when cgroup v2 freezer is
+ not available
+
+Low-level cgroup freezer state manipulation is invoked directly from the
+job engine when we are about to execute the job in order to make sure
+the unit is not frozen and job execution is not blocked because of
+that.
+
+Currently with cgroup v1 we would needlessly do a bunch of work in the
+function and even falsely update the freezer state. Don't do any of this
+and skip the function silently when v2 freezer is not available.
+
+Following bug is fixed by this commit,
+
+$ systemd-run --unit foo.service /bin/sleep infinity
+$ systemctl restart foo.service
+$ systemctl show -p FreezerState foo.service
+
+Before (cgroup v1, i.e. full "legacy" mode):
+FreezerState=thawing
+
+After:
+FreezerState=running
+
+(cherry picked from commit 9a1e90aee556b7a30d87553a891a4175ae77ed68)
+
+Resolves: #1868831
+---
+ src/core/cgroup.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index e0eb184fd2..f1ce070f9a 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -2936,6 +2936,9 @@ int unit_cgroup_freezer_action(Unit *u, FreezerAction action) {
+         assert(u);
+         assert(IN_SET(action, FREEZER_FREEZE, FREEZER_THAW));
+ 
++        if (!cg_freezer_supported())
++                return 0;
++
+         if (!u->cgroup_realized)
+                 return -EBUSY;
+ 

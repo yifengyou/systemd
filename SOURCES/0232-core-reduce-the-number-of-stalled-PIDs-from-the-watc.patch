@@ -1,0 +1,323 @@
+From 79e9566ec0a61d887ab63f17192dbd71aae36ee0 Mon Sep 17 00:00:00 2001
+From: Franck Bui <fbui@suse.com>
+Date: Mon, 18 Mar 2019 20:59:36 +0100
+Subject: [PATCH] core: reduce the number of stalled PIDs from the watched
+ processes list when possible
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Some PIDs can remain in the watched list even though their processes have
+exited since a long time. It can easily happen if the main process of a forking
+service manages to spawn a child before the control process exits for example.
+
+However when a pid is about to be mapped to a unit by calling unit_watch_pid(),
+the caller usually knows if the pid should belong to this unit exclusively: if
+we just forked() off a child, then we can be sure that its PID is otherwise
+unused. In this case we take this opportunity to remove any stalled PIDs from
+the watched process list.
+
+If we learnt about a PID in any other form (for example via PID file, via
+searching, MAINPID= and so on), then we can't assume anything.
+
+Thanks Renaud Métrich for backporting this to RHEL.
+Resolves: #1744972
+---
+ src/core/cgroup.c         |  2 +-
+ src/core/dbus-scope.c     |  2 +-
+ src/core/manager.c        | 10 ++++++++++
+ src/core/manager.h        |  2 ++
+ src/core/mount.c          |  5 ++---
+ src/core/service.c        | 16 ++++++++--------
+ src/core/socket.c         |  7 +++----
+ src/core/swap.c           |  5 ++---
+ src/core/unit.c           |  8 +++++++-
+ src/core/unit.h           |  2 +-
+ src/test/test-watch-pid.c | 12 ++++++------
+ 11 files changed, 43 insertions(+), 28 deletions(-)
+
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index b7ed07e65b..76eafdc082 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -1926,7 +1926,7 @@ static int unit_watch_pids_in_path(Unit *u, const char *path) {
+                 pid_t pid;
+ 
+                 while ((r = cg_read_pid(f, &pid)) > 0) {
+-                        r = unit_watch_pid(u, pid);
++                        r = unit_watch_pid(u, pid, false);
+                         if (r < 0 && ret >= 0)
+                                 ret = r;
+                 }
+diff --git a/src/core/dbus-scope.c b/src/core/dbus-scope.c
+index 6725f62794..0bbf64fff1 100644
+--- a/src/core/dbus-scope.c
++++ b/src/core/dbus-scope.c
+@@ -106,7 +106,7 @@ static int bus_scope_set_transient_property(
+                                 return r;
+ 
+                         if (!UNIT_WRITE_FLAGS_NOOP(flags)) {
+-                                r = unit_watch_pid(UNIT(s), pid);
++                                r = unit_watch_pid(UNIT(s), pid, false);
+                                 if (r < 0 && r != -EEXIST)
+                                         return r;
+                         }
+diff --git a/src/core/manager.c b/src/core/manager.c
+index c83e296cf3..0eae7d46fb 100644
+--- a/src/core/manager.c
++++ b/src/core/manager.c
+@@ -2044,6 +2044,16 @@ void manager_clear_jobs(Manager *m) {
+                 job_finish_and_invalidate(j, JOB_CANCELED, false, false);
+ }
+ 
++void manager_unwatch_pid(Manager *m, pid_t pid) {
++        assert(m);
++
++        /* First let's drop the unit keyed as "pid". */
++        (void) hashmap_remove(m->watch_pids, PID_TO_PTR(pid));
++
++        /* Then, let's also drop the array keyed by -pid. */
++        free(hashmap_remove(m->watch_pids, PID_TO_PTR(-pid)));
++}
++
+ static int manager_dispatch_run_queue(sd_event_source *source, void *userdata) {
+         Manager *m = userdata;
+         Job *j;
+diff --git a/src/core/manager.h b/src/core/manager.h
+index c7f4d66ecd..fa47952d24 100644
+--- a/src/core/manager.h
++++ b/src/core/manager.h
+@@ -406,6 +406,8 @@ int manager_get_dump_string(Manager *m, char **ret);
+ 
+ void manager_clear_jobs(Manager *m);
+ 
++void manager_unwatch_pid(Manager *m, pid_t pid);
++
+ unsigned manager_dispatch_load_queue(Manager *m);
+ 
+ int manager_environment_add(Manager *m, char **minus, char **plus);
+diff --git a/src/core/mount.c b/src/core/mount.c
+index 2ac04e3874..5878814b1b 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -677,7 +677,7 @@ static int mount_coldplug(Unit *u) {
+             pid_is_unwaited(m->control_pid) &&
+             MOUNT_STATE_WITH_PROCESS(new_state)) {
+ 
+-                r = unit_watch_pid(UNIT(m), m->control_pid);
++                r = unit_watch_pid(UNIT(m), m->control_pid, false);
+                 if (r < 0)
+                         return r;
+ 
+@@ -781,9 +781,8 @@ static int mount_spawn(Mount *m, ExecCommand *c, pid_t *_pid) {
+         if (r < 0)
+                 return r;
+ 
+-        r = unit_watch_pid(UNIT(m), pid);
++        r = unit_watch_pid(UNIT(m), pid, true);
+         if (r < 0)
+-                /* FIXME: we need to do something here */
+                 return r;
+ 
+         *_pid = pid;
+diff --git a/src/core/service.c b/src/core/service.c
+index 614ba05d89..310838a5f6 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -974,7 +974,7 @@ static int service_load_pid_file(Service *s, bool may_warn) {
+         if (r < 0)
+                 return r;
+ 
+-        r = unit_watch_pid(UNIT(s), pid);
++        r = unit_watch_pid(UNIT(s), pid, false);
+         if (r < 0) /* FIXME: we need to do something here */
+                 return log_unit_warning_errno(UNIT(s), r, "Failed to watch PID "PID_FMT" for service: %m", pid);
+ 
+@@ -1004,7 +1004,7 @@ static void service_search_main_pid(Service *s) {
+         if (service_set_main_pid(s, pid) < 0)
+                 return;
+ 
+-        r = unit_watch_pid(UNIT(s), pid);
++        r = unit_watch_pid(UNIT(s), pid, false);
+         if (r < 0)
+                 /* FIXME: we need to do something here */
+                 log_unit_warning_errno(UNIT(s), r, "Failed to watch PID "PID_FMT" from: %m", pid);
+@@ -1135,7 +1135,7 @@ static int service_coldplug(Unit *u) {
+                     SERVICE_RUNNING, SERVICE_RELOAD,
+                     SERVICE_STOP, SERVICE_STOP_SIGABRT, SERVICE_STOP_SIGTERM, SERVICE_STOP_SIGKILL, SERVICE_STOP_POST,
+                     SERVICE_FINAL_SIGTERM, SERVICE_FINAL_SIGKILL))) {
+-                r = unit_watch_pid(UNIT(s), s->main_pid);
++                r = unit_watch_pid(UNIT(s), s->main_pid, false);
+                 if (r < 0)
+                         return r;
+         }
+@@ -1147,7 +1147,7 @@ static int service_coldplug(Unit *u) {
+                    SERVICE_RELOAD,
+                    SERVICE_STOP, SERVICE_STOP_SIGABRT, SERVICE_STOP_SIGTERM, SERVICE_STOP_SIGKILL, SERVICE_STOP_POST,
+                    SERVICE_FINAL_SIGTERM, SERVICE_FINAL_SIGKILL)) {
+-                r = unit_watch_pid(UNIT(s), s->control_pid);
++                r = unit_watch_pid(UNIT(s), s->control_pid, false);
+                 if (r < 0)
+                         return r;
+         }
+@@ -1545,8 +1545,8 @@ static int service_spawn(
+         s->exec_fd_event_source = TAKE_PTR(exec_fd_source);
+         s->exec_fd_hot = false;
+ 
+-        r = unit_watch_pid(UNIT(s), pid);
+-        if (r < 0) /* FIXME: we need to do something here */
++        r = unit_watch_pid(UNIT(s), pid, true);
++        if (r < 0)
+                 return r;
+ 
+         *_pid = pid;
+@@ -3643,7 +3643,7 @@ static void service_notify_message(
+                         }
+                         if (r > 0) {
+                                 service_set_main_pid(s, new_main_pid);
+-                                unit_watch_pid(UNIT(s), new_main_pid);
++                                unit_watch_pid(UNIT(s), new_main_pid, false);
+                                 notify_dbus = true;
+                         }
+                 }
+@@ -3858,7 +3858,7 @@ static void service_bus_name_owner_change(
+                         log_unit_debug(u, "D-Bus name %s is now owned by process " PID_FMT, name, pid);
+ 
+                         service_set_main_pid(s, pid);
+-                        unit_watch_pid(UNIT(s), pid);
++                        unit_watch_pid(UNIT(s), pid, false);
+                 }
+         }
+ }
+diff --git a/src/core/socket.c b/src/core/socket.c
+index d488c64e91..b034549634 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -1816,7 +1816,7 @@ static int socket_coldplug(Unit *u) {
+                    SOCKET_FINAL_SIGTERM,
+                    SOCKET_FINAL_SIGKILL)) {
+ 
+-                r = unit_watch_pid(UNIT(s), s->control_pid);
++                r = unit_watch_pid(UNIT(s), s->control_pid, false);
+                 if (r < 0)
+                         return r;
+ 
+@@ -1902,9 +1902,8 @@ static int socket_spawn(Socket *s, ExecCommand *c, pid_t *_pid) {
+         if (r < 0)
+                 return r;
+ 
+-        r = unit_watch_pid(UNIT(s), pid);
++        r = unit_watch_pid(UNIT(s), pid, true);
+         if (r < 0)
+-                /* FIXME: we need to do something here */
+                 return r;
+ 
+         *_pid = pid;
+@@ -1973,7 +1972,7 @@ static int socket_chown(Socket *s, pid_t *_pid) {
+                 _exit(EXIT_SUCCESS);
+         }
+ 
+-        r = unit_watch_pid(UNIT(s), pid);
++        r = unit_watch_pid(UNIT(s), pid, true);
+         if (r < 0)
+                 goto fail;
+ 
+diff --git a/src/core/swap.c b/src/core/swap.c
+index b644753a1c..e717dbb54a 100644
+--- a/src/core/swap.c
++++ b/src/core/swap.c
+@@ -531,7 +531,7 @@ static int swap_coldplug(Unit *u) {
+             pid_is_unwaited(s->control_pid) &&
+             SWAP_STATE_WITH_PROCESS(new_state)) {
+ 
+-                r = unit_watch_pid(UNIT(s), s->control_pid);
++                r = unit_watch_pid(UNIT(s), s->control_pid, false);
+                 if (r < 0)
+                         return r;
+ 
+@@ -636,9 +636,8 @@ static int swap_spawn(Swap *s, ExecCommand *c, pid_t *_pid) {
+         if (r < 0)
+                 goto fail;
+ 
+-        r = unit_watch_pid(UNIT(s), pid);
++        r = unit_watch_pid(UNIT(s), pid, true);
+         if (r < 0)
+-                /* FIXME: we need to do something here */
+                 goto fail;
+ 
+         *_pid = pid;
+diff --git a/src/core/unit.c b/src/core/unit.c
+index d298afb0d4..b0b1c77ef7 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -2500,7 +2500,7 @@ void unit_notify(Unit *u, UnitActiveState os, UnitActiveState ns, UnitNotifyFlag
+         unit_add_to_gc_queue(u);
+ }
+ 
+-int unit_watch_pid(Unit *u, pid_t pid) {
++int unit_watch_pid(Unit *u, pid_t pid, bool exclusive) {
+         int r;
+ 
+         assert(u);
+@@ -2508,6 +2508,12 @@ int unit_watch_pid(Unit *u, pid_t pid) {
+ 
+         /* Watch a specific PID */
+ 
++        /* Caller might be sure that this PID belongs to this unit only. Let's take this
++         * opportunity to remove any stalled references to this PID as they can be created
++         * easily (when watching a process which is not our direct child). */
++        if (exclusive)
++                manager_unwatch_pid(u->manager, pid);
++
+         r = set_ensure_allocated(&u->pids, NULL);
+         if (r < 0)
+                 return r;
+diff --git a/src/core/unit.h b/src/core/unit.h
+index e1a60da244..68cc1869e4 100644
+--- a/src/core/unit.h
++++ b/src/core/unit.h
+@@ -655,7 +655,7 @@ typedef enum UnitNotifyFlags {
+ 
+ void unit_notify(Unit *u, UnitActiveState os, UnitActiveState ns, UnitNotifyFlags flags);
+ 
+-int unit_watch_pid(Unit *u, pid_t pid);
++int unit_watch_pid(Unit *u, pid_t pid, bool exclusive);
+ void unit_unwatch_pid(Unit *u, pid_t pid);
+ void unit_unwatch_all_pids(Unit *u);
+ 
+diff --git a/src/test/test-watch-pid.c b/src/test/test-watch-pid.c
+index cb43b35bc5..8c70175aed 100644
+--- a/src/test/test-watch-pid.c
++++ b/src/test/test-watch-pid.c
+@@ -49,25 +49,25 @@ int main(int argc, char *argv[]) {
+         assert_se(hashmap_isempty(m->watch_pids));
+         assert_se(manager_get_unit_by_pid(m, 4711) == NULL);
+ 
+-        assert_se(unit_watch_pid(a, 4711) >= 0);
++        assert_se(unit_watch_pid(a, 4711, false) >= 0);
+         assert_se(manager_get_unit_by_pid(m, 4711) == a);
+ 
+-        assert_se(unit_watch_pid(a, 4711) >= 0);
++        assert_se(unit_watch_pid(a, 4711, false) >= 0);
+         assert_se(manager_get_unit_by_pid(m, 4711) == a);
+ 
+-        assert_se(unit_watch_pid(b, 4711) >= 0);
++        assert_se(unit_watch_pid(b, 4711, false) >= 0);
+         u = manager_get_unit_by_pid(m, 4711);
+         assert_se(u == a || u == b);
+ 
+-        assert_se(unit_watch_pid(b, 4711) >= 0);
++        assert_se(unit_watch_pid(b, 4711, false) >= 0);
+         u = manager_get_unit_by_pid(m, 4711);
+         assert_se(u == a || u == b);
+ 
+-        assert_se(unit_watch_pid(c, 4711) >= 0);
++        assert_se(unit_watch_pid(c, 4711, false) >= 0);
+         u = manager_get_unit_by_pid(m, 4711);
+         assert_se(u == a || u == b || u == c);
+ 
+-        assert_se(unit_watch_pid(c, 4711) >= 0);
++        assert_se(unit_watch_pid(c, 4711, false) >= 0);
+         u = manager_get_unit_by_pid(m, 4711);
+         assert_se(u == a || u == b || u == c);
+ 

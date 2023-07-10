@@ -1,0 +1,39 @@
+From 117ed6bd7aa71fc79599e1d37bdb4a94b3505a38 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 8 Aug 2018 16:03:11 +0200
+Subject: [PATCH] logind: improve error propagation of user_check_linger_file()
+
+Let's make this a bit prettier, and propagate unexpected access() errors
+correctly.
+
+(The callers of this function will suppress them, but it's nicer of they
+do that, rather than us doing that twice in both the callers and the
+callees)
+
+(cherry picked from commit 6996df9b864981980f5b713dc5c7d506a7a4b9bf)
+
+Related: #1642460
+---
+ src/login/logind-user.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index 70f5eb9d59..3fd28fc66c 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -532,8 +532,14 @@ int user_check_linger_file(User *u) {
+                 return -ENOMEM;
+ 
+         p = strjoina("/var/lib/systemd/linger/", cc);
++        if (access(p, F_OK) < 0) {
++                if (errno != ENOENT)
++                        return -errno;
+ 
+-        return access(p, F_OK) >= 0;
++                return false;
++        }
++
++        return true;
+ }
+ 
+ bool user_may_gc(User *u, bool drop_not_started) {

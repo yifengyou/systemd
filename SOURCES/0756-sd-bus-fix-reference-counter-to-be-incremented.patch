@@ -1,0 +1,58 @@
+From 39e9bd0412bef0c37d487834b8be3a78e28cb804 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Sun, 17 Apr 2022 07:05:07 +0900
+Subject: [PATCH] sd-bus: fix reference counter to be incremented
+
+Fixes #23097.
+
+(cherry picked from commit b21f237d996c8c18991a68e1204f060d07dc4745)
+
+[msekleta: This commit also contains the hunk from c2d7dd35d2
+(in sd_bus_track_remove_name). I've decided to not backport that commit
+fully because of conflicts and because its was made largely irrelevant
+by 7f40cb7c86]
+
+Related: #2047373
+---
+ src/libsystemd/sd-bus/bus-track.c | 15 +++++++--------
+ 1 file changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/src/libsystemd/sd-bus/bus-track.c b/src/libsystemd/sd-bus/bus-track.c
+index 16bf615f50..b1ec5ecbbb 100644
+--- a/src/libsystemd/sd-bus/bus-track.c
++++ b/src/libsystemd/sd-bus/bus-track.c
+@@ -208,12 +208,12 @@ _public_ int sd_bus_track_add_name(sd_bus_track *track, const char *name) {
+         i = hashmap_get(track->names, name);
+         if (i) {
+                 if (track->recursive) {
+-                        unsigned k = track->n_ref + 1;
++                        unsigned k = i->n_ref + 1;
+ 
+-                        if (k < track->n_ref) /* Check for overflow */
++                        if (k < i->n_ref) /* Check for overflow */
+                                 return -EOVERFLOW;
+ 
+-                        track->n_ref = k;
++                        i->n_ref = k;
+                 }
+ 
+                 bus_track_remove_from_queue(track);
+@@ -281,14 +281,13 @@ _public_ int sd_bus_track_remove_name(sd_bus_track *track, const char *name) {
+         i = hashmap_get(track->names, name);
+         if (!i)
+                 return -EUNATCH;
+-        if (i->n_ref <= 0)
+-                return -EUNATCH;
+-
+-        i->n_ref--;
+ 
+-        if (i->n_ref <= 0)
++        assert(i->n_ref >=1);
++        if (i->n_ref <= 1)
+                 return bus_track_remove_name_fully(track, name);
+ 
++        i->n_ref--;
++
+         return 1;
+ }
+ 

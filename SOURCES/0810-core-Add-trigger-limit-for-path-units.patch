@@ -1,0 +1,127 @@
+From 9d3f5e5d222308d29aad9bf7b2bfc440143a8606 Mon Sep 17 00:00:00 2001
+From: Daan De Meyer <daan.j.demeyer@gmail.com>
+Date: Fri, 17 Dec 2021 20:01:31 +0100
+Subject: [PATCH] core: Add trigger limit for path units
+
+When conditions fail on a service unit, a path unit can cause
+PID 1 to busy loop as it keeps trying to activate the service unit.
+To avoid this from happening, add a trigger limit to the path unit,
+identical to the trigger limit we have for socket units.
+
+Initially, let's start with a high limit and not make it configurable.
+If needed, we can add properties to configure the rate limit similar
+to the ones we have for socket units.
+
+(cherry picked from commit aaae822b37aa3ca39aebb516fdc6bef36d730c25)
+
+Resolves: #2114005
+---
+ src/core/path.c                            | 10 ++++++++++
+ src/core/path.h                            |  3 +++
+ test/TEST-63-ISSUE-17433/test63.service    |  2 +-
+ test/TEST-63-ISSUE-17433/testsuite.service | 21 +++++++++++++++++----
+ 4 files changed, 31 insertions(+), 5 deletions(-)
+
+diff --git a/src/core/path.c b/src/core/path.c
+index c2facf0b16..b899bde0de 100644
+--- a/src/core/path.c
++++ b/src/core/path.c
+@@ -238,6 +238,9 @@ static void path_init(Unit *u) {
+         assert(u->load_state == UNIT_STUB);
+ 
+         p->directory_mode = 0755;
++
++        p->trigger_limit.interval = 2 * USEC_PER_SEC;
++        p->trigger_limit.burst = 200;
+ }
+ 
+ void path_free_specs(Path *p) {
+@@ -467,6 +470,12 @@ static void path_enter_running(Path *p) {
+         if (unit_stop_pending(UNIT(p)))
+                 return;
+ 
++        if (!ratelimit_below(&p->trigger_limit)) {
++                log_unit_warning(UNIT(p), "Trigger limit hit, refusing further activation.");
++                path_enter_dead(p, PATH_FAILURE_TRIGGER_LIMIT_HIT);
++                return;
++        }
++
+         trigger = UNIT_TRIGGER(UNIT(p));
+         if (!trigger) {
+                 log_unit_error(UNIT(p), "Unit to trigger vanished.");
+@@ -767,6 +776,7 @@ static const char* const path_result_table[_PATH_RESULT_MAX] = {
+         [PATH_FAILURE_RESOURCES] = "resources",
+         [PATH_FAILURE_START_LIMIT_HIT] = "start-limit-hit",
+         [PATH_FAILURE_UNIT_START_LIMIT_HIT] = "unit-start-limit-hit",
++        [PATH_FAILURE_TRIGGER_LIMIT_HIT]    = "trigger-limit-hit",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP(path_result, PathResult);
+diff --git a/src/core/path.h b/src/core/path.h
+index 8a69f06c13..12fd13fbe3 100644
+--- a/src/core/path.h
++++ b/src/core/path.h
+@@ -46,6 +46,7 @@ typedef enum PathResult {
+         PATH_FAILURE_RESOURCES,
+         PATH_FAILURE_START_LIMIT_HIT,
+         PATH_FAILURE_UNIT_START_LIMIT_HIT,
++        PATH_FAILURE_TRIGGER_LIMIT_HIT,
+         _PATH_RESULT_MAX,
+         _PATH_RESULT_INVALID = -1
+ } PathResult;
+@@ -63,6 +64,8 @@ struct Path {
+         mode_t directory_mode;
+ 
+         PathResult result;
++
++        RateLimit trigger_limit;
+ };
+ 
+ void path_free_specs(Path *p);
+diff --git a/test/TEST-63-ISSUE-17433/test63.service b/test/TEST-63-ISSUE-17433/test63.service
+index c83801874d..6292434c5c 100644
+--- a/test/TEST-63-ISSUE-17433/test63.service
++++ b/test/TEST-63-ISSUE-17433/test63.service
+@@ -1,5 +1,5 @@
+ [Unit]
+-ConditionPathExists=!/tmp/nonexistent
++ConditionPathExists=/tmp/nonexistent
+ 
+ [Service]
+ ExecStart=true
+diff --git a/test/TEST-63-ISSUE-17433/testsuite.service b/test/TEST-63-ISSUE-17433/testsuite.service
+index d3ca5b002b..39f9643890 100644
+--- a/test/TEST-63-ISSUE-17433/testsuite.service
++++ b/test/TEST-63-ISSUE-17433/testsuite.service
+@@ -4,14 +4,27 @@ Description=TEST-63-ISSUE-17433
+ [Service]
+ ExecStartPre=rm -f /failed /testok
+ Type=oneshot
++
++# Test that a path unit continuously triggering a service that fails condition checks eventually fails with
++# the trigger-limit-hit error.
+ ExecStart=rm -f /tmp/nonexistent
+ ExecStart=systemctl start test63.path
+ ExecStart=touch /tmp/test63
+-# Make sure systemd has sufficient time to hit the start limit for test63.service.
++# Make sure systemd has sufficient time to hit the trigger limit for test63.path.
+ ExecStart=sleep 2
+-ExecStart=sh -x -c 'test "$(systemctl show test63.service --value -p ActiveState)" = failed'
+-ExecStart=sh -x -c 'test "$(systemctl show test63.service --value -p Result)" = start-limit-hit'
++ExecStart=sh -x -c 'test "$(systemctl show test63.service --value -p ActiveState)" = inactive'
++ExecStart=sh -x -c 'test "$(systemctl show test63.service --value -p Result)" = success'
+ # FIXME: The path remains active, which it should not
+ # ExecStart=sh -x -c 'test "$(systemctl show test63.path --value -p ActiveState)" = failed'
+-# ExecStart=sh -x -c 'test "$(systemctl show test63.path --value -p Result)" = unit-start-limit-hit'
++# ExecStart=sh -x -c 'test "$(systemctl show test63.path --value -p Result)" = trigger-limit-hit'
++
++# Test that starting the service manually doesn't affect the path unit.
++ExecStart=rm -f /tmp/test63
++ExecStart=systemctl reset-failed
++ExecStart=systemctl start test63.path
++ExecStart=systemctl start test63.service
++ExecStart=sh -x -c 'test "$(systemctl show test63.service --value -p ActiveState)" = inactive'
++ExecStart=sh -x -c 'test "$(systemctl show test63.service --value -p Result)" = success'
++ExecStart=sh -x -c 'test "$(systemctl show test63.path --value -p ActiveState)" = active'
++ExecStart=sh -x -c 'test "$(systemctl show test63.path --value -p Result)" = success'
+ ExecStart=sh -x -c 'echo OK >/testok'

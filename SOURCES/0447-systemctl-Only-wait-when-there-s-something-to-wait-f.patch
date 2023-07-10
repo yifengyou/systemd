@@ -1,0 +1,29 @@
+From 91c83bde0904581fbc33eb7821119e665b9505ce Mon Sep 17 00:00:00 2001
+From: Filipe Brandenburger <filbranden@google.com>
+Date: Fri, 20 Jul 2018 11:32:55 -0700
+Subject: [PATCH] systemctl: Only wait when there's something to wait for.
+
+Tested:
+- `systemctl --wait start i-do-not-exist.service` does not wait.
+- `systemctl --wait start i-do-not-exist.service valid-unit.service` does.
+
+(cherry picked from commit 46f2579c2ac9f6780d5afec1000764defc6b581e)
+
+Related: #846319
+---
+ src/systemctl/systemctl.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index f057dc829c..1929692480 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -3130,7 +3130,7 @@ static int start_unit(int argc, char *argv[], void *userdata) {
+                                 check_triggering_units(bus, *name);
+         }
+ 
+-        if (r >= 0 && arg_wait) {
++        if (r >= 0 && arg_wait && !set_isempty(wait_context.unit_paths)) {
+                 int q;
+                 q = sd_event_loop(wait_context.event);
+                 if (q < 0)

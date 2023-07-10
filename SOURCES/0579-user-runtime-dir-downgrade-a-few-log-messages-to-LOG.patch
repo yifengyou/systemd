@@ -1,0 +1,52 @@
+From 354b894aa3e79f54ab75bf6fae76ce28ca80db38 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 2 Aug 2018 20:56:34 +0200
+Subject: [PATCH] user-runtime-dir: downgrade a few log messages to LOG_DEBUG
+ that we ignore
+
+As the comments already say it might be quite likely that
+$XDG_RUNTIME_DIR is not set up as mount, and we shouldn't complain about
+that.
+
+Moreover, let's make this idempotent, so that a runtime dir that is
+already gone and is removed again doesn't cause failure.
+
+(cherry picked from commit 3a13442bbf72e7ebdd0b4d60c2922ea7c5cc9496)
+
+Related: #1946453
+---
+ src/login/user-runtime-dir.c | 15 +++++++--------
+ 1 file changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/src/login/user-runtime-dir.c b/src/login/user-runtime-dir.c
+index 1bb26c99e4..9693821990 100644
+--- a/src/login/user-runtime-dir.c
++++ b/src/login/user-runtime-dir.c
+@@ -95,20 +95,19 @@ static int user_remove_runtime_path(const char *runtime_path) {
+ 
+         r = rm_rf(runtime_path, 0);
+         if (r < 0)
+-                log_error_errno(r, "Failed to remove runtime directory %s (before unmounting): %m", runtime_path);
++                log_debug_errno(r, "Failed to remove runtime directory %s (before unmounting), ignoring: %m", runtime_path);
+ 
+-        /* Ignore cases where the directory isn't mounted, as that's
+-         * quite possible, if we lacked the permissions to mount
+-         * something */
++        /* Ignore cases where the directory isn't mounted, as that's quite possible, if we lacked the permissions to
++         * mount something */
+         r = umount2(runtime_path, MNT_DETACH);
+         if (r < 0 && !IN_SET(errno, EINVAL, ENOENT))
+-                log_error_errno(errno, "Failed to unmount user runtime directory %s: %m", runtime_path);
++                log_debug_errno(errno, "Failed to unmount user runtime directory %s, ignoring: %m", runtime_path);
+ 
+         r = rm_rf(runtime_path, REMOVE_ROOT);
+-        if (r < 0)
+-                log_error_errno(r, "Failed to remove runtime directory %s (after unmounting): %m", runtime_path);
++        if (r < 0 && r != -ENOENT)
++                return log_error_errno(r, "Failed to remove runtime directory %s (after unmounting): %m", runtime_path);
+ 
+-        return r;
++        return 0;
+ }
+ 
+ static int do_mount(const char *runtime_path, uid_t uid, gid_t gid) {

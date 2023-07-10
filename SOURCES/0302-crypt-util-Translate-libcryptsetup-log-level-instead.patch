@@ -1,0 +1,46 @@
+From 05e184dea3f0182e5787812adfd52b68cff9418d Mon Sep 17 00:00:00 2001
+From: Jan Janssen <medhefgo@web.de>
+Date: Mon, 25 Jun 2018 20:33:31 +0200
+Subject: [PATCH] crypt-util: Translate libcryptsetup log level instead of
+ using log_debug()
+
+This makes sure that errors reported by libcryptsetup are shown to the
+user instead of getting swallowed up by log_debug().
+
+(cherry picked from commit aa2cc005d77890b07e8c579f25e1333ff8ba8dac)
+
+Resolves: #1776408
+---
+ src/basic/crypt-util.c | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/src/basic/crypt-util.c b/src/basic/crypt-util.c
+index b181ba3ba0..20bdc5489e 100644
+--- a/src/basic/crypt-util.c
++++ b/src/basic/crypt-util.c
+@@ -5,6 +5,24 @@
+ #include "log.h"
+ 
+ void cryptsetup_log_glue(int level, const char *msg, void *usrptr) {
+-        log_debug("%s", msg);
++        switch (level) {
++        case CRYPT_LOG_NORMAL:
++                level = LOG_NOTICE;
++                break;
++        case CRYPT_LOG_ERROR:
++                level = LOG_ERR;
++                break;
++        case CRYPT_LOG_VERBOSE:
++                level = LOG_INFO;
++                break;
++        case CRYPT_LOG_DEBUG:
++                level = LOG_DEBUG;
++                break;
++        default:
++                log_error("Unknown libcryptsetup log level: %d", level);
++                level = LOG_ERR;
++        }
++
++        log_full(level, "%s", msg);
+ }
+ #endif

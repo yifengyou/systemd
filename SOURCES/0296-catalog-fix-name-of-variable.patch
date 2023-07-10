@@ -1,0 +1,531 @@
+From c3513c7bcc27210c89edad1740e1190e693df86f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Mon, 15 Oct 2018 22:41:49 +0200
+Subject: [PATCH] catalog: fix name of variable
+
+All the messages would (literally) say "The start-up result is RESULT."
+because @RESULT@ was not defined.
+
+Fixes https://bugzilla.redhat.com/show_bug.cgi?id=1639482
+and the first part of #8005.
+
+Fixup for 646cc98dc81c4d0edbc1b57e7bca0f474b47e270.
+
+(cherry picked from commit 65d51875c2a7b27b61de090f1bd6311b0cef2016)
+
+Resolves: #1677768
+---
+ catalog/systemd.be.catalog.in       | 6 +++---
+ catalog/systemd.be@latin.catalog.in | 6 +++---
+ catalog/systemd.bg.catalog.in       | 6 +++---
+ catalog/systemd.catalog.in          | 6 +++---
+ catalog/systemd.da.catalog.in       | 6 +++---
+ catalog/systemd.fr.catalog.in       | 6 +++---
+ catalog/systemd.hr.catalog.in       | 6 +++---
+ catalog/systemd.hu.catalog.in       | 6 +++---
+ catalog/systemd.it.catalog.in       | 6 +++---
+ catalog/systemd.ko.catalog.in       | 6 +++---
+ catalog/systemd.pl.catalog.in       | 6 +++---
+ catalog/systemd.pt_BR.catalog.in    | 6 +++---
+ catalog/systemd.ru.catalog.in       | 6 +++---
+ catalog/systemd.sr.catalog.in       | 6 +++---
+ catalog/systemd.zh_CN.catalog.in    | 6 +++---
+ catalog/systemd.zh_TW.catalog.in    | 6 +++---
+ 16 files changed, 48 insertions(+), 48 deletions(-)
+
+diff --git a/catalog/systemd.be.catalog.in b/catalog/systemd.be.catalog.in
+index 5011ea268d..2c59898683 100644
+--- a/catalog/systemd.be.catalog.in
++++ b/catalog/systemd.be.catalog.in
+@@ -175,7 +175,7 @@ Support: %SUPPORT_URL%
+ 
+ Працэс запуску юніта @UNIT@ завершаны.
+ 
+-Вынік: @RESULT@.
++Вынік: @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: Юніт @UNIT@ спыняецца
+@@ -198,7 +198,7 @@ Support: %SUPPORT_URL%
+ 
+ Збой юніта @UNIT@.
+ 
+-Вынік: @RESULT@.
++Вынік: @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: Юніт @UNIT@ перачытвае сваю канфігурацыю
+@@ -214,7 +214,7 @@ Support: %SUPPORT_URL%
+ 
+ Юніт @UNIT@ перачытаў сваю канфігурацыю.
+ 
+-Вынік: @RESULT@.
++Вынік: @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Працэс @EXECUTABLE@ не можа быць выкананы
+diff --git a/catalog/systemd.be@latin.catalog.in b/catalog/systemd.be@latin.catalog.in
+index 6a8b092669..1d024fea12 100644
+--- a/catalog/systemd.be@latin.catalog.in
++++ b/catalog/systemd.be@latin.catalog.in
+@@ -178,7 +178,7 @@ Support: %SUPPORT_URL%
+ 
+ Praces zapusku junita @UNIT@ zavieršany.
+ 
+-Vynik: @RESULT@.
++Vynik: @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: Junit @UNIT@ spyniajecca
+@@ -201,7 +201,7 @@ Support: %SUPPORT_URL%
+ 
+ Zboj junita @UNIT@.
+ 
+-Vynik: @RESULT@.
++Vynik: @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: Junit @UNIT@ pieračytvaje svaju kanfihuracyju
+@@ -217,7 +217,7 @@ Support: %SUPPORT_URL%
+ 
+ Junit @UNIT@ pieračytaŭ svaju kanfihuracyju.
+ 
+-Vynik: @RESULT@.
++Vynik: @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Praces @EXECUTABLE@ nie moža być vykanany
+diff --git a/catalog/systemd.bg.catalog.in b/catalog/systemd.bg.catalog.in
+index 64d616f381..41f7b21bce 100644
+--- a/catalog/systemd.bg.catalog.in
++++ b/catalog/systemd.bg.catalog.in
+@@ -178,7 +178,7 @@ Support: %SUPPORT_URL%
+ 
+ Стартирането на модул „@UNIT@“ завърши.
+ 
+-Резултатът е: @RESULT@
++Резултатът е: @JOB_RESULT@
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: Модул „@UNIT@“ се спира
+@@ -201,7 +201,7 @@ Support: %SUPPORT_URL%
+ 
+ Модулът „@UNIT@“ не успя да стартира.
+ 
+-Резултатът е: @RESULT@
++Резултатът е: @JOB_RESULT@
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: Модулът „@UNIT@“ започна презареждане на настройките си
+@@ -217,7 +217,7 @@ Support: %SUPPORT_URL%
+ 
+ Модулът „@UNIT@“ завърши презареждането на настройките си.
+ 
+-Резултатът e: @RESULT@
++Резултатът e: @JOB_RESULT@
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Програмата „@EXECUTABLE@“ не успя да се стартира
+diff --git a/catalog/systemd.catalog.in b/catalog/systemd.catalog.in
+index 8234e387cf..49a45890f6 100644
+--- a/catalog/systemd.catalog.in
++++ b/catalog/systemd.catalog.in
+@@ -202,7 +202,7 @@ Support: %SUPPORT_URL%
+ 
+ Unit @UNIT@ has finished starting up.
+ 
+-The start-up result is @RESULT@.
++The start-up result is @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: Unit @UNIT@ has begun shutting down
+@@ -225,7 +225,7 @@ Support: %SUPPORT_URL%
+ 
+ Unit @UNIT@ has failed.
+ 
+-The result is @RESULT@.
++The result is @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: Unit @UNIT@ has begun reloading its configuration
+@@ -241,7 +241,7 @@ Support: %SUPPORT_URL%
+ 
+ Unit @UNIT@ has finished reloading its configuration
+ 
+-The result is @RESULT@.
++The result is @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Process @EXECUTABLE@ could not be executed
+diff --git a/catalog/systemd.da.catalog.in b/catalog/systemd.da.catalog.in
+index 4e2bec8a0f..aecfafa05f 100644
+--- a/catalog/systemd.da.catalog.in
++++ b/catalog/systemd.da.catalog.in
+@@ -159,7 +159,7 @@ Support: %SUPPORT_URL%
+ 
+ Enhed @UNIT@ er færdig med at starte op.
+ 
+-Resultat for opstart er @RESULT@.
++Resultat for opstart er @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: Enhed @UNIT@ har påbegyndt nedlukning
+@@ -182,7 +182,7 @@ Support: %SUPPORT_URL%
+ 
+ Enhed @UNIT@ har fejlet.
+ 
+-Resultatet er @RESULT@
++Resultatet er @JOB_RESULT@
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: Enhed @UNIT@ har påbegyndt genindlæsning af sin konfiguration
+@@ -198,7 +198,7 @@ Support: %SUPPORT_URL%
+ 
+ Enhed @UNIT@ er færdig med at genindlæse sin konfiguration
+ 
+-Resultatet er: @RESULT@.
++Resultatet er: @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Process @EXECUTABLE@ kunne ikke eksekveres
+diff --git a/catalog/systemd.fr.catalog.in b/catalog/systemd.fr.catalog.in
+index 156b1a37dc..13edd083cb 100644
+--- a/catalog/systemd.fr.catalog.in
++++ b/catalog/systemd.fr.catalog.in
+@@ -191,7 +191,7 @@ Subject: L'unité (unit) @UNIT@ a terminé son démarrage
+ Defined-By: systemd
+ Support: %SUPPORT_URL%
+ 
+-L'unité (unit) @UNIT@ a terminé son démarrage, avec le résultat @RESULT@.
++L'unité (unit) @UNIT@ a terminé son démarrage, avec le résultat @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: L'unité (unit) @UNIT@ a commencé à s'arrêter
+@@ -212,7 +212,7 @@ Subject: L'unité (unit) @UNIT@ a échoué
+ Defined-By: systemd
+ Support: %SUPPORT_URL%
+ 
+-L'unité (unit) @UNIT@ a échoué, avec le résultat @RESULT@.
++L'unité (unit) @UNIT@ a échoué, avec le résultat @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: L'unité (unit) @UNIT@ a commencé à recharger sa configuration
+@@ -227,7 +227,7 @@ Defined-By: systemd
+ Support: %SUPPORT_URL%
+ 
+ L'unité (unit) @UNIT@ a terminé de recharger configuration,
+-avec le résultat @RESULT@.
++avec le résultat @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Le processus @EXECUTABLE@ n'a pas pu être exécuté
+diff --git a/catalog/systemd.hr.catalog.in b/catalog/systemd.hr.catalog.in
+index c4808b4c7d..4526ae2a8c 100644
+--- a/catalog/systemd.hr.catalog.in
++++ b/catalog/systemd.hr.catalog.in
+@@ -173,7 +173,7 @@ Support: %SUPPORT_URL%
+ 
+ Jedinica @UNIT@ je završila pokretanje.
+ 
+-Rezultat pokretanja je @RESULT@.
++Rezultat pokretanja je @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: Jedinica @UNIT@ je započela isključivanje
+@@ -196,7 +196,7 @@ Support: %SUPPORT_URL%
+ 
+ Jedinica @UNIT@ nije uspjela.
+ 
+-Rezultat je @RESULT@.
++Rezultat je @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: Jedinica @UNIT@ je započela ponovno učitavati podešavanja
+@@ -212,7 +212,7 @@ Support: %SUPPORT_URL%
+ 
+ Jedinica @UNIT@ je završila ponovno učitavati podešavanja
+ 
+-Rezultat je @RESULT@.
++Rezultat je @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Proces @EXECUTABLE@ se ne može pokrenuti
+diff --git a/catalog/systemd.hu.catalog.in b/catalog/systemd.hu.catalog.in
+index 6c6d7e7934..5565b80b2a 100644
+--- a/catalog/systemd.hu.catalog.in
++++ b/catalog/systemd.hu.catalog.in
+@@ -161,7 +161,7 @@ Support: %SUPPORT_URL%
+ 
+ A(z) @UNIT@ egység befejezte az indulást
+ 
+-Az indítás eredménye: @RESULT@.
++Az indítás eredménye: @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: A(z) @UNIT@ egység megkezdte a leállást
+@@ -184,7 +184,7 @@ Support: %SUPPORT_URL%
+ 
+ A(z) @UNIT@ egység hibát jelzett.
+ 
+-Az eredmény: @RESULT@.
++Az eredmény: @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: A(z) @UNIT@ egység megkezdte a beállításainak újratöltését
+@@ -200,7 +200,7 @@ Support: %SUPPORT_URL%
+ 
+ A(z) @UNIT@ egység befejezte a beállításainak újratöltését.
+ 
+-Az eredmény: @RESULT@.
++Az eredmény: @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: A folyamat végrehajtása sikertelen: @EXECUTABLE@
+diff --git a/catalog/systemd.it.catalog.in b/catalog/systemd.it.catalog.in
+index 4fd1f2a933..8ce4fa5d92 100644
+--- a/catalog/systemd.it.catalog.in
++++ b/catalog/systemd.it.catalog.in
+@@ -191,7 +191,7 @@ Support: %SUPPORT_URL%
+ 
+ L'unità @UNIT@ ha terminato la fase di avvio.
+ 
+-La fase di avvio è @RESULT@.
++La fase di avvio è @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: L'unità @UNIT@ inizia la fase di spegnimento
+@@ -214,7 +214,7 @@ Support: %SUPPORT_URL%
+ 
+ L'unità @UNIT@ è fallita.
+ 
+-Il risultato è @RESULT@.
++Il risultato è @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: L'unità @UNIT@ inizia a caricare la propria configurazione
+@@ -230,7 +230,7 @@ Support: %SUPPORT_URL%
+ 
+ L'unità @UNIT@ è terminata ricaricando la propria configurazione
+ 
+-Il risultato è @RESULT@.
++Il risultato è @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Il processo @EXECUTABLE@ non può essere eseguito
+diff --git a/catalog/systemd.ko.catalog.in b/catalog/systemd.ko.catalog.in
+index fc0faad02c..59fbde8b62 100644
+--- a/catalog/systemd.ko.catalog.in
++++ b/catalog/systemd.ko.catalog.in
+@@ -182,7 +182,7 @@ Support: %SUPPORT_URL%
+ 
+ @UNIT@ 유닛 시동을 마쳤습니다.
+ 
+-시동 결과는 @RESULT@ 입니다.
++시동 결과는 @JOB_RESULT@ 입니다.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: @UNIT@ 유닛 끝내기 동작 시작
+@@ -205,7 +205,7 @@ Support: %SUPPORT_URL%
+ 
+ @UNIT@ 유닛 동작에 실패했습니다.
+ 
+-결과는 @RESULT@ 입니다.
++결과는 @JOB_RESULT@ 입니다.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: @UNIT@ 유닛 설정 다시 읽기 시작
+@@ -221,7 +221,7 @@ Support: %SUPPORT_URL%
+ 
+ @UNIT@ 유닛의 설정 다시 읽기 동작을 끝냈습니다.
+ 
+-결과는 @RESULT@ 입니다.
++결과는 @JOB_RESULT@ 입니다.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: @EXECUTABLE@ 프로세스 시작할 수 없음
+diff --git a/catalog/systemd.pl.catalog.in b/catalog/systemd.pl.catalog.in
+index 998894bd0a..b73f56ca11 100644
+--- a/catalog/systemd.pl.catalog.in
++++ b/catalog/systemd.pl.catalog.in
+@@ -201,7 +201,7 @@ Support: %SUPPORT_URL%
+ 
+ Jednostka @UNIT@ ukończyła uruchamianie.
+ 
+-Wynik uruchamiania: @RESULT@.
++Wynik uruchamiania: @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: Rozpoczęto wyłączanie jednostki @UNIT@
+@@ -224,7 +224,7 @@ Support: %SUPPORT_URL%
+ 
+ Jednostka @UNIT@ się nie powiodła.
+ 
+-Wynik: @RESULT@.
++Wynik: @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: Rozpoczęto ponowne wczytywanie konfiguracji jednostki @UNIT@
+@@ -240,7 +240,7 @@ Support: %SUPPORT_URL%
+ 
+ Jednostka @UNIT@ ukończyła ponowne wczytywanie swojej konfiguracji.
+ 
+-Wynik: @RESULT@.
++Wynik: @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Nie można wykonać procesu @EXECUTABLE@
+diff --git a/catalog/systemd.pt_BR.catalog.in b/catalog/systemd.pt_BR.catalog.in
+index db1cb03198..edaefb7164 100644
+--- a/catalog/systemd.pt_BR.catalog.in
++++ b/catalog/systemd.pt_BR.catalog.in
+@@ -162,7 +162,7 @@ Support: %SUPPORT_URL%
+ 
+ A unidade @UNIT@ concluiu a inicialização.
+ 
+-The start-up result is @RESULT@.
++The start-up result is @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: Unidade @UNIT@ sendo desligado
+@@ -185,7 +185,7 @@ Support: %SUPPORT_URL%
+ 
+ A unidade @UNIT@ falhou.
+ 
+-O resultado é @RESULT@.
++O resultado é @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: Unidade @UNIT@ iniciou recarregamento de sua configuração
+@@ -201,7 +201,7 @@ Support: %SUPPORT_URL%
+ 
+ A unidade @UNIT@ concluiu o recarregamento de sua configuração.
+ 
+-O resultado é @RESULT@.
++O resultado é @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Processo @EXECUTABLE@ não pôde ser executado
+diff --git a/catalog/systemd.ru.catalog.in b/catalog/systemd.ru.catalog.in
+index 645edaa922..ccdc685037 100644
+--- a/catalog/systemd.ru.catalog.in
++++ b/catalog/systemd.ru.catalog.in
+@@ -227,7 +227,7 @@ Support: %SUPPORT_URL%
+ 
+ Процесс запуска юнита @UNIT@ был завершен.
+ 
+-Результат: @RESULT@.
++Результат: @JOB_RESULT@.
+ 
+ # Subject: Unit @UNIT@ has begun shutting down
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+@@ -253,7 +253,7 @@ Support: %SUPPORT_URL%
+ 
+ Произошел сбой юнита @UNIT@.
+ 
+-Результат: @RESULT@.
++Результат: @JOB_RESULT@.
+ 
+ # Subject: Unit @UNIT@ has begun with reloading its configuration
+ -- d34d037fff1847e6ae669a370e694725
+@@ -271,7 +271,7 @@ Support: %SUPPORT_URL%
+ 
+ Юнит @UNIT@ завершил процесс перечитывания своей конфигурации.
+ 
+-Результат: @RESULT@.
++Результат: @JOB_RESULT@.
+ 
+ # Subject: Process @EXECUTABLE@ could not be executed
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+diff --git a/catalog/systemd.sr.catalog.in b/catalog/systemd.sr.catalog.in
+index f5746715a4..7cb6546d43 100644
+--- a/catalog/systemd.sr.catalog.in
++++ b/catalog/systemd.sr.catalog.in
+@@ -158,7 +158,7 @@ Support: %SUPPORT_URL%
+ 
+ Јединица @UNIT@ је завршила са покретањем.
+ 
+-Исход покретања је @RESULT@.
++Исход покретања је @JOB_RESULT@.
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: Јединица @UNIT@ је почела са гашењем
+@@ -181,7 +181,7 @@ Support: %SUPPORT_URL%
+ 
+ Јединица @UNIT@ је пукла.
+ 
+-Исход је @RESULT@.
++Исход је @JOB_RESULT@.
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: Јединица @UNIT@ је почела са поновним учитавањем свог подешавања
+@@ -197,7 +197,7 @@ Support: %SUPPORT_URL%
+ 
+ Јединица @UNIT@ је завршила са поновним учитавањем свог подешавања
+ 
+-Исход је @RESULT@.
++Исход је @JOB_RESULT@.
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: Процес @EXECUTABLE@ није могао бити извршен
+diff --git a/catalog/systemd.zh_CN.catalog.in b/catalog/systemd.zh_CN.catalog.in
+index fa58448acf..d6ac2592b8 100644
+--- a/catalog/systemd.zh_CN.catalog.in
++++ b/catalog/systemd.zh_CN.catalog.in
+@@ -156,7 +156,7 @@ Support: %SUPPORT_URL%
+ 
+ @UNIT@ 单元已结束启动。
+ 
+-启动结果为“@RESULT@”。
++启动结果为“@JOB_RESULT@”。
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: @UNIT@ 单元已开始停止操作
+@@ -179,7 +179,7 @@ Support: %SUPPORT_URL%
+ 
+ @UNIT@ 单元已失败。
+ 
+-结果为“@RESULT@”。
++结果为“@JOB_RESULT@”。
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: @UNIT@ 单元已开始重新载入其配置
+@@ -195,7 +195,7 @@ Support: %SUPPORT_URL%
+ 
+ @UNIT@ 单元已结束配置重载入操作。
+ 
+-结果为“@RESULT@”。
++结果为“@JOB_RESULT@”。
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: 进程 @EXECUTABLE@ 无法执行
+diff --git a/catalog/systemd.zh_TW.catalog.in b/catalog/systemd.zh_TW.catalog.in
+index 17bd2bc9af..a468c2f6bf 100644
+--- a/catalog/systemd.zh_TW.catalog.in
++++ b/catalog/systemd.zh_TW.catalog.in
+@@ -160,7 +160,7 @@ Support: %SUPPORT_URL%
+ 
+ 單位 @UNIT@ 啟動已結束。
+ 
+-啟動結果為 @RESULT@。
++啟動結果為 @JOB_RESULT@。
+ 
+ -- de5b426a63be47a7b6ac3eaac82e2f6f
+ Subject: 單位 @UNIT@ 已開始關閉
+@@ -183,7 +183,7 @@ Support: %SUPPORT_URL%
+ 
+ 單位 @UNIT@ 已失敗。
+ 
+-結果為 @RESULT@。
++結果為 @JOB_RESULT@。
+ 
+ -- d34d037fff1847e6ae669a370e694725
+ Subject: 單位 @UNIT@ 已開始重新載入其設定
+@@ -199,7 +199,7 @@ Support: %SUPPORT_URL%
+ 
+ 單位 @UNIT@ 已結束重新載入其設定
+ 
+-結果為 @RESULT@。
++結果為 @JOB_RESULT@。
+ 
+ -- 641257651c1b4ec9a8624d7a40a9e1e7
+ Subject: 行程 @EXECUTABLE@ 無法執行

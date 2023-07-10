@@ -1,0 +1,59 @@
+From ac0def8fb2b51a17b7ef256c5c0edf786fffff2a Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Thu, 21 Feb 2019 18:03:32 +0900
+Subject: [PATCH] test-udev: add more tests for line continuation
+
+(cherry picked from commit 84a0819c9d89a2ddb195a5d975ae1fd5c62fde3c)
+
+Related: #1642728
+---
+ test/udev-test.pl | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index a5e1f8cda3..002fabd9fd 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1466,8 +1466,42 @@ TAG+="hoge1",\\
+ TAG+="hoge2",\\
+ # spaces before and after token are dropped
+   TAG+="hoge3",   \\
++\\
++ \\
+ TAG+="hoge4"
+ TAGS=="hoge1", TAGS=="hoge2", TAGS=="hoge3", TAGS=="hoge4", SYMLINK+="found"
++EOF
++        },
++        {
++                desc            => "continuations with empty line",
++                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
++                exp_name        => "found",
++                not_exp_name    => "bad",
++                rules           => <<EOF
++# empty line finishes continuation
++KERNEL=="sda", TAG+="foo" \\
++
++KERNEL=="sdb", TAG+="hoge"
++KERNEL=="sda", TAG+="aaa" \\
++KERNEL=="sdb", TAG+="bbb"
++TAGS=="foo", SYMLINK+="found"
++TAGS=="aaa", SYMLINK+="bad"
++EOF
++        },
++        {
++                desc            => "continuations with white only line",
++                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
++                exp_name        => "found",
++                not_exp_name    => "bad",
++                rules           => <<EOF
++# space only line finishes continuation
++KERNEL=="sda", TAG+="foo" \\
++   \t
++KERNEL=="sdb", TAG+="hoge"
++KERNEL=="sda", TAG+="aaa" \\
++KERNEL=="sdb", TAG+="bbb"
++TAGS=="foo", SYMLINK+="found"
++TAGS=="aaa", SYMLINK+="bad"
+ EOF
+         },
+ );

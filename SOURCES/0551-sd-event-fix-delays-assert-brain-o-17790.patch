@@ -1,0 +1,29 @@
+From 1aae57f763cacbdeb10647c627cf307f79ad00ca Mon Sep 17 00:00:00 2001
+From: Vito Caputo <vcaputo@pengaru.com>
+Date: Tue, 1 Dec 2020 00:26:54 -0800
+Subject: [PATCH] sd-event: fix delays assert brain-o (#17790)
+
+s/sizeof/ELEMENTSOF/
+
+Bug introduced in 34b87517749caa4142b19eb3c63bdf349fafbc49.
+
+(cherry picked from commit cb9d621ebbfa30bbd620c17e143daeb0d78c12f0)
+
+Related: #1819868
+---
+ src/libsystemd/sd-event/sd-event.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/libsystemd/sd-event/sd-event.c b/src/libsystemd/sd-event/sd-event.c
+index de9bb02059..9d42157206 100644
+--- a/src/libsystemd/sd-event/sd-event.c
++++ b/src/libsystemd/sd-event/sd-event.c
+@@ -3586,7 +3586,7 @@ _public_ int sd_event_run(sd_event *e, uint64_t timeout) {
+                 this_run = now(CLOCK_MONOTONIC);
+ 
+                 l = u64log2(this_run - e->last_run);
+-                assert(l < sizeof(e->delays));
++                assert(l < ELEMENTSOF(e->delays));
+                 e->delays[l]++;
+ 
+                 if (this_run - e->last_log >= 5*USEC_PER_SEC) {

@@ -1,0 +1,58 @@
+From ceacf935ac9f59bc08b5901f70f227958a2bcf52 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 28 May 2019 18:07:01 +0900
+Subject: [PATCH] journal: use cleanup attribute at one more place
+
+(cherry picked from commit 627df1dc42b68a74b0882b06366d1185b1a34332)
+
+Conflicts:
+	src/journal/journald-server.c
+
+Related: #1788085
+---
+ src/journal/journal-file.h    | 1 +
+ src/journal/journald-server.c | 9 ++++-----
+ 2 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/src/journal/journal-file.h b/src/journal/journal-file.h
+index cd8a48a364..6a44fd39d2 100644
+--- a/src/journal/journal-file.h
++++ b/src/journal/journal-file.h
+@@ -144,6 +144,7 @@ int journal_file_open(
+ int journal_file_set_offline(JournalFile *f, bool wait);
+ bool journal_file_is_offlining(JournalFile *f);
+ JournalFile* journal_file_close(JournalFile *j);
++DEFINE_TRIVIAL_CLEANUP_FUNC(JournalFile*, journal_file_close);
+ 
+ int journal_file_open_reliably(
+                 const char *fname,
+diff --git a/src/journal/journald-server.c b/src/journal/journald-server.c
+index 6250eab831..7632e2d9d0 100644
+--- a/src/journal/journald-server.c
++++ b/src/journal/journald-server.c
+@@ -253,8 +253,9 @@ static int open_journal(
+                 bool seal,
+                 JournalMetrics *metrics,
+                 JournalFile **ret) {
++
++        _cleanup_(journal_file_closep) JournalFile *f = NULL;
+         int r;
+-        JournalFile *f;
+ 
+         assert(s);
+         assert(fname);
+@@ -271,12 +272,10 @@ static int open_journal(
+                 return r;
+ 
+         r = journal_file_enable_post_change_timer(f, s->event, POST_CHANGE_TIMER_INTERVAL_USEC);
+-        if (r < 0) {
+-                (void) journal_file_close(f);
++        if (r < 0)
+                 return r;
+-        }
+ 
+-        *ret = f;
++        *ret = TAKE_PTR(f);
+         return r;
+ }
+ 

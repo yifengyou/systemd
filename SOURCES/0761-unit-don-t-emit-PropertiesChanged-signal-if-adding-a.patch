@@ -1,0 +1,62 @@
+From a46d3732a4f8baacf1be3e5e0ac152119fe26d4c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Renaud=20M=C3=A9trich?= <rmetrich@redhat.com>
+Date: Fri, 2 Oct 2020 17:30:35 +0200
+Subject: [PATCH] unit: don't emit PropertiesChanged signal if adding a
+ dependency to a unit is a no-op
+
+(cherry picked from commit 5177cb0a9add4ae568cff6e6f7c2b3c77760c343)
+
+Resolves: #1948480
+---
+ src/core/unit.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/unit.c b/src/core/unit.c
+index 68affa2c0e..e3e534ea2e 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -2818,6 +2818,9 @@ int unit_add_dependency(
+         };
+         Unit *original_u = u, *original_other = other;
+         int r;
++        /* Helper to know whether sending a notification is necessary or not:
++         * if the dependency is already there, no need to notify! */
++        bool noop = true;
+ 
+         assert(u);
+         assert(d >= 0 && d < _UNIT_DEPENDENCY_MAX);
+@@ -2842,24 +2845,33 @@ int unit_add_dependency(
+         r = unit_add_dependency_hashmap(u->dependencies + d, other, mask, 0);
+         if (r < 0)
+                 return r;
++        else if (r > 0)
++                noop = false;
+ 
+         if (inverse_table[d] != _UNIT_DEPENDENCY_INVALID && inverse_table[d] != d) {
+                 r = unit_add_dependency_hashmap(other->dependencies + inverse_table[d], u, 0, mask);
+                 if (r < 0)
+                         return r;
++                else if (r > 0)
++                        noop = false;
+         }
+ 
+         if (add_reference) {
+                 r = unit_add_dependency_hashmap(u->dependencies + UNIT_REFERENCES, other, mask, 0);
+                 if (r < 0)
+                         return r;
++                else if (r > 0)
++                        noop = false;
+ 
+                 r = unit_add_dependency_hashmap(other->dependencies + UNIT_REFERENCED_BY, u, 0, mask);
+                 if (r < 0)
+                         return r;
++                else if (r > 0)
++                        noop = false;
+         }
+ 
+-        unit_add_to_dbus_queue(u);
++        if (!noop)
++                unit_add_to_dbus_queue(u);
+         return 0;
+ }
+ 

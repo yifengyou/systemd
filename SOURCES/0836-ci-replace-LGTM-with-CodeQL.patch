@@ -1,0 +1,303 @@
+From 2b1dbcab1af1a22f3a46fa23aa551a7394673938 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Thu, 15 Sep 2022 15:29:23 +0200
+Subject: [PATCH] ci: replace LGTM with CodeQL
+
+As LGTM is going to be shut down by EOY, let's use CodeQL instead.
+
+This is loosely based on upstream's CodeQL configs with some minor
+tweaks to avoid backporting tons of unrelated commits.
+
+rhel-only
+Related: #2122499
+---
+ .github/codeql-config.yml                     | 12 ++++
+ .github/codeql-custom.qls                     | 44 ++++++++++++
+ .../PotentiallyDangerousFunction.ql           |  3 +
+ .../UninitializedVariableWithCleanup.ql       | 16 ++---
+ .github/codeql-queries/qlpack.yml             | 11 +++
+ .github/workflows/codeql.yml                  | 68 +++++++++++++++++++
+ .lgtm.yml                                     | 37 ----------
+ 7 files changed, 146 insertions(+), 45 deletions(-)
+ create mode 100644 .github/codeql-config.yml
+ create mode 100644 .github/codeql-custom.qls
+ rename {.lgtm/cpp-queries => .github/codeql-queries}/PotentiallyDangerousFunction.ql (93%)
+ rename {.lgtm/cpp-queries => .github/codeql-queries}/UninitializedVariableWithCleanup.ql (86%)
+ create mode 100644 .github/codeql-queries/qlpack.yml
+ create mode 100644 .github/workflows/codeql.yml
+ delete mode 100644 .lgtm.yml
+
+diff --git a/.github/codeql-config.yml b/.github/codeql-config.yml
+new file mode 100644
+index 0000000000..7c01d32caa
+--- /dev/null
++++ b/.github/codeql-config.yml
+@@ -0,0 +1,12 @@
++---
++# vi: ts=2 sw=2 et:
++# SPDX-License-Identifier: LGPL-2.1-or-later
++name: "CodeQL config"
++
++disable-default-queries: false
++
++queries:
++  - name: Enable possibly useful queries which are disabled by default
++    uses: ./.github/codeql-custom.qls
++  - name: systemd-specific CodeQL queries
++    uses: ./.github/codeql-queries/
+diff --git a/.github/codeql-custom.qls b/.github/codeql-custom.qls
+new file mode 100644
+index 0000000000..d35fbe3114
+--- /dev/null
++++ b/.github/codeql-custom.qls
+@@ -0,0 +1,44 @@
++---
++# vi: ts=2 sw=2 et syntax=yaml:
++# SPDX-License-Identifier: LGPL-2.1-or-later
++#
++# Note: it is not recommended to directly reference the respective queries from
++#       the github/codeql repository, so we have to "dance" around it using
++#       a custom QL suite
++# See:
++#   - https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#running-additional-queries
++#   - https://github.com/github/codeql-action/issues/430#issuecomment-806092120
++#   - https://codeql.github.com/docs/codeql-cli/creating-codeql-query-suites/
++
++# Note: the codeql/<lang>-queries pack name can be found in the CodeQL repo[0]
++#       in <lang>/ql/src/qlpack.yml. The respective codeql-suites are then
++#       under <lang>/ql/src/codeql-suites/.
++#
++# [0] https://github.com/github/codeql
++- import: codeql-suites/cpp-lgtm.qls
++  from: codeql/cpp-queries
++- import: codeql-suites/python-lgtm.qls
++  from: codeql/python-queries
++- include:
++    id:
++      - cpp/bad-strncpy-size
++      - cpp/declaration-hides-variable
++      - cpp/include-non-header
++      - cpp/inconsistent-null-check
++      - cpp/mistyped-function-arguments
++      - cpp/nested-loops-with-same-variable
++      - cpp/sizeof-side-effect
++      - cpp/suspicious-pointer-scaling
++      - cpp/suspicious-pointer-scaling-void
++      - cpp/suspicious-sizeof
++      - cpp/unsafe-strcat
++      - cpp/unsafe-strncat
++      - cpp/unsigned-difference-expression-compared-zero
++      - cpp/unused-local-variable
++    tags:
++      - "security"
++      - "correctness"
++    severity: "error"
++- exclude:
++    id:
++      - cpp/fixme-comment
+diff --git a/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql b/.github/codeql-queries/PotentiallyDangerousFunction.ql
+similarity index 93%
+rename from .lgtm/cpp-queries/PotentiallyDangerousFunction.ql
+rename to .github/codeql-queries/PotentiallyDangerousFunction.ql
+index 39e8dddd13..63fd14e75f 100644
+--- a/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
++++ b/.github/codeql-queries/PotentiallyDangerousFunction.ql
+@@ -46,6 +46,9 @@ predicate potentiallyDangerousFunction(Function f, string message) {
+   ) or (
+     f.getQualifiedName() = "accept" and
+     message = "Call to accept() is not O_CLOEXEC-safe. Use accept4() instead."
++  ) or (
++    f.getQualifiedName() = "dirname" and
++    message = "Call dirname() is icky. Use path_extract_directory() instead."
+   )
+ }
+ 
+diff --git a/.lgtm/cpp-queries/UninitializedVariableWithCleanup.ql b/.github/codeql-queries/UninitializedVariableWithCleanup.ql
+similarity index 86%
+rename from .lgtm/cpp-queries/UninitializedVariableWithCleanup.ql
+rename to .github/codeql-queries/UninitializedVariableWithCleanup.ql
+index 6b3b62f8bc..e514111f28 100644
+--- a/.lgtm/cpp-queries/UninitializedVariableWithCleanup.ql
++++ b/.github/codeql-queries/UninitializedVariableWithCleanup.ql
+@@ -50,16 +50,16 @@ class UninitialisedLocalReachability extends StackVariableReachability {
+    * fun(&x);
+    * puts(x);
+    *
+-   * `useOfVarActual()` won't treat this an an uninitialized read even if the callee
++   * `useOfVarActual()` won't treat this as an uninitialized read even if the callee
+    * doesn't modify the argument, however, `useOfVar()` will
+    */
+   override predicate isSink(ControlFlowNode node, StackVariable v) { useOfVar(v, node) }
+ 
+   override predicate isBarrier(ControlFlowNode node, StackVariable v) {
+-    // only report the _first_ possibly uninitialized use
++    /* only report the _first_ possibly uninitialized use */
+     useOfVar(v, node) or
+     (
+-      /* If there's an return statement somewhere between the variable declaration
++      /* If there's a return statement somewhere between the variable declaration
+        * and a possible definition, don't accept is as a valid initialization.
+        *
+        * E.g.:
+@@ -71,7 +71,7 @@ class UninitialisedLocalReachability extends StackVariableReachability {
+        * x = malloc(...);
+        *
+        * is not a valid initialization, since we might return from the function
+-       * _before_ the actual iniitialization (emphasis on _might_, since we
++       * _before_ the actual initialization (emphasis on _might_, since we
+        * don't know if the return statement might ever evaluate to true).
+        */
+       definitionBarrier(v, node) and
+@@ -92,14 +92,14 @@ predicate containsInlineAssembly(Function f) { exists(AsmStmt s | s.getEnclosing
+  * for this check to exclude them.
+  */
+ VariableAccess commonException() {
+-  // If the uninitialized use we've found is in a macro expansion, it's
+-  // typically something like va_start(), and we don't want to complain.
++  /* If the uninitialized use we've found is in a macro expansion, it's
++   * typically something like va_start(), and we don't want to complain. */
+   result.getParent().isInMacroExpansion()
+   or
+   result.getParent() instanceof BuiltInOperation
+   or
+-  // Finally, exclude functions that contain assembly blocks. It's
+-  // anyone's guess what happens in those.
++  /* Finally, exclude functions that contain assembly blocks. It's
++   * anyone's guess what happens in those. */
+   containsInlineAssembly(result.getEnclosingFunction())
+ }
+ 
+diff --git a/.github/codeql-queries/qlpack.yml b/.github/codeql-queries/qlpack.yml
+new file mode 100644
+index 0000000000..a1a2dec6d6
+--- /dev/null
++++ b/.github/codeql-queries/qlpack.yml
+@@ -0,0 +1,11 @@
++---
++# vi: ts=2 sw=2 et syntax=yaml:
++# SPDX-License-Identifier: LGPL-2.1-or-later
++
++library: false
++name: systemd/cpp-queries
++version: 0.0.1
++dependencies:
++  codeql/cpp-all: "*"
++  codeql/suite-helpers: "*"
++extractor: cpp
+diff --git a/.github/workflows/codeql.yml b/.github/workflows/codeql.yml
+new file mode 100644
+index 0000000000..c5426d5686
+--- /dev/null
++++ b/.github/workflows/codeql.yml
+@@ -0,0 +1,68 @@
++---
++# vi: ts=2 sw=2 et:
++# SPDX-License-Identifier: LGPL-2.1-or-later
++#
++name: "CodeQL"
++
++on:
++  pull_request:
++    branches:
++      - master
++      - rhel-*
++    paths:
++      - '**/meson.build'
++      - '.github/**/codeql*'
++      - 'src/**'
++      - 'test/**'
++      - 'tools/**'
++  push:
++    branches:
++      - master
++      - rhel-*
++
++permissions:
++  contents: read
++
++jobs:
++  analyze:
++    name: Analyze
++    runs-on: ubuntu-22.04
++    concurrency:
++      group: ${{ github.workflow }}-${{ matrix.language }}-${{ github.ref }}
++      cancel-in-progress: true
++    permissions:
++      actions: read
++      security-events: write
++
++    strategy:
++      fail-fast: false
++      matrix:
++        language: ['cpp', 'python']
++
++    steps:
++    - name: Checkout repository
++      uses: actions/checkout@v3
++
++    - name: Initialize CodeQL
++      uses: github/codeql-action/init@v2
++      with:
++        languages: ${{ matrix.language }}
++        config-file: ./.github/codeql-config.yml
++
++    - name: Install dependencies
++      if: matrix.language == 'cpp'
++      run: |
++        echo "deb-src http://archive.ubuntu.com/ubuntu/ $(lsb_release -cs) main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list
++        sudo apt-get -y update
++        sudo apt-get -y build-dep systemd
++        sudo apt-get -y install libfdisk-dev libpwquality-dev libqrencode-dev libssl-dev libxkbcommon-dev libzstd-dev
++
++    - name: Build
++      if: matrix.language == 'cpp'
++      run: |
++        # EL 8 systemd fails to build with newer gnu-efi (3.0.13 on Ubuntu Jammy ATTOW)
++        meson build -Dlibiptc=false -Dgnu-efi=false
++        ninja -C build -v
++
++    - name: Perform CodeQL Analysis
++      uses: github/codeql-action/analyze@v2
+diff --git a/.lgtm.yml b/.lgtm.yml
+deleted file mode 100644
+index fe93957b67..0000000000
+--- a/.lgtm.yml
++++ /dev/null
+@@ -1,37 +0,0 @@
+----
+-# vi: ts=2 sw=2 et:
+-
+-# Explicitly enable certain checks which are hidden by default
+-queries:
+-  - include: cpp/bad-strncpy-size
+-  - include: cpp/declaration-hides-variable
+-  - include: cpp/inconsistent-null-check
+-  - include: cpp/mistyped-function-arguments
+-  - include: cpp/nested-loops-with-same-variable
+-  - include: cpp/sizeof-side-effect
+-  - include: cpp/suspicious-pointer-scaling
+-  - include: cpp/suspicious-pointer-scaling-void
+-  - include: cpp/suspicious-sizeof
+-  - include: cpp/unsafe-strcat
+-  - include: cpp/unsafe-strncat
+-  - include: cpp/unsigned-difference-expression-compared-zero
+-  - include: cpp/unused-local-variable
+-  - include:
+-      tags:
+-        - "security"
+-        - "correctness"
+-      severity: "error"
+-
+-extraction:
+-  cpp:
+-    prepare:
+-      packages:
+-        - python3-pip
+-        - python3-setuptools
+-        - python3-wheel
+-    after_prepare:
+-      - pip3 install meson
+-      - export PATH="$HOME/.local/bin/:$PATH"
+-  python:
+-    python_setup:
+-      version: 3

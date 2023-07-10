@@ -1,0 +1,37 @@
+From e8904b5b7957bfc9328f1ab8b6851c7b0d8920c9 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 23 Nov 2020 11:39:40 +0100
+Subject: [PATCH] sd-event: mention that two debug logged events are ignored
+
+(cherry picked from commit f80a5d6a86dc2346f406ee086ba179879afaab70)
+
+Related: #1819868
+---
+ src/libsystemd/sd-event/sd-event.c | 7 ++-----
+ 1 file changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/src/libsystemd/sd-event/sd-event.c b/src/libsystemd/sd-event/sd-event.c
+index df5ed0dce8..0f507f18d8 100644
+--- a/src/libsystemd/sd-event/sd-event.c
++++ b/src/libsystemd/sd-event/sd-event.c
+@@ -596,8 +596,6 @@ static bool event_pid_changed(sd_event *e) {
+ }
+ 
+ static void source_io_unregister(sd_event_source *s) {
+-        int r;
+-
+         assert(s);
+         assert(s->type == SOURCE_IO);
+ 
+@@ -607,9 +605,8 @@ static void source_io_unregister(sd_event_source *s) {
+         if (!s->io.registered)
+                 return;
+ 
+-        r = epoll_ctl(s->event->epoll_fd, EPOLL_CTL_DEL, s->io.fd, NULL);
+-        if (r < 0)
+-                log_debug_errno(errno, "Failed to remove source %s (type %s) from epoll: %m",
++        if (epoll_ctl(s->event->epoll_fd, EPOLL_CTL_DEL, s->io.fd, NULL) < 0)
++                log_debug_errno(errno, "Failed to remove source %s (type %s) from epoll, ignoring: %m",
+                                 strna(s->description), event_source_type_to_string(s->type));
+ 
+         s->io.registered = false;

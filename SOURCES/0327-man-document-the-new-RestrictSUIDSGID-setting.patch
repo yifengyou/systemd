@@ -1,0 +1,83 @@
+From 797ebaa8240aefc39de3d1713468b221c83ed3f5 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 20 Mar 2019 19:45:32 +0100
+Subject: [PATCH] man: document the new RestrictSUIDSGID= setting
+
+(cherry picked from commit 7445db6eb70e8d5989f481d0c5a08ace7047ae5b)
+Related: #1687512
+---
+ doc/TRANSIENT-SETTINGS.md |  1 +
+ man/systemd.exec.xml      | 41 +++++++++++++++++++++++++++------------
+ 2 files changed, 30 insertions(+), 12 deletions(-)
+
+diff --git a/doc/TRANSIENT-SETTINGS.md b/doc/TRANSIENT-SETTINGS.md
+index 0ea444b133..c2b5c0dcce 100644
+--- a/doc/TRANSIENT-SETTINGS.md
++++ b/doc/TRANSIENT-SETTINGS.md
+@@ -149,6 +149,7 @@ All execution-related settings are available for transient units.
+ ✓ MemoryDenyWriteExecute=
+ ✓ RestrictNamespaces=
+ ✓ RestrictRealtime=
++✓ RestrictSUIDSGID=
+ ✓ RestrictAddressFamilies=
+ ✓ LockPersonality=
+ ✓ LimitCPU=
+diff --git a/man/systemd.exec.xml b/man/systemd.exec.xml
+index 87fb8b34f4..45ed1864f8 100644
+--- a/man/systemd.exec.xml
++++ b/man/systemd.exec.xml
+@@ -348,18 +348,19 @@ CapabilityBoundingSet=~CAP_B CAP_C</programlisting>
+       <varlistentry>
+         <term><varname>NoNewPrivileges=</varname></term>
+ 
+-        <listitem><para>Takes a boolean argument. If true, ensures that the service process and all its children can
+-        never gain new privileges through <function>execve()</function> (e.g. via setuid or setgid bits, or filesystem
+-        capabilities). This is the simplest and most effective way to ensure that a process and its children can never
+-        elevate privileges again. Defaults to false, but certain settings override this and ignore the value of this
+-        setting.  This is the case when <varname>SystemCallFilter=</varname>,
+-        <varname>SystemCallArchitectures=</varname>, <varname>RestrictAddressFamilies=</varname>,
+-        <varname>RestrictNamespaces=</varname>, <varname>PrivateDevices=</varname>,
+-        <varname>ProtectKernelTunables=</varname>, <varname>ProtectKernelModules=</varname>,
+-        <varname>MemoryDenyWriteExecute=</varname>, <varname>RestrictRealtime=</varname>, or
+-        <varname>LockPersonality=</varname> are specified. Note that even if this setting is overridden by them,
+-        <command>systemctl show</command> shows the original value of this setting. Also see
+-        <ulink url="https://www.kernel.org/doc/html/latest/userspace-api/no_new_privs.html">No New Privileges
++        <listitem><para>Takes a boolean argument. If true, ensures that the service process and all its
++        children can never gain new privileges through <function>execve()</function> (e.g. via setuid or
++        setgid bits, or filesystem capabilities). This is the simplest and most effective way to ensure that
++        a process and its children can never elevate privileges again. Defaults to false, but certain
++        settings override this and ignore the value of this setting.  This is the case when
++        <varname>SystemCallFilter=</varname>, <varname>SystemCallArchitectures=</varname>,
++        <varname>RestrictAddressFamilies=</varname>, <varname>RestrictNamespaces=</varname>,
++        <varname>PrivateDevices=</varname>, <varname>ProtectKernelTunables=</varname>,
++        <varname>ProtectKernelModules=</varname>, <varname>MemoryDenyWriteExecute=</varname>,
++        <varname>RestrictRealtime=</varname>, <varname>RestrictSUIDSGID=</varname> or
++        <varname>LockPersonality=</varname> are specified. Note that even if this setting is overridden by
++        them, <command>systemctl show</command> shows the original value of this setting. Also see <ulink
++        url="https://www.kernel.org/doc/html/latest/userspace-api/no_new_privs.html">No New Privileges
+         Flag</ulink>.  </para></listitem>
+       </varlistentry>
+ 
+@@ -1274,6 +1275,22 @@ RestrictNamespaces=~cgroup net</programlisting>
+         that actually require them. Defaults to off.</para></listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>RestrictSUIDSGID=</varname></term>
++
++        <listitem><para>Takes a boolean argument. If set, any attempts to set the set-user-ID (SUID) or
++        set-group-ID (SGID) bits on files or directories will be denied (for details on these bits see
++        <citerefentry
++        project='man-pages'><refentrytitle>inode</refentrytitle><manvolnum>7</manvolnum></citerefentry>). If
++        running in user mode, or in system mode, but without the <constant>CAP_SYS_ADMIN</constant>
++        capability (e.g. setting <varname>User=</varname>), <varname>NoNewPrivileges=yes</varname> is
++        implied. As the SUID/SGID bits are mechanisms to elevate privileges, and allows users to acquire the
++        identity of other users, it is recommended to restrict creation of SUID/SGID files to the few
++        programs that actually require them. Note that this restricts marking of any type of file system
++        object with these bits, including both regular files and directories (where the SGID is a different
++        meaning than for files, see documentation). Defaults to off.</para></listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>RemoveIPC=</varname></term>
+ 

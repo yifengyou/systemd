@@ -1,0 +1,57 @@
+From f60e89ea4c38c11a9d0c1e642c0a78faa32aca56 Mon Sep 17 00:00:00 2001
+From: Joerg Steffens <joerg.steffens@bareos.com>
+Date: Tue, 21 Nov 2017 12:21:49 +0100
+Subject: [PATCH] udev-rules: make tape-changers also apprear in
+ /dev/tape/by-path/
+
+It is important to be able to access tape changer ("Medium Changers") by
+persistant name.
+While tape devices can be accessed via /dev/tape/by-id/ and
+/dev/tape/by-path/, tape-changers could only be accessed by
+/dev/tape/by-id/.
+However, in some cases, especially when accessing Amazon Webservice
+Storage Gateway VTLs (or accessing iSCSI VTLs in general?) this does not
+work, as all tape devices and the tape changer have the same ENV{ID_SERIAL}.
+The results is, that only the last device is available in
+/dev/tape/by-id/, as the former devices have been overwritten.
+
+As this behavior is hard to change without breaking consistentcy,
+this additional device in /dev/tape/by-path/ can be used to access the medium changes.
+The tape devices can also be accessed by this path.
+
+The content of the directory will now look like:
+
+  # SCSI tape device, rewind (unchanged)
+  /dev/tape/by-path/$env{ID_PATH} -> ../../st*
+
+  # SCSI tape device, no-rewind (unchanged)
+  /dev/tape/by-path/$env{ID_PATH}-nst -> ../../nst*
+
+  # SCSI tape changer device (newly added)
+  /dev/tape/by-path/$env{ID_PATH}-changer -> ../../sg*
+
+Tape devices and tape changer have different ID_PATHs.
+SCSI tape changer get the suffix "-changer"
+to make them better distinguishable from tape devices.
+
+(cherry picked from commit 7f8ddf96a25162f06bd94a684cf700c128d18142)
+
+Resolves: #1820112
+---
+ rules/60-persistent-storage-tape.rules | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/rules/60-persistent-storage-tape.rules b/rules/60-persistent-storage-tape.rules
+index b604864ee8..0575f308df 100644
+--- a/rules/60-persistent-storage-tape.rules
++++ b/rules/60-persistent-storage-tape.rules
+@@ -9,6 +9,9 @@ ENV{UDEV_DISABLE_PERSISTENT_STORAGE_RULES_FLAG}=="1", GOTO="persistent_storage_t
+ SUBSYSTEM=="scsi_generic", SUBSYSTEMS=="scsi", ATTRS{type}=="8", IMPORT{program}="scsi_id --sg-version=3 --export --whitelisted -d $devnode", \
+   SYMLINK+="tape/by-id/scsi-$env{ID_SERIAL}"
+ 
++SUBSYSTEM=="scsi_generic", SUBSYSTEMS=="scsi", ATTRS{type}=="8", IMPORT{builtin}="path_id", \
++  SYMLINK+="tape/by-path/$env{ID_PATH}-changer"
++
+ SUBSYSTEM!="scsi_tape", GOTO="persistent_storage_tape_end"
+ 
+ KERNEL=="st*[0-9]|nst*[0-9]", ATTRS{ieee1394_id}=="?*", ENV{ID_SERIAL}="$attr{ieee1394_id}", ENV{ID_BUS}="ieee1394"

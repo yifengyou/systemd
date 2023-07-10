@@ -1,0 +1,186 @@
+From d6210c3d053d70175d72ed1d1719497eed76000b Mon Sep 17 00:00:00 2001
+From: Jan Synacek <jsynacek@redhat.com>
+Date: Thu, 17 Oct 2019 09:37:35 +0200
+Subject: [PATCH] udev: introduce CONST key name
+
+Currently, there is no way to match against system-wide constants, such
+as architecture or virtualization type, without forking helper binaries.
+That potentially results in a huge number of spawned processes which
+output always the same answer.
+
+This patch introduces a special CONST keyword which takes a hard-coded
+string as its key and returns a value assigned to that key. Currently
+implemented are CONST{arch} and CONST{virt}, which can be used to match
+against the system's architecture and virtualization type.
+
+(based on commit 4801d8afe2ff1c1c075c9f0bc5631612172e0bb7)
+
+Resolves: #1762679
+---
+ man/udev.xml              | 26 ++++++++++++++++++++++++++
+ rules/40-redhat.rules     |  6 +++---
+ src/udev/udev-rules.c     | 32 ++++++++++++++++++++++++++++++++
+ test/rule-syntax-check.py |  2 +-
+ 4 files changed, 62 insertions(+), 4 deletions(-)
+
+diff --git a/man/udev.xml b/man/udev.xml
+index bdf901a8f0..8c1eb41787 100644
+--- a/man/udev.xml
++++ b/man/udev.xml
+@@ -236,6 +236,32 @@
+           </listitem>
+         </varlistentry>
+ 
++        <varlistentry>
++          <term><varname>CONST{<replaceable>key</replaceable>}</varname></term>
++          <listitem>
++            <para>Match against a system-wide constant. Supported keys are:</para>
++            <variablelist>
++              <varlistentry>
++                <term><literal>arch</literal></term>
++                <listitem>
++                  <para>System's architecture. See <option>ConditionArchitecture=</option> in
++                  <citerefentry><refentrytitle>systemd.unit</refentrytitle><manvolnum>5</manvolnum></citerefentry>
++                  for possible values.</para>
++                </listitem>
++              </varlistentry>
++              <varlistentry>
++                <term><literal>virt</literal></term>
++                <listitem>
++                  <para>System's virtualization environment. See
++                  <citerefentry><refentrytitle>systemd-detect-virt</refentrytitle><manvolnum>1</manvolnum></citerefentry>
++                  for possible values.</para>
++                </listitem>
++              </varlistentry>
++            </variablelist>
++            <para>Unknown keys will never match.</para>
++          </listitem>
++        </varlistentry>
++
+         <varlistentry>
+           <term><varname>TAG</varname></term>
+           <listitem>
+diff --git a/rules/40-redhat.rules b/rules/40-redhat.rules
+index fadc6e59f1..3c95cd2df0 100644
+--- a/rules/40-redhat.rules
++++ b/rules/40-redhat.rules
+@@ -6,11 +6,11 @@ SUBSYSTEM=="cpu", ACTION=="add", TEST=="online", ATTR{online}=="0", ATTR{online}
+ # Memory hotadd request
+ SUBSYSTEM!="memory", GOTO="memory_hotplug_end"
+ ACTION!="add", GOTO="memory_hotplug_end"
+-PROGRAM="/bin/uname -p", RESULT=="s390*", GOTO="memory_hotplug_end"
+-PROGRAM="/bin/uname -p", RESULT=="ppc64*", GOTO="memory_hotplug_end"
++CONST{arch}=="s390*", GOTO="memory_hotplug_end"
++CONST{arch}=="ppc64*", GOTO="memory_hotplug_end"
+ 
+ ENV{.state}="online"
+-PROGRAM="/bin/systemd-detect-virt", RESULT=="none", ENV{.state}="online_movable"
++CONST{virt}=="none", ENV{.state}="online_movable"
+ ATTR{state}=="offline", ATTR{state}="$env{.state}"
+ 
+ LABEL="memory_hotplug_end"
+diff --git a/src/udev/udev-rules.c b/src/udev/udev-rules.c
+index 58af863f3d..a246cbe67e 100644
+--- a/src/udev/udev-rules.c
++++ b/src/udev/udev-rules.c
+@@ -17,6 +17,7 @@
+ #include <unistd.h>
+ 
+ #include "alloc-util.h"
++#include "architecture.h"
+ #include "conf-files.h"
+ #include "dirent-util.h"
+ #include "escape.h"
+@@ -34,6 +35,7 @@
+ #include "udev.h"
+ #include "user-util.h"
+ #include "util.h"
++#include "virt.h"
+ 
+ #define PREALLOC_TOKEN          2048
+ 
+@@ -123,6 +125,7 @@ enum token_type {
+         TK_M_DEVLINK,                   /* val */
+         TK_M_NAME,                      /* val */
+         TK_M_ENV,                       /* val, attr */
++        TK_M_CONST,                     /* val, attr */
+         TK_M_TAG,                       /* val */
+         TK_M_SUBSYSTEM,                 /* val */
+         TK_M_DRIVER,                    /* val */
+@@ -259,6 +262,7 @@ static const char *token_str(enum token_type type) {
+                 [TK_M_DEVLINK] =                "M DEVLINK",
+                 [TK_M_NAME] =                   "M NAME",
+                 [TK_M_ENV] =                    "M ENV",
++                [TK_M_CONST] =                  "M CONST",
+                 [TK_M_TAG] =                    "M TAG",
+                 [TK_M_SUBSYSTEM] =              "M SUBSYSTEM",
+                 [TK_M_DRIVER] =                 "M DRIVER",
+@@ -370,6 +374,7 @@ static void dump_token(struct udev_rules *rules, struct token *token) {
+         case TK_M_SYSCTL:
+         case TK_M_ATTRS:
+         case TK_M_ENV:
++        case TK_M_CONST:
+         case TK_A_ATTR:
+         case TK_A_SYSCTL:
+         case TK_A_ENV:
+@@ -903,6 +908,7 @@ static void rule_add_key(struct rule_tmp *rule_tmp, enum token_type type,
+                 token->key.builtin_cmd = *(enum udev_builtin_cmd *)data;
+                 break;
+         case TK_M_ENV:
++        case TK_M_CONST:
+         case TK_M_ATTR:
+         case TK_M_SYSCTL:
+         case TK_M_ATTRS:
+@@ -1226,6 +1232,17 @@ static void add_rule(struct udev_rules *rules, char *line,
+                                 rule_add_key(&rule_tmp, TK_A_ENV, op, value, attr);
+                         }
+ 
++                } else if (startswith(key, "CONST{")) {
++                        attr = get_key_attribute(rules->udev, key + STRLEN("CONST"));
++                        if (attr == NULL || !STR_IN_SET(attr, "arch", "virt"))
++                                LOG_AND_RETURN("error parsing %s attribute", "CONST");
++
++                        if (op == OP_REMOVE)
++                                LOG_AND_RETURN("invalid %s operation", "CONST");
++
++                        if (op < OP_MATCH_MAX)
++                                rule_add_key(&rule_tmp, TK_M_CONST, op, value, attr);
++
+                 } else if (streq(key, "TAG")) {
+                         if (op < OP_MATCH_MAX)
+                                 rule_add_key(&rule_tmp, TK_M_TAG, op, value, NULL);
+@@ -1855,6 +1872,21 @@ void udev_rules_apply_to_event(struct udev_rules *rules,
+                                 goto nomatch;
+                         break;
+                 }
++                case TK_M_CONST: {
++                        const char *key_name = rules_str(rules, cur->key.attr_off);
++                        const char *value = NULL;
++
++                        if (streq(key_name, "arch")) {
++                                value = architecture_to_string(uname_architecture());
++                        } else if (streq(key_name, "virt")) {
++                                value = virtualization_to_string(detect_virtualization());
++                        } else
++                                assert_not_reached("Invalid CONST key");
++
++                        if (match_key(rules, cur, value))
++                                goto nomatch;
++                        break;
++                }
+                 case TK_M_TAG: {
+                         struct udev_list_entry *list_entry;
+                         bool match = false;
+diff --git a/test/rule-syntax-check.py b/test/rule-syntax-check.py
+index c7c0a1a656..6e59f421f5 100755
+--- a/test/rule-syntax-check.py
++++ b/test/rule-syntax-check.py
+@@ -19,7 +19,7 @@ quoted_string_re = r'"(?:[^\\"]|\\.)*"'
+ no_args_tests = re.compile(r'(ACTION|DEVPATH|KERNELS?|NAME|SYMLINK|SUBSYSTEMS?|DRIVERS?|TAG|PROGRAM|RESULT|TEST)\s*(?:=|!)=\s*' + quoted_string_re + '$')
+ # PROGRAM can also be specified as an assignment.
+ program_assign = re.compile(r'PROGRAM\s*=\s*' + quoted_string_re + '$')
+-args_tests = re.compile(r'(ATTRS?|ENV|TEST){([a-zA-Z0-9/_.*%-]+)}\s*(?:=|!)=\s*' + quoted_string_re + '$')
++args_tests = re.compile(r'(ATTRS?|ENV|CONST|TEST){([a-zA-Z0-9/_.*%-]+)}\s*(?:=|!)=\s*' + quoted_string_re + '$')
+ no_args_assign = re.compile(r'(NAME|SYMLINK|OWNER|GROUP|MODE|TAG|RUN|LABEL|GOTO|WAIT_FOR|OPTIONS|IMPORT)\s*(?:\+=|:=|=)\s*' + quoted_string_re + '$')
+ args_assign = re.compile(r'(ATTR|ENV|IMPORT|RUN){([a-zA-Z0-9/_.*%-]+)}\s*(=|\+=)\s*' + quoted_string_re + '$')
+ # Find comma-separated groups, but allow commas that are inside quoted strings.

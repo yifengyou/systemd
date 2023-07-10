@@ -1,0 +1,26 @@
+From 07b154fbc817e93f58c597644570a633c38d1c72 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Fri, 15 Jan 2021 12:51:02 +0100
+Subject: [PATCH] ci: PowerTools repo was renamed to powertools in RHEL 8.3
+
+See: https://wiki.centos.org/Manuals/ReleaseNotes/CentOS8.2011#Yum_repo_file_and_repoid_changes
+
+rhel-only
+Related: #1871827
+---
+ ci/travis-centos-rhel8.sh | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ci/travis-centos-rhel8.sh b/ci/travis-centos-rhel8.sh
+index cd0857fd29..43e2cb2585 100755
+--- a/ci/travis-centos-rhel8.sh
++++ b/ci/travis-centos-rhel8.sh
+@@ -95,7 +95,7 @@ for phase in "${PHASES[@]}"; do
+             # Upgrade the container to get the most recent environment
+             $DOCKER_EXEC dnf -y upgrade
+             # Install systemd's build dependencies
+-            $DOCKER_EXEC dnf -q -y --enablerepo "PowerTools" builddep systemd
++            $DOCKER_EXEC dnf -q -y --enablerepo "powertools" builddep systemd
+             ;;
+         RUN)
+             info "Run phase"

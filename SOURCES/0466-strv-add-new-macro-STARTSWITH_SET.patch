@@ -1,0 +1,75 @@
+From 50b103a982dfd6f1b2bf98bbc98a8063fa153e89 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 23 Nov 2018 16:27:15 +0100
+Subject: [PATCH] strv: add new macro STARTSWITH_SET()
+
+This is to startswith() what PATH_STARTSWITH_SET() is to
+path_startswith().
+
+Or in other words, checks if the specified string has any of the listed
+prefixes, and if so, returns the remainder of the string.
+
+(cherry picked from commit 52f1552073047195d51901f7e5a5a4fa3189034e)
+
+Related: #1848373
+---
+ src/basic/strv.h     | 12 ++++++++++++
+ src/test/test-strv.c | 15 +++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/src/basic/strv.h b/src/basic/strv.h
+index 51d03db940..c1e4c973b6 100644
+--- a/src/basic/strv.h
++++ b/src/basic/strv.h
+@@ -136,6 +136,18 @@ void strv_print(char **l);
+                 _x && strv_contains(STRV_MAKE(__VA_ARGS__), _x); \
+         })
+ 
++#define STARTSWITH_SET(p, ...)                                  \
++        ({                                                      \
++                const char *_p = (p);                           \
++                char  *_found = NULL, **_i;                     \
++                STRV_FOREACH(_i, STRV_MAKE(__VA_ARGS__)) {      \
++                        _found = startswith(_p, *_i);           \
++                        if (_found)                             \
++                                break;                          \
++                }                                               \
++                _found;                                         \
++        })
++
+ #define FOREACH_STRING(x, ...)                               \
+         for (char **_l = ({                                  \
+                 char **_ll = STRV_MAKE(__VA_ARGS__);         \
+diff --git a/src/test/test-strv.c b/src/test/test-strv.c
+index 1c192239a2..79d999d3ed 100644
+--- a/src/test/test-strv.c
++++ b/src/test/test-strv.c
+@@ -56,6 +56,20 @@ static void test_strptr_in_set(void) {
+         assert_se(!STRPTR_IN_SET(NULL, NULL));
+ }
+ 
++static void test_startswith_set(void) {
++        assert_se(!STARTSWITH_SET("foo", "bar", "baz", "waldo"));
++        assert_se(!STARTSWITH_SET("foo", "bar"));
++
++        assert_se(STARTSWITH_SET("abc", "a", "ab", "abc"));
++        assert_se(STARTSWITH_SET("abc", "ax", "ab", "abc"));
++        assert_se(STARTSWITH_SET("abc", "ax", "abx", "abc"));
++        assert_se(!STARTSWITH_SET("abc", "ax", "abx", "abcx"));
++
++        assert_se(streq_ptr(STARTSWITH_SET("foobar", "hhh", "kkk", "foo", "zzz"), "bar"));
++        assert_se(streq_ptr(STARTSWITH_SET("foobar", "hhh", "kkk", "", "zzz"), "foobar"));
++        assert_se(streq_ptr(STARTSWITH_SET("", "hhh", "kkk", "zzz", ""), ""));
++}
++
+ static const char* const input_table_multiple[] = {
+         "one",
+         "two",
+@@ -700,6 +714,7 @@ int main(int argc, char *argv[]) {
+         test_specifier_printf();
+         test_str_in_set();
+         test_strptr_in_set();
++        test_startswith_set();
+         test_strv_foreach();
+         test_strv_foreach_backwards();
+         test_strv_foreach_pair();

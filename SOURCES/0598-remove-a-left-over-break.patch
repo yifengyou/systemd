@@ -1,0 +1,29 @@
+From 5944138a54017fc8f1f4c878a1eea96ea18736c4 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Fri, 25 Jun 2021 10:42:53 +0200
+Subject: [PATCH] remove a left-over break
+
+By the "same logic as above...", we want to continue to fallback here,
+but the break prohibits that.
+
+This is a follow-up for ee1aa61c4710ae567a2b844e0f0bb8cb0456ab8c .
+
+(cherry picked from commit 99df1cb6f50875db513a5b45f18191460a150f3d)
+
+Related: #1970860
+---
+ src/basic/copy.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/src/basic/copy.c b/src/basic/copy.c
+index a48c42c5c6..1a0db29ac9 100644
+--- a/src/basic/copy.c
++++ b/src/basic/copy.c
+@@ -218,7 +218,6 @@ int copy_bytes_full(
+                                         break;
+ 
+                                 try_sendfile = try_splice = false; /* same logic as above for copy_file_range() */
+-                                break;
+                         } else
+                                 /* Success! */
+                                 goto next;

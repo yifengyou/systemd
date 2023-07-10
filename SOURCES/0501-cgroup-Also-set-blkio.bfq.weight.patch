@@ -1,0 +1,37 @@
+From af9f03ba48dd75be8c6a923f70da9804b3a3a2c3 Mon Sep 17 00:00:00 2001
+From: Pavel Hrdina <phrdina@redhat.com>
+Date: Wed, 25 Nov 2020 09:05:36 +0100
+Subject: [PATCH] cgroup: Also set blkio.bfq.weight
+
+Commit [1] added a workaround when unified cgroups are used but missed
+legacy cgroups where there is the same issue.
+
+[1] <https://github.com/systemd/systemd/commit/2dbc45aea747f25cc1c3848fded2ec0062f96bcf>
+
+Signed-off-by: Pavel Hrdina <phrdina@redhat.com>
+(cherry picked from commit 35e7a62ca32a30169a94693b831e53c832251984)
+
+Resolves: #1657810
+---
+ src/core/cgroup.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index f1ce070f9a..71e30fd4db 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -1063,6 +1063,14 @@ static void cgroup_context_apply(
+                                 log_unit_full(u, IN_SET(r, -ENOENT, -EROFS, -EACCES) ? LOG_DEBUG : LOG_WARNING, r,
+                                               "Failed to set blkio.weight: %m");
+ 
++                        /* FIXME: drop this when distro kernels properly support BFQ through "blkio.weight"
++                         * See also: https://github.com/systemd/systemd/pull/13335 */
++                        xsprintf(buf, "%" PRIu64 "\n", weight);
++                        r = cg_set_attribute("blkio", path, "blkio.bfq.weight", buf);
++                        if (r < 0)
++                                log_unit_full(u, IN_SET(r, -ENOENT, -EROFS, -EACCES) ? LOG_DEBUG : LOG_WARNING, r,
++                                              "Failed to set blkio.bfq.weight: %m");
++
+                         if (has_io) {
+                                 CGroupIODeviceWeight *w;
+ 

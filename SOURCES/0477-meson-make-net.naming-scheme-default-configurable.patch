@@ -1,0 +1,188 @@
+From 8c263758fe196624005f19bd6f46d63e3841c5be Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 11 Dec 2018 23:28:29 +0100
+Subject: [PATCH] meson: make net.naming-scheme= default configurable
+
+This is useful for distributions, where the stability of interface names should
+be preseved after an upgrade of systemd. So when some specific release of the
+distro is made available, systemd defaults to the latest & greatest naming
+scheme, and subsequent updates set the same default. This default may still
+be overriden through the kernel and env var options.
+
+A special value "latest" is also allowed. Without a specific name, it is harder
+to verride from meson. In case of 'combo' options, meson reads the default
+during the initial configuration, and "remembers" this choice. When systemd is
+updated, old build/ directories could keep the old default, which would be
+annoying. Hence, "latest" is introduced to make it explicit, yet follow the
+upstream. This is actually useful for the user too, because it may be used
+as an override, without having to actually specify a version.
+
+(cherry picked from commit 06da5c63dd697ea4087e76c6d809b60b5780b87c)
+
+Related: #1827462
+
+[msekleta: note that our default is not latest but rhel-8.0]
+---
+ doc/ENVIRONMENT.md             | 15 +++++++-------
+ man/systemd-udevd.service.xml  | 24 ++++++++++++---------
+ meson.build                    |  4 ++++
+ meson_options.txt              |  3 +++
+ src/udev/udev-builtin-net_id.c | 38 ++++++++++++++++++++--------------
+ 5 files changed, 51 insertions(+), 33 deletions(-)
+
+diff --git a/doc/ENVIRONMENT.md b/doc/ENVIRONMENT.md
+index 1a4aa01ef4..0e763b6302 100644
+--- a/doc/ENVIRONMENT.md
++++ b/doc/ENVIRONMENT.md
+@@ -77,13 +77,14 @@ systemd-logind:
+   for it.
+ 
+ * `$NET_NAMING_SCHEME=` – if set, takes a network naming scheme (i.e. one of
+-  v238, v239, v240 …) as parameter. If specified udev's net_id builtin will
+-  follow the specified naming scheme when determining stable network interface
+-  names. This may be used to revert to naming schemes of older udev versions,
+-  in order to provide more stable naming across updates. This environment
+-  variable takes precedence over the kernel command line option
+-  `net.naming-scheme=`, except if the value is prefixed with `:` in which case
+-  the kernel command line option takes precedence, if it is specified as well.
++  "rhel-8.0", "rhel-8.1", "rhel-8.2"…, or the special value "latest") as
++  parameter. If specified udev's net_id builtin will follow the specified
++  naming scheme when determining stable network interface names. This may be
++  used to revert to naming schemes of older udev versions, in order to provide
++  more stable naming across updates. This environment variable takes precedence
++  over the kernel command line option `net.naming-scheme=`, except if the value
++  is prefixed with `:` in which case the kernel command line option takes
++  precedence, if it is specified as well.
+ 
+ installed systemd tests:
+ 
+diff --git a/man/systemd-udevd.service.xml b/man/systemd-udevd.service.xml
+index 6449103441..b738591c93 100644
+--- a/man/systemd-udevd.service.xml
++++ b/man/systemd-udevd.service.xml
+@@ -174,16 +174,20 @@
+         <term><varname>net.naming-scheme=</varname></term>
+         <listitem>
+           <para>Network interfaces are renamed to give them predictable names when possible (unless
+-          <varname>net.ifnames=0</varname> is specified, see above). The names are derived from various device metadata
+-          fields. Newer versions of <filename>systemd-udevd.service</filename> take more of these fields into account,
+-          improving (and thus possibly changing) the names used for the same devices. With this kernel command line
+-          option it is possible to pick a specific version of this algorithm. It expects a naming scheme identifier as
+-          argument. Currently the following identifiers are known: <literal>v238</literal>, <literal>v239</literal>,
+-          <literal>v240</literal> which each implement the naming scheme that was the default in the indicated systemd
+-          version. Note that selecting a specific scheme is not sufficient to fully stabilize interface naming: the
+-          naming is generally derived from driver attributes exposed by the kernel. As the kernel is updated,
+-          previously missing attributes <filename>systemd-udevd.service</filename> is checking might appear, which
+-          affects older name derivation algorithms, too.</para>
++          <varname>net.ifnames=0</varname> is specified, see above). The names are derived from various
++          device metadata fields. Newer versions of <filename>systemd-udevd.service</filename> take more of
++          these fields into account, improving (and thus possibly changing) the names used for the same
++          devices. With this kernel command line option it is possible to pick a specific version of this
++          algorithm. It expects a naming scheme identifier as argument. Currently the following identifiers
++          are known: <literal>rhel-8.0</literal>, <literal>rhel-8.1</literal>, <literal>rhel-8.2</literal>,
++          <literal>rhel-8.3</literal> which each implement the naming scheme that was the default in the
++          indicated Red Hat Enterprise Linux minor version. In addition, <literal>latest</literal> may be
++          used to designate the latest scheme known (to this particular version of
++          <filename>systemd-udevd.service</filename>).</para>
++          <para>Note that selecting a specific scheme is not sufficient to fully stabilize interface naming:
++          the naming is generally derived from driver attributes exposed by the kernel. As the kernel is
++          updated, previously missing attributes <filename>systemd-udevd.service</filename> is checking might
++          appear, which affects older name derivation algorithms, too.</para>
+         </listitem>
+       </varlistentry>
+     </variablelist>
+diff --git a/meson.build b/meson.build
+index 65c1d0785e..57de947367 100644
+--- a/meson.build
++++ b/meson.build
+@@ -639,6 +639,9 @@ else
+         conf.set('DEFAULT_HIERARCHY', 'CGROUP_UNIFIED_ALL')
+ endif
+ 
++default_net_naming_scheme = get_option('default-net-naming-scheme')
++conf.set_quoted('DEFAULT_NET_NAMING_SCHEME', default_net_naming_scheme)
++
+ time_epoch = get_option('time-epoch')
+ if time_epoch == ''
+         NEWS = files('NEWS')
+@@ -2925,6 +2928,7 @@ status = [
+         'default DNSSEC mode:               @0@'.format(default_dnssec),
+         'default DNS-over-TLS mode:         @0@'.format(default_dns_over_tls),
+         'default cgroup hierarchy:          @0@'.format(default_hierarchy),
++        'default net.naming-scheme setting: @0@'.format(default_net_naming_scheme),
+         'default KillUserProcesses setting: @0@'.format(kill_user_processes)]
+ 
+ alt_dns_servers = '\n                                            '.join(dns_servers.split(' '))
+diff --git a/meson_options.txt b/meson_options.txt
+index 0996891177..213079ac15 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -158,6 +158,9 @@ option('default-hierarchy', type : 'combo',
+        description : 'default cgroup hierarchy')
+ option('time-epoch', type : 'string',
+        description : 'time epoch for time clients')
++option('default-net-naming-scheme', type : 'combo',
++       choices : ['rhel-8.0', 'rhel-8.1', 'rhel-8.2', 'rhel-8.3', 'latest'],
++       description : 'default net.naming-scheme= value')
+ option('system-uid-max', type : 'string',
+        description : 'maximum system UID')
+ option('system-gid-max', type : 'string',
+diff --git a/src/udev/udev-builtin-net_id.c b/src/udev/udev-builtin-net_id.c
+index 148696183e..d85dc2848b 100644
+--- a/src/udev/udev-builtin-net_id.c
++++ b/src/udev/udev-builtin-net_id.c
+@@ -185,6 +185,19 @@ struct virtfn_info {
+         char suffix[IFNAMSIZ];
+ };
+ 
++static const NamingScheme* naming_scheme_from_name(const char *name) {
++        size_t i;
++
++        if (streq(name, "latest"))
++                return naming_schemes + ELEMENTSOF(naming_schemes) - 1;
++
++        for (i = 0; i < ELEMENTSOF(naming_schemes); i++)
++                if (streq(naming_schemes[i].name, name))
++                        return naming_schemes + i;
++
++        return NULL;
++}
++
+ static const NamingScheme* naming_scheme(void) {
+         static const NamingScheme *cache = NULL;
+         _cleanup_free_ char *buffer = NULL;
+@@ -208,25 +221,18 @@ static const NamingScheme* naming_scheme(void) {
+                 k = buffer;
+ 
+         if (k) {
+-                size_t i;
+-
+-                for (i = 0; i < ELEMENTSOF(naming_schemes); i++)
+-                        if (streq(naming_schemes[i].name, k)) {
+-                                cache = naming_schemes + i;
+-                                break;
+-                        }
++                cache = naming_scheme_from_name(k);
++                if (cache) {
++                        log_info("Using interface naming scheme '%s'.", cache->name);
++                        return cache;
++                }
+ 
+-                if (!cache)
+-                        log_warning("Unknown interface naming scheme '%s' requested, ignoring.", k);
++                log_warning("Unknown interface naming scheme '%s' requested, ignoring.", k);
+         }
+ 
+-        if (cache)
+-                log_info("Using interface naming scheme '%s'.", cache->name);
+-        else {
+-                /* RHEL-only: here we differ from the upstream and if no naming scheme was selected we default to naming from systemd-239 */
+-                cache = &naming_schemes[2];
+-                log_info("Using default interface naming scheme '%s'.", cache->name);
+-        }
++        cache = naming_scheme_from_name(DEFAULT_NET_NAMING_SCHEME);
++        assert(cache);
++        log_info("Using default interface naming scheme '%s'.", cache->name);
+ 
+         return cache;
+ }

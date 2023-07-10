@@ -1,0 +1,188 @@
+From fbc394252588325b6e7ecd1ab65ad40b51763c58 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 7 Aug 2018 12:08:24 +0200
+Subject: [PATCH] logind: add hashtable for finding session by leader PID
+
+This is useful later on, when we quickly want to find the session for a
+leader PID.
+
+(cherry picked from commit 238794b15082e6f61d0ce2943d39205289fff7f0)
+
+Related: #2122288
+---
+ src/login/logind-core.c    | 15 ++++++++------
+ src/login/logind-dbus.c    |  3 +--
+ src/login/logind-session.c | 41 +++++++++++++++++++++++++++++++++++---
+ src/login/logind-session.h |  1 +
+ src/login/logind.c         |  4 +++-
+ src/login/logind.h         |  1 +
+ 6 files changed, 53 insertions(+), 12 deletions(-)
+
+diff --git a/src/login/logind-core.c b/src/login/logind-core.c
+index 7e33f8e6aa..a1943b6f9d 100644
+--- a/src/login/logind-core.c
++++ b/src/login/logind-core.c
+@@ -339,13 +339,16 @@ int manager_get_session_by_pid(Manager *m, pid_t pid, Session **ret) {
+         if (!pid_is_valid(pid))
+                 return -EINVAL;
+ 
+-        r = cg_pid_get_unit(pid, &unit);
+-        if (r < 0)
+-                goto not_found;
++        s = hashmap_get(m->sessions_by_leader, PID_TO_PTR(pid));
++        if (!s) {
++                r = cg_pid_get_unit(pid, &unit);
++                if (r < 0)
++                        goto not_found;
+ 
+-        s = hashmap_get(m->session_units, unit);
+-        if (!s)
+-                goto not_found;
++                s = hashmap_get(m->session_units, unit);
++                if (!s)
++                        goto not_found;
++        }
+ 
+         if (ret)
+                 *ret = s;
+diff --git a/src/login/logind-dbus.c b/src/login/logind-dbus.c
+index 0248042308..01bfef4ff7 100644
+--- a/src/login/logind-dbus.c
++++ b/src/login/logind-dbus.c
+@@ -784,9 +784,8 @@ static int method_create_session(sd_bus_message *message, void *userdata, sd_bus
+                 goto fail;
+ 
+         session_set_user(session, user);
++        session_set_leader(session, leader);
+ 
+-        session->leader = leader;
+-        session->audit_id = audit_id;
+         session->type = t;
+         session->class = c;
+         session->remote = remote;
+diff --git a/src/login/logind-session.c b/src/login/logind-session.c
+index d666f86d3f..cc838ca383 100644
+--- a/src/login/logind-session.c
++++ b/src/login/logind-session.c
+@@ -121,6 +121,9 @@ Session* session_free(Session *s) {
+                 free(s->scope);
+         }
+ 
++        if (pid_is_valid(s->leader))
++                (void) hashmap_remove_value(s->manager->sessions_by_leader, PID_TO_PTR(s->leader), s);
++
+         free(s->scope_job);
+ 
+         sd_bus_message_unref(s->create_message);
+@@ -149,6 +152,30 @@ void session_set_user(Session *s, User *u) {
+         user_update_last_session_timer(u);
+ }
+ 
++int session_set_leader(Session *s, pid_t pid) {
++        int r;
++
++        assert(s);
++
++        if (!pid_is_valid(pid))
++                return -EINVAL;
++
++        if (s->leader == pid)
++                return 0;
++
++        r = hashmap_put(s->manager->sessions_by_leader, PID_TO_PTR(pid), s);
++        if (r < 0)
++                return r;
++
++        if (pid_is_valid(s->leader))
++                (void) hashmap_remove_value(s->manager->sessions_by_leader, PID_TO_PTR(s->leader), s);
++
++        s->leader = pid;
++        (void) audit_session_from_pid(pid, &s->audit_id);
++
++        return 1;
++}
++
+ static void session_save_devices(Session *s, FILE *f) {
+         SessionDevice *sd;
+         Iterator i;
+@@ -473,8 +500,16 @@ int session_load(Session *s) {
+         }
+ 
+         if (leader) {
+-                if (parse_pid(leader, &s->leader) >= 0)
+-                        (void) audit_session_from_pid(s->leader, &s->audit_id);
++                pid_t pid;
++
++                r = parse_pid(leader, &pid);
++                if (r < 0)
++                        log_debug_errno(r, "Failed to parse leader PID of session: %s", leader);
++                else {
++                        r = session_set_leader(s, pid);
++                        if (r < 0)
++                                log_warning_errno(r, "Failed to set session leader PID, ignoring: %m");
++                }
+         }
+ 
+         if (type) {
+@@ -910,7 +945,7 @@ int session_get_idle_hint(Session *s, dual_timestamp *t) {
+ 
+         /* For sessions with a leader but no explicitly configured
+          * tty, let's check the controlling tty of the leader */
+-        if (s->leader > 0) {
++        if (pid_is_valid(s->leader)) {
+                 r = get_process_ctty_atime(s->leader, &atime);
+                 if (r >= 0)
+                         goto found_atime;
+diff --git a/src/login/logind-session.h b/src/login/logind-session.h
+index 7da845cea3..8c7d0301f2 100644
+--- a/src/login/logind-session.h
++++ b/src/login/logind-session.h
+@@ -124,6 +124,7 @@ Session* session_free(Session *s);
+ DEFINE_TRIVIAL_CLEANUP_FUNC(Session *, session_free);
+ 
+ void session_set_user(Session *s, User *u);
++int session_set_leader(Session *s, pid_t pid);
+ bool session_may_gc(Session *s, bool drop_not_started);
+ void session_add_to_gc_queue(Session *s);
+ int session_activate(Session *s);
+diff --git a/src/login/logind.c b/src/login/logind.c
+index 25de9a6ab2..6b576dad0d 100644
+--- a/src/login/logind.c
++++ b/src/login/logind.c
+@@ -46,6 +46,7 @@ static int manager_new(Manager **ret) {
+         m->devices = hashmap_new(&string_hash_ops);
+         m->seats = hashmap_new(&string_hash_ops);
+         m->sessions = hashmap_new(&string_hash_ops);
++        m->sessions_by_leader = hashmap_new(NULL);
+         m->users = hashmap_new(NULL);
+         m->inhibitors = hashmap_new(&string_hash_ops);
+         m->buttons = hashmap_new(&string_hash_ops);
+@@ -53,7 +54,7 @@ static int manager_new(Manager **ret) {
+         m->user_units = hashmap_new(&string_hash_ops);
+         m->session_units = hashmap_new(&string_hash_ops);
+ 
+-        if (!m->devices || !m->seats || !m->sessions || !m->users || !m->inhibitors || !m->buttons || !m->user_units || !m->session_units)
++        if (!m->devices || !m->seats || !m->sessions || !m->sessions_by_leader || !m->users || !m->inhibitors || !m->buttons || !m->user_units || !m->session_units)
+                 return -ENOMEM;
+ 
+         m->udev = udev_new();
+@@ -112,6 +113,7 @@ static Manager* manager_unref(Manager *m) {
+         hashmap_free(m->devices);
+         hashmap_free(m->seats);
+         hashmap_free(m->sessions);
++        hashmap_free(m->sessions_by_leader);
+         hashmap_free(m->users);
+         hashmap_free(m->inhibitors);
+         hashmap_free(m->buttons);
+diff --git a/src/login/logind.h b/src/login/logind.h
+index bb127bf4a5..7f94dea2f6 100644
+--- a/src/login/logind.h
++++ b/src/login/logind.h
+@@ -26,6 +26,7 @@ struct Manager {
+         Hashmap *devices;
+         Hashmap *seats;
+         Hashmap *sessions;
++        Hashmap *sessions_by_leader;
+         Hashmap *users;
+         Hashmap *inhibitors;
+         Hashmap *buttons;

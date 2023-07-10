@@ -1,0 +1,53 @@
+From 06e937177bf23d8ea8e5060a856cce02d5436eb4 Mon Sep 17 00:00:00 2001
+From: Martin Wilck <mwilck@suse.com>
+Date: Tue, 24 Apr 2018 18:30:09 +0200
+Subject: [PATCH] test/udev-test.pl: merge import parent tests into one
+
+As we can test multiple devices and multiple links per device
+in one test now, these two tests can be merged into one.
+
+(cherry picked from commit a96cd21d31cb7af211862768e133b50b085634e7)
+
+Related: #1642728
+---
+ test/udev-test.pl | 17 +++++------------
+ 1 file changed, 5 insertions(+), 12 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 880a73b10b..0344d2e89c 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1781,28 +1781,21 @@ TAGS=="aaa||bbb||ccc", SYMLINK+="bad"
+ EOF
+         },
+         {
+-                desc            => "IMPORT parent test sequence 1/2 (keep)",
++                desc            => "IMPORT parent test",
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
+                                 exp_links       => ["parent"],
+-                        }],
+-                option          => "keep",
+-                rules           => <<EOF
+-KERNEL=="sda", IMPORT{program}="/bin/echo -e \'PARENT_KEY=parent_right\\nWRONG_PARENT_KEY=parent_wrong'"
+-KERNEL=="sda", SYMLINK+="parent"
+-EOF
+-        },
+-        {
+-                desc            => "IMPORT parent test sequence 2/2 (keep)",
+-                devices => [
++                        },
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda1",
+                                 exp_links       => ["parentenv-parent_right"],
+                         }],
+-                option          => "clean",
++                sleep_us        => 500000,  # Serialized! We need to sleep here after adding sda
+                 rules           => <<EOF
+ KERNEL=="sda1", IMPORT{parent}="PARENT*", SYMLINK+="parentenv-\$env{PARENT_KEY}\$env{WRONG_PARENT_KEY}"
++KERNEL=="sda", IMPORT{program}="/bin/echo -e \'PARENT_KEY=parent_right\\nWRONG_PARENT_KEY=parent_wrong'"
++KERNEL=="sda", SYMLINK+="parent"
+ EOF
+         },
+         {

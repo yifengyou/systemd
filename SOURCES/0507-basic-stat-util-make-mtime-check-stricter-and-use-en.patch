@@ -1,0 +1,63 @@
+From 29c5b8dd6228c4401f034ca0aa85f99ac42cf8dd Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Thu, 5 Nov 2020 17:55:25 +0100
+Subject: [PATCH] basic/stat-util: make mtime check stricter and use entire
+ timestamp
+
+Note that st_mtime member of struct stat is defined as follows,
+
+ #define st_mtime st_mtim.tv_sec
+
+Hence we omitted checking nanosecond part of the timestamp (struct
+timespec) and possibly would miss modifications that happened within the
+same second.
+
+(cherry picked from commit a59b0a9f768f6e27b25f4f1bab6de08842e78d74)
+
+Related: #1642728
+---
+ src/basic/stat-util.c | 22 ++++++++++++++++++++++
+ src/basic/stat-util.h |  2 ++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/src/basic/stat-util.c b/src/basic/stat-util.c
+index 26aee9bad6..c61c4c0517 100644
+--- a/src/basic/stat-util.c
++++ b/src/basic/stat-util.c
+@@ -287,3 +287,25 @@ int fd_verify_regular(int fd) {
+ 
+         return stat_verify_regular(&st);
+ }
++
++bool stat_inode_unmodified(const struct stat *a, const struct stat *b) {
++
++        /* Returns if the specified stat structures reference the same, unmodified inode. This check tries to
++         * be reasonably careful when detecting changes: we check both inode and mtime, to cater for file
++         * systems where mtimes are fixed to 0 (think: ostree/nixos type installations). We also check file
++         * size, backing device, inode type and if this refers to a device not the major/minor.
++         *
++         * Note that we don't care if file attributes such as ownership or access mode change, this here is
++         * about contents of the file. The purpose here is to detect file contents changes, and nothing
++         * else. */
++
++        return a && b &&
++                (a->st_mode & S_IFMT) != 0 && /* We use the check for .st_mode if the structure was ever initialized */
++                ((a->st_mode ^ b->st_mode) & S_IFMT) == 0 &&  /* same inode type */
++                a->st_mtim.tv_sec == b->st_mtim.tv_sec &&
++                a->st_mtim.tv_nsec == b->st_mtim.tv_nsec &&
++                (!S_ISREG(a->st_mode) || a->st_size == b->st_size) && /* if regular file, compare file size */
++                a->st_dev == b->st_dev &&
++                a->st_ino == b->st_ino &&
++                (!(S_ISCHR(a->st_mode) || S_ISBLK(a->st_mode)) || a->st_rdev == b->st_rdev); /* if device node, also compare major/minor, because we can */
++}
+\ No newline at end of file
+diff --git a/src/basic/stat-util.h b/src/basic/stat-util.h
+index f8014ed30b..9e1a2b70da 100644
+--- a/src/basic/stat-util.h
++++ b/src/basic/stat-util.h
+@@ -58,3 +58,5 @@ int path_is_temporary_fs(const char *path);
+ 
+ int stat_verify_regular(const struct stat *st);
+ int fd_verify_regular(int fd);
++
++bool stat_inode_unmodified(const struct stat *a, const struct stat *b);

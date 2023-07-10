@@ -1,0 +1,270 @@
+From 1e4ec1b29d15684a305bbc9ab54c6c8321504e7b Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Tue, 27 Oct 2020 10:31:05 +0100
+Subject: [PATCH] shared/user-util: add compat forms of user name checking
+ functions
+
+New functions are called valid_user_group_name_compat() and
+valid_user_group_name_or_id_compat() and accept dots in the user
+or group name. No functional change except the tests.
+
+(cherry picked from commit 1a29610f5fa1bcb2eeb37d2c6b79d8d1a6dbb865)
+
+This completes previous partial cherry-pick of the same commit (commit
+76176de0889c3e8b9b3a176da24e4f8dbbd380a3).
+
+Related: #1848373
+---
+ src/basic/user-util.c     | 32 +++++++-------
+ src/basic/user-util.h     | 16 ++++++-
+ src/test/test-user-util.c | 91 +++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 117 insertions(+), 22 deletions(-)
+
+diff --git a/src/basic/user-util.c b/src/basic/user-util.c
+index 40f4e45db6..03cbbc2503 100644
+--- a/src/basic/user-util.c
++++ b/src/basic/user-util.c
+@@ -576,7 +576,7 @@ int take_etc_passwd_lock(const char *root) {
+         return fd;
+ }
+ 
+-bool valid_user_group_name(const char *u) {
++bool valid_user_group_name_full(const char *u, bool strict) {
+         const char *i;
+         long sz;
+ 
+@@ -585,12 +585,12 @@ bool valid_user_group_name(const char *u) {
+          *
+          * - We require that names fit into the appropriate utmp field
+          * - We don't allow empty user names
++         * - No dots or digits in the first character
+          *
+-         * Note that other systems are even more restrictive, and don't permit underscores or uppercase characters.
++         * If strict==true, additionally:
++         * - We don't allow any dots (this conflicts with chown syntax which permits dots as user/group name separator)
+          *
+-         * jsynacek: We now allow dots in user names. The checks are not exhaustive as user names like "..." are allowed
+-         * and valid according to POSIX, but can't be created using useradd. However, ".user" can be created. Let's not
+-         * complicate the code by adding additional checks for weird corner cases like these,  as they don't really matter here.
++         * Note that other systems are even more restrictive, and don't permit underscores or uppercase characters.
+          */
+ 
+         if (isempty(u))
+@@ -598,16 +598,16 @@ bool valid_user_group_name(const char *u) {
+ 
+         if (!(u[0] >= 'a' && u[0] <= 'z') &&
+             !(u[0] >= 'A' && u[0] <= 'Z') &&
+-            u[0] != '_' && u[0] != '.')
++            u[0] != '_')
+                 return false;
+ 
+-        for (i = u+1; *i; i++) {
+-                if (!(*i >= 'a' && *i <= 'z') &&
+-                    !(*i >= 'A' && *i <= 'Z') &&
+-                    !(*i >= '0' && *i <= '9') &&
+-                    !IN_SET(*i, '_', '-', '.'))
++        for (i = u+1; *i; i++)
++                if (!((*i >= 'a' && *i <= 'z') ||
++                      (*i >= 'A' && *i <= 'Z') ||
++                      (*i >= '0' && *i <= '9') ||
++                      IN_SET(*i, '_', '-') ||
++                      (!strict && *i == '.')))
+                         return false;
+-        }
+ 
+         sz = sysconf(_SC_LOGIN_NAME_MAX);
+         assert_se(sz > 0);
+@@ -621,15 +621,15 @@ bool valid_user_group_name(const char *u) {
+         return true;
+ }
+ 
+-bool valid_user_group_name_or_id(const char *u) {
++bool valid_user_group_name_or_id_full(const char *u, bool strict) {
+ 
+-        /* Similar as above, but is also fine with numeric UID/GID specifications, as long as they are in the right
+-         * range, and not the invalid user ids. */
++        /* Similar as above, but is also fine with numeric UID/GID specifications, as long as they are in the
++         * right range, and not the invalid user ids. */
+ 
+         if (isempty(u))
+                 return false;
+ 
+-        if (valid_user_group_name(u))
++        if (valid_user_group_name_full(u, strict))
+                 return true;
+ 
+         return parse_uid(u, NULL) >= 0;
+diff --git a/src/basic/user-util.h b/src/basic/user-util.h
+index b74f168859..5ad0b2a2f9 100644
+--- a/src/basic/user-util.h
++++ b/src/basic/user-util.h
+@@ -78,8 +78,20 @@ static inline bool userns_supported(void) {
+         return access("/proc/self/uid_map", F_OK) >= 0;
+ }
+ 
+-bool valid_user_group_name(const char *u);
+-bool valid_user_group_name_or_id(const char *u);
++bool valid_user_group_name_full(const char *u, bool strict);
++bool valid_user_group_name_or_id_full(const char *u, bool strict);
++static inline bool valid_user_group_name(const char *u) {
++        return valid_user_group_name_full(u, true);
++}
++static inline bool valid_user_group_name_or_id(const char *u) {
++        return valid_user_group_name_or_id_full(u, true);
++}
++static inline bool valid_user_group_name_compat(const char *u) {
++        return valid_user_group_name_full(u, false);
++}
++static inline bool valid_user_group_name_or_id_compat(const char *u) {
++        return valid_user_group_name_or_id_full(u, false);
++}
+ bool valid_gecos(const char *d);
+ bool valid_home(const char *p);
+ 
+diff --git a/src/test/test-user-util.c b/src/test/test-user-util.c
+index 04e86f5ac3..3a4211655d 100644
+--- a/src/test/test-user-util.c
++++ b/src/test/test-user-util.c
+@@ -131,6 +131,43 @@ static void test_uid_ptr(void) {
+         assert_se(PTR_TO_UID(UID_TO_PTR(1000)) == 1000);
+ }
+ 
++static void test_valid_user_group_name_compat(void) {
++        log_info("/* %s */", __func__);
++
++        assert_se(!valid_user_group_name_compat(NULL));
++        assert_se(!valid_user_group_name_compat(""));
++        assert_se(!valid_user_group_name_compat("1"));
++        assert_se(!valid_user_group_name_compat("65535"));
++        assert_se(!valid_user_group_name_compat("-1"));
++        assert_se(!valid_user_group_name_compat("-kkk"));
++        assert_se(!valid_user_group_name_compat("rööt"));
++        assert_se(!valid_user_group_name_compat("."));
++        assert_se(!valid_user_group_name_compat(".eff"));
++        assert_se(!valid_user_group_name_compat("foo\nbar"));
++        assert_se(!valid_user_group_name_compat("0123456789012345678901234567890123456789"));
++        assert_se(!valid_user_group_name_or_id_compat("aaa:bbb"));
++        assert_se(!valid_user_group_name_compat("."));
++        assert_se(!valid_user_group_name_compat(".1"));
++        assert_se(!valid_user_group_name_compat(".65535"));
++        assert_se(!valid_user_group_name_compat(".-1"));
++        assert_se(!valid_user_group_name_compat(".-kkk"));
++        assert_se(!valid_user_group_name_compat(".rööt"));
++        assert_se(!valid_user_group_name_or_id_compat(".aaa:bbb"));
++
++        assert_se(valid_user_group_name_compat("root"));
++        assert_se(valid_user_group_name_compat("lennart"));
++        assert_se(valid_user_group_name_compat("LENNART"));
++        assert_se(valid_user_group_name_compat("_kkk"));
++        assert_se(valid_user_group_name_compat("kkk-"));
++        assert_se(valid_user_group_name_compat("kk-k"));
++        assert_se(valid_user_group_name_compat("eff.eff"));
++        assert_se(valid_user_group_name_compat("eff."));
++
++        assert_se(valid_user_group_name_compat("some5"));
++        assert_se(!valid_user_group_name_compat("5some"));
++        assert_se(valid_user_group_name_compat("INNER5NUMBER"));
++}
++
+ static void test_valid_user_group_name(void) {
+         log_info("/* %s */", __func__);
+ 
+@@ -141,9 +178,18 @@ static void test_valid_user_group_name(void) {
+         assert_se(!valid_user_group_name("-1"));
+         assert_se(!valid_user_group_name("-kkk"));
+         assert_se(!valid_user_group_name("rööt"));
++        assert_se(!valid_user_group_name("."));
++        assert_se(!valid_user_group_name(".eff"));
+         assert_se(!valid_user_group_name("foo\nbar"));
+         assert_se(!valid_user_group_name("0123456789012345678901234567890123456789"));
+         assert_se(!valid_user_group_name_or_id("aaa:bbb"));
++        assert_se(!valid_user_group_name("."));
++        assert_se(!valid_user_group_name(".1"));
++        assert_se(!valid_user_group_name(".65535"));
++        assert_se(!valid_user_group_name(".-1"));
++        assert_se(!valid_user_group_name(".-kkk"));
++        assert_se(!valid_user_group_name(".rööt"));
++        assert_se(!valid_user_group_name_or_id(".aaa:bbb"));
+ 
+         assert_se(valid_user_group_name("root"));
+         assert_se(valid_user_group_name("lennart"));
+@@ -151,14 +197,47 @@ static void test_valid_user_group_name(void) {
+         assert_se(valid_user_group_name("_kkk"));
+         assert_se(valid_user_group_name("kkk-"));
+         assert_se(valid_user_group_name("kk-k"));
+-        assert_se(valid_user_group_name(".moo"));
+-        assert_se(valid_user_group_name("eff.eff"));
++        assert_se(!valid_user_group_name("eff.eff"));
++        assert_se(!valid_user_group_name("eff."));
+ 
+         assert_se(valid_user_group_name("some5"));
+         assert_se(!valid_user_group_name("5some"));
+         assert_se(valid_user_group_name("INNER5NUMBER"));
+ }
+ 
++static void test_valid_user_group_name_or_id_compat(void) {
++        log_info("/* %s */", __func__);
++
++        assert_se(!valid_user_group_name_or_id_compat(NULL));
++        assert_se(!valid_user_group_name_or_id_compat(""));
++        assert_se(valid_user_group_name_or_id_compat("0"));
++        assert_se(valid_user_group_name_or_id_compat("1"));
++        assert_se(valid_user_group_name_or_id_compat("65534"));
++        assert_se(!valid_user_group_name_or_id_compat("65535"));
++        assert_se(valid_user_group_name_or_id_compat("65536"));
++        assert_se(!valid_user_group_name_or_id_compat("-1"));
++        assert_se(!valid_user_group_name_or_id_compat("-kkk"));
++        assert_se(!valid_user_group_name_or_id_compat("rööt"));
++        assert_se(!valid_user_group_name_or_id_compat("."));
++        assert_se(!valid_user_group_name_or_id_compat(".eff"));
++        assert_se(valid_user_group_name_or_id_compat("eff.eff"));
++        assert_se(valid_user_group_name_or_id_compat("eff."));
++        assert_se(!valid_user_group_name_or_id_compat("foo\nbar"));
++        assert_se(!valid_user_group_name_or_id_compat("0123456789012345678901234567890123456789"));
++        assert_se(!valid_user_group_name_or_id_compat("aaa:bbb"));
++
++        assert_se(valid_user_group_name_or_id_compat("root"));
++        assert_se(valid_user_group_name_or_id_compat("lennart"));
++        assert_se(valid_user_group_name_or_id_compat("LENNART"));
++        assert_se(valid_user_group_name_or_id_compat("_kkk"));
++        assert_se(valid_user_group_name_or_id_compat("kkk-"));
++        assert_se(valid_user_group_name_or_id_compat("kk-k"));
++
++        assert_se(valid_user_group_name_or_id_compat("some5"));
++        assert_se(!valid_user_group_name_or_id_compat("5some"));
++        assert_se(valid_user_group_name_or_id_compat("INNER5NUMBER"));
++}
++
+ static void test_valid_user_group_name_or_id(void) {
+         log_info("/* %s */", __func__);
+ 
+@@ -172,6 +251,10 @@ static void test_valid_user_group_name_or_id(void) {
+         assert_se(!valid_user_group_name_or_id("-1"));
+         assert_se(!valid_user_group_name_or_id("-kkk"));
+         assert_se(!valid_user_group_name_or_id("rööt"));
++        assert_se(!valid_user_group_name_or_id("."));
++        assert_se(!valid_user_group_name_or_id(".eff"));
++        assert_se(!valid_user_group_name_or_id("eff.eff"));
++        assert_se(!valid_user_group_name_or_id("eff."));
+         assert_se(!valid_user_group_name_or_id("foo\nbar"));
+         assert_se(!valid_user_group_name_or_id("0123456789012345678901234567890123456789"));
+         assert_se(!valid_user_group_name_or_id("aaa:bbb"));
+@@ -182,8 +265,6 @@ static void test_valid_user_group_name_or_id(void) {
+         assert_se(valid_user_group_name_or_id("_kkk"));
+         assert_se(valid_user_group_name_or_id("kkk-"));
+         assert_se(valid_user_group_name_or_id("kk-k"));
+-        assert_se(valid_user_group_name_or_id(".moo"));
+-        assert_se(valid_user_group_name_or_id("eff.eff"));
+ 
+         assert_se(valid_user_group_name_or_id("some5"));
+         assert_se(!valid_user_group_name_or_id("5some"));
+@@ -286,7 +367,9 @@ int main(int argc, char*argv[]) {
+         test_parse_uid();
+         test_uid_ptr();
+ 
++        test_valid_user_group_name_compat();
+         test_valid_user_group_name();
++        test_valid_user_group_name_or_id_compat();
+         test_valid_user_group_name_or_id();
+         test_valid_gecos();
+         test_valid_home();

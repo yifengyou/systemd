@@ -1,0 +1,123 @@
+From b05c8d2e10c773b9bcae17055be48a2291ca6fa6 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Tue, 2 Mar 2021 12:57:59 -0500
+Subject: [PATCH] Revert "test: add test cases for empty string match" and
+ "test: add test case for multi matches when use ||"
+
+This effectively reverts commits 03bc565e6e3249385c4e1ca0ae27670ca2ad9a41
+and 03b766cc937ffa4dcb7cfb25b2ac20d8a00cb6db.
+
+Resolves: #1931947
+---
+ test/udev-test.pl | 98 -----------------------------------------------
+ 1 file changed, 98 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 5b1e33504e..0612859cda 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1732,104 +1732,6 @@ KERNEL=="dontknow|ttyACM0a|nothing|attyACM0", SYMLINK+="wrong1"
+ KERNEL=="X|attyACM0|dontknow|ttyACM0a|nothing|attyACM0", SYMLINK+="wrong2"
+ KERNEL=="all|dontknow|ttyACM0", SYMLINK+="right"
+ KERNEL=="ttyACM0a|nothing", SYMLINK+="wrong3"
+-EOF
+-        },
+-        {
+-               desc            => "test multi matches 5",
+-               devices => [
+-                       {
+-                               devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
+-                               exp_links       => ["found"],
+-                               not_exp_name    => "bad",
+-                       }],
+-                rules           => <<EOF
+-KERNEL=="sda", TAG="foo"
+-TAGS=="|foo", SYMLINK+="found"
+-TAGS=="|aaa", SYMLINK+="bad"
+-EOF
+-        },
+-        {
+-                desc            => "test multi matches 6",
+-                devices => [
+-                        {
+-                                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
+-                                exp_links       => ["found"],
+-                                not_exp_name    => "bad",
+-                       }],
+-                rules           => <<EOF
+-KERNEL=="sda", TAG=""
+-TAGS=="|foo", SYMLINK+="found"
+-TAGS=="aaa|bbb", SYMLINK+="bad"
+-EOF
+-        },
+-        {
+-                desc            => "test multi matches 7",
+-                devices => [
+-                        {
+-                                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
+-                                exp_links       => ["found"],
+-                                not_exp_name    => "bad",
+-                        }],
+-                rules           => <<EOF
+-KERNEL=="sda", TAG="foo"
+-TAGS=="foo||bar", SYMLINK+="found"
+-TAGS=="aaa||bbb", SYMLINK+="bad"
+-EOF
+-        },
+-        {
+-                desc            => "test multi matches 8",
+-                devices => [
+-                        {
+-                                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
+-                                exp_links       => ["found"],
+-                                not_exp_name    => "bad",
+-                        }],
+-                rules           => <<EOF
+-KERNEL=="sda", TAG=""
+-TAGS=="foo||bar", SYMLINK+="found"
+-TAGS=="aaa|bbb", SYMLINK+="bad"
+-EOF
+-        },
+-        {
+-                desc            => "test multi matches 9",
+-                devices => [
+-                        {
+-                                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
+-                                exp_links       => ["found"],
+-                                not_exp_name    => "bad",
+-                        }],
+-                rules           => <<EOF
+-KERNEL=="sda", TAG="foo"
+-TAGS=="foo|", SYMLINK+="found"
+-TAGS=="aaa|", SYMLINK+="bad"
+-EOF
+-        },
+-        {
+-                desc            => "test multi matches 10",
+-                devices => [
+-                        {
+-                                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
+-                                exp_links       => ["found"],
+-                                not_exp_name    => "bad",
+-                        }],
+-                rules           => <<EOF
+-KERNEL=="sda", TAG=""
+-TAGS=="foo|", SYMLINK+="found"
+-TAGS=="aaa|bbb", SYMLINK+="bad"
+-EOF
+-        },
+-        {
+-                desc            => "test multi matches 11",
+-                devices => [
+-                        {
+-                                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
+-                                exp_links       => ["found"],
+-                                not_exp_name    => "bad",
+-                        }],
+-                rules           => <<EOF
+-KERNEL=="sda", TAG="c"
+-TAGS=="foo||bar||c", SYMLINK+="found"
+-TAGS=="aaa||bbb||ccc", SYMLINK+="bad"
+ EOF
+         },
+         {

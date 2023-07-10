@@ -1,0 +1,25 @@
+From 375fd5f8b3c6fb0f7c29ceb166f70bfd45314e04 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Fri, 16 Nov 2018 07:33:02 +0100
+Subject: [PATCH] tests: add a reproducer for a heap-buffer-overflow fixed in
+ 937b1171378bc1000a
+
+(cherry picked from commit f7a6b40187a98751a9ab6867e8b52e4e6f1dad5c)
+
+Resolves: #1764560
+---
+ ...crash-c6c04d83e73f3d1417bc0afce8fa81b99f955963 | Bin 0 -> 112 bytes
+ 1 file changed, 0 insertions(+), 0 deletions(-)
+ create mode 100644 test/fuzz/fuzz-journald-kmsg/crash-c6c04d83e73f3d1417bc0afce8fa81b99f955963
+
+diff --git a/test/fuzz/fuzz-journald-kmsg/crash-c6c04d83e73f3d1417bc0afce8fa81b99f955963 b/test/fuzz/fuzz-journald-kmsg/crash-c6c04d83e73f3d1417bc0afce8fa81b99f955963
+new file mode 100644
+index 0000000000000000000000000000000000000000..19887a1fec9fc29b1f7da8a2d1c5ea5054f2bc02
+GIT binary patch
+literal 112
+zcmXpq)Zrxx80r}680lCOP-~&{)k?wIfGehgOM!tQroxI#0Z63Aa4DF?03ibx03hxS
+A82|tP
+
+literal 0
+HcmV?d00001
+

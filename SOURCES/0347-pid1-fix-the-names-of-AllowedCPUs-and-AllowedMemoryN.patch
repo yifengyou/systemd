@@ -1,0 +1,81 @@
+From 6ecf0a945d6d4187995de7e79e3ed75f4827289a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Sun, 24 Nov 2019 14:14:43 +0100
+Subject: [PATCH] pid1: fix the names of AllowedCPUs= and AllowedMemoryNodes=
+
+The original PR was submitted with CPUSetCpus and CPUSetMems, which was later
+changed to AllowedCPUs and AllowedMemmoryNodes everywhere (including the parser
+used by systemd-run), but not in the parser for unit files.
+
+Since we already released -rc1, let's keep support for the old names. I think
+we can remove it in a release or two if anyone remembers to do that.
+
+Fixes #14126. Follow-up for 047f5d63d7a1ab75073f8485e2f9b550d25b0772.
+
+(cherry picked from commit 0b8d3075872a05e0449906d24421ce192f50c29f)
+
+Related: #1818054
+---
+ src/core/load-fragment-gperf.gperf.m4 | 4 ++--
+ src/core/load-fragment.c              | 4 ++--
+ src/core/load-fragment.h              | 4 ++--
+ 3 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index ebb44df487..161c5a2c82 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -161,14 +161,14 @@ $1.KillSignal,                   config_parse_signal,                0,
+ )m4_dnl
+ m4_define(`CGROUP_CONTEXT_CONFIG_ITEMS',
+ `$1.Slice,                       config_parse_unit_slice,            0,                             0
++$1.AllowedCPUs,                  config_parse_allowed_cpus,          0,                             offsetof($1, cgroup_context)
++$1.AllowedMemoryNodes,           config_parse_allowed_mems,          0,                             offsetof($1, cgroup_context)
+ $1.CPUAccounting,                config_parse_bool,                  0,                             offsetof($1, cgroup_context.cpu_accounting)
+ $1.CPUWeight,                    config_parse_cg_weight,             0,                             offsetof($1, cgroup_context.cpu_weight)
+ $1.StartupCPUWeight,             config_parse_cg_weight,             0,                             offsetof($1, cgroup_context.startup_cpu_weight)
+ $1.CPUShares,                    config_parse_cpu_shares,            0,                             offsetof($1, cgroup_context.cpu_shares)
+ $1.StartupCPUShares,             config_parse_cpu_shares,            0,                             offsetof($1, cgroup_context.startup_cpu_shares)
+ $1.CPUQuota,                     config_parse_cpu_quota,             0,                             offsetof($1, cgroup_context)
+-$1.CPUSetCpus,                   config_parse_cpuset_cpus,           0,                             offsetof($1, cgroup_context)
+-$1.CPUSetMems,                   config_parse_cpuset_mems,           0,                             offsetof($1, cgroup_context)
+ $1.MemoryAccounting,             config_parse_bool,                  0,                             offsetof($1, cgroup_context.memory_accounting)
+ $1.MemoryLow,                    config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+ $1.MemoryHigh,                   config_parse_memory_limit,          0,                             offsetof($1, cgroup_context)
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index 6debf82401..2082166afb 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -3011,7 +3011,7 @@ int config_parse_cpu_quota(
+         return 0;
+ }
+ 
+-int config_parse_cpuset_cpus(
++int config_parse_allowed_cpus(
+                 const char *unit,
+                 const char *filename,
+                 unsigned line,
+@@ -3030,7 +3030,7 @@ int config_parse_cpuset_cpus(
+         return 0;
+ }
+ 
+-int config_parse_cpuset_mems(
++int config_parse_allowed_mems(
+                 const char *unit,
+                 const char *filename,
+                 unsigned line,
+diff --git a/src/core/load-fragment.h b/src/core/load-fragment.h
+index 6612e1fb32..424fa478a7 100644
+--- a/src/core/load-fragment.h
++++ b/src/core/load-fragment.h
+@@ -86,8 +86,8 @@ CONFIG_PARSER_PROTOTYPE(config_parse_set_status);
+ CONFIG_PARSER_PROTOTYPE(config_parse_namespace_path_strv);
+ CONFIG_PARSER_PROTOTYPE(config_parse_temporary_filesystems);
+ CONFIG_PARSER_PROTOTYPE(config_parse_cpu_quota);
+-CONFIG_PARSER_PROTOTYPE(config_parse_cpuset_cpus);
+-CONFIG_PARSER_PROTOTYPE(config_parse_cpuset_mems);
++CONFIG_PARSER_PROTOTYPE(config_parse_allowed_cpus);
++CONFIG_PARSER_PROTOTYPE(config_parse_allowed_mems);
+ CONFIG_PARSER_PROTOTYPE(config_parse_protect_home);
+ CONFIG_PARSER_PROTOTYPE(config_parse_protect_system);
+ CONFIG_PARSER_PROTOTYPE(config_parse_bus_name);

@@ -1,0 +1,113 @@
+From dfb4e03e0865d189a5c171072d6d7b31f49e1088 Mon Sep 17 00:00:00 2001
+From: Jan Synacek <jsynacek@redhat.com>
+Date: Wed, 3 Jun 2020 10:33:21 +0200
+Subject: [PATCH] install: warn if WantedBy targets don't exist
+
+Currently, if [Install] section contains WantedBy=target that doesn't exist,
+systemd creates the symlinks anyway. That is just user-unfriendly.
+Let's be nice and warn about installing non-existent targets.
+
+Fixes https://bugzilla.redhat.com/show_bug.cgi?id=1835351.
+
+Replaces: #15834
+(cherry picked from commit 8ae27441c2dcf585f58242991302b09778d4d710)
+
+Resolves: #1835351
+---
+ src/shared/install.c | 25 ++++++++++++++++++-------
+ src/shared/install.h |  1 +
+ 2 files changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/src/shared/install.c b/src/shared/install.c
+index c9fef6bde2..055b09f98c 100644
+--- a/src/shared/install.c
++++ b/src/shared/install.c
+@@ -362,6 +362,11 @@ void unit_file_dump_changes(int r, const char *verb, const UnitFileChange *chang
+                                 log_info("Unit %s is an alias to a unit that is not present, ignoring.",
+                                          changes[i].path);
+                         break;
++                case UNIT_FILE_DESTINATION_NOT_PRESENT:
++                        if (!quiet)
++                                log_warning("Unit %s is added as a dependency to a non-existent unit %s.",
++                                            changes[i].source, changes[i].path);
++                        break;
+                 case -EEXIST:
+                         if (changes[i].source)
+                                 log_error_errno(changes[i].type,
+@@ -1730,6 +1735,7 @@ static int install_info_symlink_alias(
+ }
+ 
+ static int install_info_symlink_wants(
++                UnitFileScope scope,
+                 UnitFileInstallInfo *i,
+                 const LookupPaths *paths,
+                 const char *config_path,
+@@ -1795,6 +1801,9 @@ static int install_info_symlink_wants(
+                 q = create_symlink(paths, i->path, path, true, changes, n_changes);
+                 if (r == 0)
+                         r = q;
++
++                if (unit_file_exists(scope, paths, dst) == 0)
++                        unit_file_changes_add(changes, n_changes, UNIT_FILE_DESTINATION_NOT_PRESENT, dst, i->path);
+         }
+ 
+         return r;
+@@ -1830,6 +1839,7 @@ static int install_info_symlink_link(
+ }
+ 
+ static int install_info_apply(
++                UnitFileScope scope,
+                 UnitFileInstallInfo *i,
+                 const LookupPaths *paths,
+                 const char *config_path,
+@@ -1848,11 +1858,11 @@ static int install_info_apply(
+ 
+         r = install_info_symlink_alias(i, paths, config_path, force, changes, n_changes);
+ 
+-        q = install_info_symlink_wants(i, paths, config_path, i->wanted_by, ".wants/", changes, n_changes);
++        q = install_info_symlink_wants(scope, i, paths, config_path, i->wanted_by, ".wants/", changes, n_changes);
+         if (r == 0)
+                 r = q;
+ 
+-        q = install_info_symlink_wants(i, paths, config_path, i->required_by, ".requires/", changes, n_changes);
++        q = install_info_symlink_wants(scope, i, paths, config_path, i->required_by, ".requires/", changes, n_changes);
+         if (r == 0)
+                 r = q;
+ 
+@@ -1916,7 +1926,7 @@ static int install_context_apply(
+                 if (i->type != UNIT_FILE_TYPE_REGULAR)
+                         continue;
+ 
+-                q = install_info_apply(i, paths, config_path, force, changes, n_changes);
++                q = install_info_apply(scope, i, paths, config_path, force, changes, n_changes);
+                 if (r >= 0) {
+                         if (q < 0)
+                                 r = q;
+@@ -3324,10 +3334,11 @@ static const char* const unit_file_state_table[_UNIT_FILE_STATE_MAX] = {
+ DEFINE_STRING_TABLE_LOOKUP(unit_file_state, UnitFileState);
+ 
+ static const char* const unit_file_change_type_table[_UNIT_FILE_CHANGE_TYPE_MAX] = {
+-        [UNIT_FILE_SYMLINK] = "symlink",
+-        [UNIT_FILE_UNLINK] = "unlink",
+-        [UNIT_FILE_IS_MASKED] = "masked",
+-        [UNIT_FILE_IS_DANGLING] = "dangling",
++        [UNIT_FILE_SYMLINK]                 = "symlink",
++        [UNIT_FILE_UNLINK]                  = "unlink",
++        [UNIT_FILE_IS_MASKED]               = "masked",
++        [UNIT_FILE_IS_DANGLING]             = "dangling",
++        [UNIT_FILE_DESTINATION_NOT_PRESENT] = "destination not present",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP(unit_file_change_type, UnitFileChangeType);
+diff --git a/src/shared/install.h b/src/shared/install.h
+index e452940991..f07bebb415 100644
+--- a/src/shared/install.h
++++ b/src/shared/install.h
+@@ -57,6 +57,7 @@ enum UnitFileChangeType {
+         UNIT_FILE_UNLINK,
+         UNIT_FILE_IS_MASKED,
+         UNIT_FILE_IS_DANGLING,
++        UNIT_FILE_DESTINATION_NOT_PRESENT,
+         _UNIT_FILE_CHANGE_TYPE_MAX,
+         _UNIT_FILE_CHANGE_TYPE_INVALID = INT_MIN
+ };

@@ -1,0 +1,79 @@
+From b89a1a9d19aa806feb984c8dba25116b5b5a52bc Mon Sep 17 00:00:00 2001
+From: HATAYAMA Daisuke <d.hatayama@fujitsu.com>
+Date: Wed, 24 Jul 2019 23:54:48 -0400
+Subject: [PATCH] swap: finish the secondary swap units' jobs if deactivation
+ of the primary swap unit fails
+
+Currently, if deactivation of the primary swap unit fails:
+
+    # LANG=C systemctl --no-pager stop dev-mapper-fedora\\x2dswap.swap
+    Job for dev-mapper-fedora\x2dswap.swap failed.
+    See "systemctl status "dev-mapper-fedora\\x2dswap.swap"" and "journalctl -xe" for details.
+
+then there are still the running stop jobs for all the secondary swap units
+that follow the primary one:
+
+    # systemctl list-jobs
+     JOB UNIT                                                                                                         TYPE STATE
+     3233 dev-disk-by\x2duuid-2dc8b9b1\x2da0a5\x2d44d8\x2d89c4\x2d6cdd26cd5ce0.swap                                    stop running
+     3232 dev-dm\x2d1.swap                                                                                             stop running
+     3231 dev-disk-by\x2did-dm\x2duuid\x2dLVM\x2dyuXWpCCIurGzz2nkGCVnUFSi7GH6E3ZcQjkKLnF0Fil0RJmhoLN8fcOnDybWCMTj.swap stop running
+     3230 dev-disk-by\x2did-dm\x2dname\x2dfedora\x2dswap.swap                                                          stop running
+     3234 dev-fedora-swap.swap                                                                                         stop running
+
+    5 jobs listed.
+
+This remains endlessly because their JobTimeoutUSec is infinity:
+
+    # LANG=C systemctl show -p JobTimeoutUSec dev-fedora-swap.swap
+    JobTimeoutUSec=infinity
+
+If this issue happens during system shutdown, the system shutdown appears to
+get hang and the system will be forcibly shutdown or rebooted 30 minutes later
+by the following configuration:
+
+    # grep -E "^JobTimeout" /usr/lib/systemd/system/reboot.target
+    JobTimeoutSec=30min
+    JobTimeoutAction=reboot-force
+
+The scenario in the real world seems that there is some service unit with
+KillMode=none, processes whose memory is being swapped out are not killed
+during stop operation in the service unit and then swapoff command fails.
+
+On the other hand, it works well in successful case of swapoff command because
+the secondary jobs monitor /proc/swaps file and can detect deletion of the
+corresponding swap file.
+
+This commit fixes the issue by finishing the secondary swap units' jobs if
+deactivation of the primary swap unit fails.
+
+Fixes: #11577
+(cherry picked from commit 9c1f969d40f84d5cc98d810bab8b24148b2d8928)
+
+Resolves: #1749622
+---
+ src/core/swap.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/swap.c b/src/core/swap.c
+index e717dbb54a..66a62d8a37 100644
+--- a/src/core/swap.c
++++ b/src/core/swap.c
+@@ -682,9 +682,15 @@ static void swap_enter_active(Swap *s, SwapResult f) {
+ static void swap_enter_dead_or_active(Swap *s, SwapResult f) {
+         assert(s);
+ 
+-        if (s->from_proc_swaps)
++        if (s->from_proc_swaps) {
++                Swap *other;
++
+                 swap_enter_active(s, f);
+-        else
++
++                LIST_FOREACH_OTHERS(same_devnode, other, s)
++                        if (UNIT(other)->job)
++                                swap_enter_dead_or_active(other, f);
++        } else
+                 swap_enter_dead(s, f);
+ }
+ 

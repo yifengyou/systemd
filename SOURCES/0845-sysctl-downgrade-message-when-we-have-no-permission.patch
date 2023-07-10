@@ -1,0 +1,49 @@
+From ffe4233155085b479c69abe844a34de212b8e5e1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Thu, 16 Jan 2020 14:45:28 +0100
+Subject: [PATCH] sysctl: downgrade message when we have no permission
+
+We need to run sysctl also in containers, because the network
+subtree is namespaces and may legitimately be writable. But logging
+all "errors" at notice level creates unwanted noise.
+
+Also downgrade message about missing sysctls to log_info. This might also be
+relatively common when configuration is targeted at different kernel
+versions. With log_debug it'll still end up in the logs, but isn't really worth
+of "notice" most of the time.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1609806
+(cherry picked from commit 32458cc9687c1b60ff0f22c0e71da93ce78b1534)
+
+Resolves: #2158160
+---
+ src/sysctl/sysctl.c | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/src/sysctl/sysctl.c b/src/sysctl/sysctl.c
+index 4c85d6887f..dc14e1aaf1 100644
+--- a/src/sysctl/sysctl.c
++++ b/src/sysctl/sysctl.c
+@@ -82,13 +82,15 @@ static int apply_all(OrderedHashmap *sysctl_options) {
+                 k = sysctl_write(option->key, option->value);
+                 if (k < 0) {
+                         /* If the sysctl is not available in the kernel or we are running with reduced
+-                         * privileges and cannot write it, then log about the issue at LOG_NOTICE level, and
+-                         * proceed without failing. (EROFS is treated as a permission problem here, since
+-                         * that's how container managers usually protected their sysctls.) In all other cases
+-                         * log an error and make the tool fail. */
+-
+-                        if (IN_SET(k, -EPERM, -EACCES, -EROFS, -ENOENT) || option->ignore_failure)
+-                                log_notice_errno(k, "Couldn't write '%s' to '%s', ignoring: %m", option->value, option->key);
++                         * privileges and cannot write it, then log about the issue, and proceed without
++                         * failing. (EROFS is treated as a permission problem here, since that's how
++                         * container managers usually protected their sysctls.) In all other cases log an
++                         * error and make the tool fail. */
++
++                        if (option->ignore_failure || k == -EROFS || ERRNO_IS_PRIVILEGE(k))
++                                log_debug_errno(k, "Couldn't write '%s' to '%s', ignoring: %m", option->value, option->key);
++                        else if (k == -ENOENT)
++                                log_info_errno(k, "Couldn't write '%s' to '%s', ignoring: %m", option->value, option->key);
+                         else {
+                                 log_error_errno(k, "Couldn't write '%s' to '%s': %m", option->value, option->key);
+                                 if (r == 0)

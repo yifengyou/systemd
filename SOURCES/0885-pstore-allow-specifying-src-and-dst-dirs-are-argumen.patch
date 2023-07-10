@@ -1,0 +1,44 @@
+From 76fe0974f62f0a2beb2d3d8e224e80a57c0ebd09 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Fri, 4 Oct 2019 16:14:47 +0200
+Subject: [PATCH] pstore: allow specifying src and dst dirs are arguments
+
+This makes it much easier to debug the program as a normal user, since we
+don't need to set up fake input under /sys/fs/pstore/.
+
+Also, let's make the debug output a bit nicer.
+
+(cherry picked from commit e05a72d7587ff916a983588f8393af624d330dd0)
+
+Related: #2158832
+---
+ src/pstore/pstore.c | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/src/pstore/pstore.c b/src/pstore/pstore.c
+index b0b21dedd4..7353e83a81 100644
+--- a/src/pstore/pstore.c
++++ b/src/pstore/pstore.c
+@@ -358,15 +358,18 @@ static int run(int argc, char *argv[]) {
+ 
+         log_open();
+ 
+-        if (argc > 1)
++        if (argc == 3) {
++                arg_sourcedir = argv[1];
++                arg_archivedir = argv[2];
++        } else if (argc > 1)
+                 return log_error_errno(-EINVAL,
+-                                       "This program takes no arguments.");
++                                       "This program takes zero or two arguments.");
+ 
+         /* Ignore all parse errors */
+         (void) parse_config();
+ 
+-        log_debug("Selected storage '%s'.", pstore_storage_to_string(arg_storage));
+-        log_debug("Selected Unlink '%d'.", arg_unlink);
++        log_debug("Selected storage: %s.", pstore_storage_to_string(arg_storage));
++        log_debug("Selected unlink: %s.", yes_no(arg_unlink));
+ 
+         if (arg_storage == PSTORE_STORAGE_NONE)
+                 /* Do nothing, intentionally, leaving pstore untouched */

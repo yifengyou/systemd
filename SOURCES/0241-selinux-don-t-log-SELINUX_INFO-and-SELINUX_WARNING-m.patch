@@ -1,0 +1,45 @@
+From cc3c020a5f4fc577dbd2da769c22b77e37ae4e30 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Tue, 26 Feb 2019 17:33:27 +0100
+Subject: [PATCH] selinux: don't log SELINUX_INFO and SELINUX_WARNING messages
+ to audit
+
+Previously we logged even info message from libselinux as USER_AVC's to
+audit. For example, setting SELinux to permissive mode generated
+following audit message,
+
+time->Tue Feb 26 11:29:29 2019
+type=USER_AVC msg=audit(1551198569.423:334): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='avc:  received setenforce notice (enforcing=0)  exe="/usr/lib/systemd/systemd" sauid=0 hostname=? addr=? terminal=?'
+
+This is unnecessary and wrong at the same time. First, kernel already
+records audit event that SELinux was switched to permissive mode, also
+the type of the message really shouldn't be USER_AVC.
+
+Let's ignore SELINUX_WARNING and SELINUX_INFO and forward to audit only
+USER_AVC's and errors as these two libselinux message types have clear
+mapping to audit message types.
+
+(cherry picked from commit 6227fc14c48c4c17daed4b91f61cdd4aa375790a)
+
+Resolves: #1763612
+---
+ src/core/selinux-access.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/selinux-access.c b/src/core/selinux-access.c
+index 39e994afd7..ada4f8705c 100644
+--- a/src/core/selinux-access.c
++++ b/src/core/selinux-access.c
+@@ -112,7 +112,11 @@ _printf_(2, 3) static int log_callback(int type, const char *fmt, ...) {
+                 va_end(ap);
+ 
+                 if (r >= 0) {
+-                        audit_log_user_avc_message(fd, AUDIT_USER_AVC, buf, NULL, NULL, NULL, 0);
++                        if (type == SELINUX_AVC)
++                                audit_log_user_avc_message(get_audit_fd(), AUDIT_USER_AVC, buf, NULL, NULL, NULL, 0);
++                        else if (type == SELINUX_ERROR)
++                                audit_log_user_avc_message(get_audit_fd(), AUDIT_USER_SELINUX_ERR, buf, NULL, NULL, NULL, 0);
++
+                         return 0;
+                 }
+         }

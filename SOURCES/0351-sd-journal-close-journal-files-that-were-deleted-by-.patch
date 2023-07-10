@@ -1,0 +1,75 @@
+From 45275461f4a5293f15191ec5cb3bb80219ef2474 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Tue, 4 Feb 2020 14:23:14 +0100
+Subject: [PATCH] sd-journal: close journal files that were deleted by journald
+ before we've setup inotify watch
+
+Fixes #14695
+
+(cherry picked from commit 28ca867abdb20d0e4ac1901e2ed669cdb41ea3f6)
+
+Related: #1796128
+---
+ src/journal/journal-file.c |  2 +-
+ src/journal/journal-file.h |  1 +
+ src/journal/sd-journal.c   | 15 +++++++++++++++
+ 3 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/src/journal/journal-file.c b/src/journal/journal-file.c
+index 8249b11b23..7ab3c47fc9 100644
+--- a/src/journal/journal-file.c
++++ b/src/journal/journal-file.c
+@@ -597,7 +597,7 @@ static int journal_file_verify_header(JournalFile *f) {
+         return 0;
+ }
+ 
+-static int journal_file_fstat(JournalFile *f) {
++int journal_file_fstat(JournalFile *f) {
+         int r;
+ 
+         assert(f);
+diff --git a/src/journal/journal-file.h b/src/journal/journal-file.h
+index 6a44fd39d2..6069b35234 100644
+--- a/src/journal/journal-file.h
++++ b/src/journal/journal-file.h
+@@ -144,6 +144,7 @@ int journal_file_open(
+ int journal_file_set_offline(JournalFile *f, bool wait);
+ bool journal_file_is_offlining(JournalFile *f);
+ JournalFile* journal_file_close(JournalFile *j);
++int journal_file_fstat(JournalFile *f);
+ DEFINE_TRIVIAL_CLEANUP_FUNC(JournalFile*, journal_file_close);
+ 
+ int journal_file_open_reliably(
+diff --git a/src/journal/sd-journal.c b/src/journal/sd-journal.c
+index 323300baec..c06255e273 100644
+--- a/src/journal/sd-journal.c
++++ b/src/journal/sd-journal.c
+@@ -2584,6 +2584,8 @@ _public_ int sd_journal_wait(sd_journal *j, uint64_t timeout_usec) {
+         assert_return(!journal_pid_changed(j), -ECHILD);
+ 
+         if (j->inotify_fd < 0) {
++                Iterator i;
++                JournalFile *f;
+ 
+                 /* This is the first invocation, hence create the
+                  * inotify watch */
+@@ -2591,6 +2593,19 @@ _public_ int sd_journal_wait(sd_journal *j, uint64_t timeout_usec) {
+                 if (r < 0)
+                         return r;
+ 
++                /* Server might have done some vacuuming while we weren't watching.
++                   Get rid of the deleted files now so they don't stay around indefinitely. */
++                ORDERED_HASHMAP_FOREACH(f, j->files, i) {
++                        r = journal_file_fstat(f);
++                        if (r < 0) {
++                                log_debug_errno(r,"Failed to fstat() journal file '%s' : %m", f->path);
++                                continue;
++                        }
++
++                        if (f->last_stat.st_nlink <= 0)
++                                remove_file_real(j, f);
++                }
++
+                 /* The journal might have changed since the context
+                  * object was created and we weren't watching before,
+                  * hence don't wait for anything, and return

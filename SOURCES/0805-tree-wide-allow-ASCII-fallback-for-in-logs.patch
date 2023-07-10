@@ -1,0 +1,129 @@
+From f27568d24a29590b34fec3a96a5b3b5d290ba3d8 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Fri, 24 Jun 2022 09:59:44 +0200
+Subject: [PATCH] =?UTF-8?q?tree-wide:=20allow=20ASCII=20fallback=20for=20?=
+ =?UTF-8?q?=E2=80=A6=20in=20logs?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+(cherry picked from commit 28e5e1e97f47067bce190ea6b3404907d63e4320)
+
+Related: #2093479
+---
+ src/core/manager.c      | 5 +++--
+ src/shared/vlan-util.c  | 3 ++-
+ src/sysusers/sysusers.c | 5 +++--
+ src/tmpfiles/tmpfiles.c | 6 +++---
+ 4 files changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/src/core/manager.c b/src/core/manager.c
+index 845c26f498..5873e5b6d7 100644
+--- a/src/core/manager.c
++++ b/src/core/manager.c
+@@ -49,6 +49,7 @@
+ #include "io-util.h"
+ #include "label.h"
+ #include "locale-setup.h"
++#include "locale-util.h"
+ #include "log.h"
+ #include "macro.h"
+ #include "manager.h"
+@@ -1404,7 +1405,7 @@ static void manager_coldplug(Manager *m) {
+ 
+         assert(m);
+ 
+-        log_debug("Invoking unit coldplug() handlers…");
++        log_debug("Invoking unit coldplug() handlers%s", special_glyph(ELLIPSIS));
+ 
+         /* Let's place the units back into their deserialized state */
+         HASHMAP_FOREACH_KEY(u, k, m->units, i) {
+@@ -1426,7 +1427,7 @@ static void manager_catchup(Manager *m) {
+ 
+         assert(m);
+ 
+-        log_debug("Invoking unit catchup() handlers…");
++        log_debug("Invoking unit catchup() handlers%s", special_glyph(ELLIPSIS));
+ 
+         /* Let's catch up on any state changes that happened while we were reloading/reexecing */
+         HASHMAP_FOREACH_KEY(u, k, m->units, i) {
+diff --git a/src/shared/vlan-util.c b/src/shared/vlan-util.c
+index 400994a354..9301dacbe2 100644
+--- a/src/shared/vlan-util.c
++++ b/src/shared/vlan-util.c
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: LGPL-2.1+ */
+ 
+ #include "conf-parser.h"
++#include "locale-util.h"
+ #include "parse-util.h"
+ #include "string-util.h"
+ #include "vlan-util.h"
+@@ -67,7 +68,7 @@ int config_parse_vlanid(
+ 
+         r = parse_vlanid(rvalue, id);
+         if (r == -ERANGE) {
+-                log_syntax(unit, LOG_ERR, filename, line, r, "VLAN identifier outside of valid range 0…4094, ignoring: %s", rvalue);
++                log_syntax(unit, LOG_ERR, filename, line, r, "VLAN identifier outside of valid range 0%s4094, ignoring: %s", special_glyph(ELLIPSIS), rvalue);
+                 return 0;
+         }
+         if (r < 0) {
+diff --git a/src/sysusers/sysusers.c b/src/sysusers/sysusers.c
+index a374ebaaf4..f547388151 100644
+--- a/src/sysusers/sysusers.c
++++ b/src/sysusers/sysusers.c
+@@ -12,6 +12,7 @@
+ #include "format-util.h"
+ #include "fs-util.h"
+ #include "hashmap.h"
++#include "locale-util.h"
+ #include "pager.h"
+ #include "path-util.h"
+ #include "selinux-util.h"
+@@ -1890,13 +1891,13 @@ static int read_config_files(char **args) {
+ 
+         STRV_FOREACH(f, files)
+                 if (p && path_equal(*f, p)) {
+-                        log_debug("Parsing arguments at position \"%s\"…", *f);
++                        log_debug("Parsing arguments at position \"%s\"%s", *f, special_glyph(ELLIPSIS));
+ 
+                         r = parse_arguments(args);
+                         if (r < 0)
+                                 return r;
+                 } else {
+-                        log_debug("Reading config file \"%s\"…", *f);
++                        log_debug("Reading config file \"%s\"%s", *f, special_glyph(ELLIPSIS));
+ 
+                         /* Just warn, ignore result otherwise */
+                         (void) read_config_file(*f, true);
+diff --git a/src/tmpfiles/tmpfiles.c b/src/tmpfiles/tmpfiles.c
+index b3c2aac746..8da525120b 100644
+--- a/src/tmpfiles/tmpfiles.c
++++ b/src/tmpfiles/tmpfiles.c
+@@ -2654,7 +2654,7 @@ static int read_config_file(char **config_dirs, const char *fn, bool ignore_enoe
+         assert(fn);
+ 
+         if (streq(fn, "-")) {
+-                log_debug("Reading config from stdin…");
++                log_debug("Reading config from stdin%s", special_glyph(ELLIPSIS));
+                 fn = "<stdin>";
+                 f = stdin;
+         } else {
+@@ -2667,7 +2667,7 @@ static int read_config_file(char **config_dirs, const char *fn, bool ignore_enoe
+ 
+                         return log_error_errno(r, "Failed to open '%s': %m", fn);
+                 }
+-                log_debug("Reading config file \"%s\"…", fn);
++                log_debug("Reading config file \"%s\"%s", fn, special_glyph(ELLIPSIS));
+                 f = _f;
+         }
+ 
+@@ -2765,7 +2765,7 @@ static int read_config_files(char **config_dirs, char **args, bool *invalid_conf
+ 
+         STRV_FOREACH(f, files)
+                 if (p && path_equal(*f, p)) {
+-                        log_debug("Parsing arguments at position \"%s\"…", *f);
++                        log_debug("Parsing arguments at position \"%s\"%s", *f, special_glyph(ELLIPSIS));
+ 
+                         r = parse_arguments(config_dirs, args, invalid_config);
+                         if (r < 0)

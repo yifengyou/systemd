@@ -1,0 +1,24 @@
+From d284fd2b036ed874f9f38da63f1ab4e9fd9e96a3 Mon Sep 17 00:00:00 2001
+From: Jonas Jelten <jj@sft.mx>
+Date: Thu, 17 Oct 2019 12:10:13 +0200
+Subject: [PATCH] ceph is a network filesystem
+
+(cherry picked from commit c4742de6d801b125abf3c4d1c710280f51d7c701)
+
+Resolves: #1952013
+---
+ src/basic/mount-util.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/basic/mount-util.c b/src/basic/mount-util.c
+index be26bb5ec1..45348bf878 100644
+--- a/src/basic/mount-util.c
++++ b/src/basic/mount-util.c
+@@ -608,6 +608,7 @@ bool fstype_is_network(const char *fstype) {
+ 
+         return STR_IN_SET(fstype,
+                           "afs",
++                          "ceph",
+                           "cifs",
+                           "smb3",
+                           "smbfs",

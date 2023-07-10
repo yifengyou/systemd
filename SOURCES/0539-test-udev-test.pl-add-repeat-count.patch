@@ -1,0 +1,44 @@
+From 6fba8e9a94026ee7b8791844ed1e7c6d464f7666 Mon Sep 17 00:00:00 2001
+From: Martin Wilck <mwilck@suse.com>
+Date: Tue, 24 Apr 2018 22:24:43 +0200
+Subject: [PATCH] test/udev-test.pl: add repeat count
+
+for easier reproduction of sporadic test failures.
+
+(cherry picked from commit 2ab0a8d00bc48d3531e953d938db889d8a932d65)
+
+Related: #1642728
+---
+ test/udev-test.pl | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index d964c664b6..8b1ab3c06c 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -2125,6 +2125,7 @@ EOF
+         },
+         {
+                 desc            => "multiple devices, same link name, positive prio",
++                repeat          => 100,
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda/sda1",
+@@ -2635,6 +2636,7 @@ sub run_test {
+         print "TEST $number: $rules->{desc}\n";
+         create_rules(\$rules->{rules});
+ 
++      REPEAT:
+         fork_and_run_udev("add", $rules, $sema);
+ 
+         foreach my $dev (@devices) {
+@@ -2653,6 +2655,9 @@ sub run_test {
+         }
+ 
+         print "\n";
++        if (defined($rules->{repeat}) && --($rules->{repeat}) > 0) {
++                goto REPEAT;
++        }
+ 
+         if (defined($rules->{option}) && $rules->{option} eq "clean") {
+                 udev_setup();

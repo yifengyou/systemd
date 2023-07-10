@@ -1,0 +1,151 @@
+From e39c4e6aee6c2ece5d9b51cc0e7a772016546f5a Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Thu, 13 Sep 2018 03:01:42 +0900
+Subject: [PATCH] test: replace duplicated Makefile by symbolic link
+
+(cherry picked from commit dd75c133d81f07c56c82ee4e7a80f391ffebd9ce)
+
+Resolves: #1823767
+---
+ test/TEST-17-UDEV-WANTS/Makefile    | 5 +----
+ test/TEST-18-FAILUREACTION/Makefile | 5 +----
+ test/TEST-19-DELEGATE/Makefile      | 5 +----
+ test/TEST-20-MAINPIDGAMES/Makefile  | 5 +----
+ test/TEST-21-SYSUSERS/Makefile      | 5 +----
+ test/TEST-22-TMPFILES/Makefile      | 5 +----
+ test/TEST-23-TYPE-EXEC/Makefile     | 5 +----
+ 7 files changed, 7 insertions(+), 28 deletions(-)
+ mode change 100644 => 120000 test/TEST-17-UDEV-WANTS/Makefile
+ mode change 100644 => 120000 test/TEST-18-FAILUREACTION/Makefile
+ mode change 100644 => 120000 test/TEST-19-DELEGATE/Makefile
+ mode change 100644 => 120000 test/TEST-20-MAINPIDGAMES/Makefile
+ mode change 100644 => 120000 test/TEST-21-SYSUSERS/Makefile
+ mode change 100644 => 120000 test/TEST-22-TMPFILES/Makefile
+ mode change 100644 => 120000 test/TEST-23-TYPE-EXEC/Makefile
+
+diff --git a/test/TEST-17-UDEV-WANTS/Makefile b/test/TEST-17-UDEV-WANTS/Makefile
+deleted file mode 100644
+index 34d7cc6cdf..0000000000
+--- a/test/TEST-17-UDEV-WANTS/Makefile
++++ /dev/null
+@@ -1,4 +0,0 @@
+-BUILD_DIR=$(shell ../../tools/find-build-dir.sh)
+-
+-all setup clean run:
+-	@basedir=../.. TEST_BASE_DIR=../ BUILD_DIR=$(BUILD_DIR) ./test.sh --$@
+diff --git a/test/TEST-17-UDEV-WANTS/Makefile b/test/TEST-17-UDEV-WANTS/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-17-UDEV-WANTS/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-18-FAILUREACTION/Makefile b/test/TEST-18-FAILUREACTION/Makefile
+deleted file mode 100644
+index 34d7cc6cdf..0000000000
+--- a/test/TEST-18-FAILUREACTION/Makefile
++++ /dev/null
+@@ -1,4 +0,0 @@
+-BUILD_DIR=$(shell ../../tools/find-build-dir.sh)
+-
+-all setup clean run:
+-	@basedir=../.. TEST_BASE_DIR=../ BUILD_DIR=$(BUILD_DIR) ./test.sh --$@
+diff --git a/test/TEST-18-FAILUREACTION/Makefile b/test/TEST-18-FAILUREACTION/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-18-FAILUREACTION/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-19-DELEGATE/Makefile b/test/TEST-19-DELEGATE/Makefile
+deleted file mode 100644
+index 34d7cc6cdf..0000000000
+--- a/test/TEST-19-DELEGATE/Makefile
++++ /dev/null
+@@ -1,4 +0,0 @@
+-BUILD_DIR=$(shell ../../tools/find-build-dir.sh)
+-
+-all setup clean run:
+-	@basedir=../.. TEST_BASE_DIR=../ BUILD_DIR=$(BUILD_DIR) ./test.sh --$@
+diff --git a/test/TEST-19-DELEGATE/Makefile b/test/TEST-19-DELEGATE/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-19-DELEGATE/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-20-MAINPIDGAMES/Makefile b/test/TEST-20-MAINPIDGAMES/Makefile
+deleted file mode 100644
+index 34d7cc6cdf..0000000000
+--- a/test/TEST-20-MAINPIDGAMES/Makefile
++++ /dev/null
+@@ -1,4 +0,0 @@
+-BUILD_DIR=$(shell ../../tools/find-build-dir.sh)
+-
+-all setup clean run:
+-	@basedir=../.. TEST_BASE_DIR=../ BUILD_DIR=$(BUILD_DIR) ./test.sh --$@
+diff --git a/test/TEST-20-MAINPIDGAMES/Makefile b/test/TEST-20-MAINPIDGAMES/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-20-MAINPIDGAMES/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-21-SYSUSERS/Makefile b/test/TEST-21-SYSUSERS/Makefile
+deleted file mode 100644
+index 34d7cc6cdf..0000000000
+--- a/test/TEST-21-SYSUSERS/Makefile
++++ /dev/null
+@@ -1,4 +0,0 @@
+-BUILD_DIR=$(shell ../../tools/find-build-dir.sh)
+-
+-all setup clean run:
+-	@basedir=../.. TEST_BASE_DIR=../ BUILD_DIR=$(BUILD_DIR) ./test.sh --$@
+diff --git a/test/TEST-21-SYSUSERS/Makefile b/test/TEST-21-SYSUSERS/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-21-SYSUSERS/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-22-TMPFILES/Makefile b/test/TEST-22-TMPFILES/Makefile
+deleted file mode 100644
+index 34d7cc6cdf..0000000000
+--- a/test/TEST-22-TMPFILES/Makefile
++++ /dev/null
+@@ -1,4 +0,0 @@
+-BUILD_DIR=$(shell ../../tools/find-build-dir.sh)
+-
+-all setup clean run:
+-	@basedir=../.. TEST_BASE_DIR=../ BUILD_DIR=$(BUILD_DIR) ./test.sh --$@
+diff --git a/test/TEST-22-TMPFILES/Makefile b/test/TEST-22-TMPFILES/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-22-TMPFILES/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-23-TYPE-EXEC/Makefile b/test/TEST-23-TYPE-EXEC/Makefile
+deleted file mode 100644
+index 34d7cc6cdf..0000000000
+--- a/test/TEST-23-TYPE-EXEC/Makefile
++++ /dev/null
+@@ -1,4 +0,0 @@
+-BUILD_DIR=$(shell ../../tools/find-build-dir.sh)
+-
+-all setup clean run:
+-	@basedir=../.. TEST_BASE_DIR=../ BUILD_DIR=$(BUILD_DIR) ./test.sh --$@
+diff --git a/test/TEST-23-TYPE-EXEC/Makefile b/test/TEST-23-TYPE-EXEC/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-23-TYPE-EXEC/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file

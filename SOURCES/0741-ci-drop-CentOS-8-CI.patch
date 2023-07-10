@@ -1,0 +1,26 @@
+From 2347478a64329b2777ae0838be51c8b017a84960 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Tue, 8 Feb 2022 11:24:20 +0100
+Subject: [PATCH] ci: drop CentOS 8 CI
+
+since it went EOL and we should use only Stream 8 from now on.
+
+rhel-only
+Related: #2017033
+---
+ .github/workflows/unit_tests.yml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/.github/workflows/unit_tests.yml b/.github/workflows/unit_tests.yml
+index b363118be8..87b162fa71 100644
+--- a/.github/workflows/unit_tests.yml
++++ b/.github/workflows/unit_tests.yml
+@@ -10,7 +10,7 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        image: [centos8, stream8]
++        image: [stream8]
+         phase: [GCC, GCC_ASAN]
+     env:
+       CONT_NAME: "systemd-centos8-ci"

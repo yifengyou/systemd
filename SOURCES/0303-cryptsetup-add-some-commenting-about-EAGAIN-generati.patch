@@ -1,0 +1,25 @@
+From ea0c4c31f6dff7d01e585bd8d5f962b373844544 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 21 Jan 2019 20:13:11 +0100
+Subject: [PATCH] cryptsetup: add some commenting about EAGAIN generation
+
+(cherry picked from commit b7a0fead10959b03a1fa642a5ae7aca3a6a3dee9)
+
+Related: #1776408
+---
+ src/cryptsetup/cryptsetup.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/cryptsetup/cryptsetup.c b/src/cryptsetup/cryptsetup.c
+index 0881aea915..f2b2557497 100644
+--- a/src/cryptsetup/cryptsetup.c
++++ b/src/cryptsetup/cryptsetup.c
+@@ -455,7 +455,7 @@ static int attach_tcrypt(
+                 r = read_one_line_file(key_file, &passphrase);
+                 if (r < 0) {
+                         log_error_errno(r, "Failed to read password file '%s': %m", key_file);
+-                        return -EAGAIN;
++                        return -EAGAIN; /* log with the actual error, but return EAGAIN */
+                 }
+ 
+                 params.passphrase = passphrase;

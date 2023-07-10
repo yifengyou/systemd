@@ -1,0 +1,27 @@
+From c95ba53ab720dfbd7f692e0a87d7f5d4f89ea36b Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Mon, 22 Jul 2019 10:46:53 +0900
+Subject: [PATCH] meson: drop redundant line
+
+Found by @mattiasb.
+
+(cherry picked from commit 3f708e7f6909faad307bdb60ed0f8d68e84f6584)
+
+Related: #2158832
+---
+ meson.build | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 972a8fb6f7..673800a1a7 100644
+--- a/meson.build
++++ b/meson.build
+@@ -2166,8 +2166,6 @@ if conf.get('ENABLE_PSTORE') == 1
+                    install_rpath : rootlibexecdir,
+                    install : true,
+                    install_dir : rootlibexecdir)
+-
+-        public_programs += exe
+ endif
+ 
+ if conf.get('ENABLE_BINFMT') == 1

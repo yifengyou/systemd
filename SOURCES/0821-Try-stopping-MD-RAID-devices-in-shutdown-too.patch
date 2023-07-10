@@ -1,0 +1,292 @@
+From c7532112a37ffdd3cc9851ae04fdcb543b99ed1c Mon Sep 17 00:00:00 2001
+From: Hubert Kario <hubert@kario.pl>
+Date: Sun, 20 Sep 2020 18:59:58 +0200
+Subject: [PATCH] Try stopping MD RAID devices in shutdown too
+
+Currently the systemd-shutdown command attempts to stop swaps, DM
+(crypt, LVM2) and loop devices, but it doesn't attempt to stop MD
+RAID devices, which means that if the RAID is set up on crypt,
+loop, etc. device, it won't be able to stop those underlying devices.
+
+This code extends the shutdown application to also attempt stopping
+the MD RAID devices.
+
+Signed-off-by: Hubert Kario <hubert@kario.pl>
+(cherry picked from commit 0b220a5f2a31844eaa1f5426bab02d41d54f471c)
+
+Resolves: #1817706
+---
+ src/core/shutdown.c |  37 +++++++++----
+ src/core/umount.c   | 125 ++++++++++++++++++++++++++++++++++++++++++++
+ src/core/umount.h   |   2 +
+ 3 files changed, 154 insertions(+), 10 deletions(-)
+
+diff --git a/src/core/shutdown.c b/src/core/shutdown.c
+index 038345b752..b8a983986a 100644
+--- a/src/core/shutdown.c
++++ b/src/core/shutdown.c
+@@ -251,7 +251,7 @@ static void sync_with_progress(void) {
+ }
+ 
+ int main(int argc, char *argv[]) {
+-        bool need_umount, need_swapoff, need_loop_detach, need_dm_detach;
++        bool need_umount, need_swapoff, need_loop_detach, need_dm_detach, need_md_detach;
+         bool in_container, use_watchdog = false, can_initrd;
+         _cleanup_free_ char *cgroup = NULL;
+         char *arguments[3];
+@@ -331,6 +331,7 @@ int main(int argc, char *argv[]) {
+         need_swapoff = !in_container;
+         need_loop_detach = !in_container;
+         need_dm_detach = !in_container;
++        need_md_detach = !in_container;
+         can_initrd = !in_container && !in_initrd() && access("/run/initramfs/shutdown", X_OK) == 0;
+ 
+         /* Unmount all mountpoints, swaps, and loopback devices */
+@@ -383,6 +384,18 @@ int main(int argc, char *argv[]) {
+                                 log_error_errno(r, "Failed to detach loop devices: %m");
+                 }
+ 
++                if (need_md_detach) {
++                        log_info("Stopping MD devices.");
++                        r = md_detach_all(&changed, umount_log_level);
++                        if (r == 0) {
++                                need_md_detach = false;
++                                log_info("All MD devices stopped.");
++                        } else if (r > 0)
++                                log_info("Not all MD devices stopped, %d left.", r);
++                        else
++                                log_error_errno(r, "Failed to stop MD devices: %m");
++                }
++
+                 if (need_dm_detach) {
+                         log_info("Detaching DM devices.");
+                         r = dm_detach_all(&changed, umount_log_level);
+@@ -395,8 +408,9 @@ int main(int argc, char *argv[]) {
+                                 log_error_errno(r, "Failed to detach DM devices: %m");
+                 }
+ 
+-                if (!need_umount && !need_swapoff && !need_loop_detach && !need_dm_detach) {
+-                        log_info("All filesystems, swaps, loop devices and DM devices detached.");
++                if (!need_umount && !need_swapoff && !need_loop_detach && !need_dm_detach
++                            && !need_md_detach) {
++                        log_info("All filesystems, swaps, loop devices, MD devices and DM devices detached.");
+                         /* Yay, done */
+                         break;
+                 }
+@@ -414,19 +428,21 @@ int main(int argc, char *argv[]) {
+                 /* If in this iteration we didn't manage to
+                  * unmount/deactivate anything, we simply give up */
+                 if (!changed) {
+-                        log_info("Cannot finalize remaining%s%s%s%s continuing.",
++                        log_info("Cannot finalize remaining%s%s%s%s%s continuing.",
+                                  need_umount ? " file systems," : "",
+                                  need_swapoff ? " swap devices," : "",
+                                  need_loop_detach ? " loop devices," : "",
+-                                 need_dm_detach ? " DM devices," : "");
++                                 need_dm_detach ? " DM devices," : "",
++                                 need_md_detach ? " MD devices," : "");
+                         break;
+                 }
+ 
+-                log_debug("Couldn't finalize remaining %s%s%s%s trying again.",
++                log_debug("Couldn't finalize remaining %s%s%s%s%s trying again.",
+                           need_umount ? " file systems," : "",
+                           need_swapoff ? " swap devices," : "",
+                           need_loop_detach ? " loop devices," : "",
+-                          need_dm_detach ? " DM devices," : "");
++                          need_dm_detach ? " DM devices," : "",
++                          need_md_detach ? " MD devices," : "");
+         }
+ 
+         /* We're done with the watchdog. */
+@@ -455,12 +471,13 @@ int main(int argc, char *argv[]) {
+ 
+         }
+ 
+-        if (need_umount || need_swapoff || need_loop_detach || need_dm_detach)
+-                log_error("Failed to finalize %s%s%s%s ignoring",
++        if (need_umount || need_swapoff || need_loop_detach || need_dm_detach || need_md_detach)
++                log_error("Failed to finalize%s%s%s%s%s ignoring.",
+                           need_umount ? " file systems," : "",
+                           need_swapoff ? " swap devices," : "",
+                           need_loop_detach ? " loop devices," : "",
+-                          need_dm_detach ? " DM devices," : "");
++                          need_dm_detach ? " DM devices," : "",
++                          need_md_detach ? " MD devices," : "");
+ 
+         /* The kernel will automatically flush ATA disks and suchlike on reboot(), but the file systems need to be
+          * sync'ed explicitly in advance. So let's do this here, but not needlessly slow down containers. Note that we
+diff --git a/src/core/umount.c b/src/core/umount.c
+index 3f02bf141a..ed90c6b1fc 100644
+--- a/src/core/umount.c
++++ b/src/core/umount.c
+@@ -5,6 +5,8 @@
+ 
+ #include <errno.h>
+ #include <fcntl.h>
++#include <linux/major.h>
++#include <linux/raid/md_u.h>
+ #include <linux/loop.h>
+ #include <string.h>
+ #include <sys/mount.h>
+@@ -332,6 +334,66 @@ static int dm_list_get(MountPoint **head) {
+         return 0;
+ }
+ 
++static int md_list_get(MountPoint **head) {
++        _cleanup_(udev_enumerate_unrefp) struct udev_enumerate *e = NULL;
++        struct udev_list_entry *item = NULL, *first = NULL;
++        _cleanup_(udev_unrefp) struct udev *udev = NULL;
++        int r;
++
++        assert(head);
++
++        udev = udev_new();
++        if (!udev)
++                return -ENOMEM;
++
++        e = udev_enumerate_new(udev);
++        if (!e)
++                return -ENOMEM;
++
++        r = udev_enumerate_add_match_subsystem(e, "block");
++        if (r < 0)
++                return r;
++
++        r = udev_enumerate_add_match_sysname(e, "md*");
++        if (r < 0)
++                return r;
++
++        first = udev_enumerate_get_list_entry(e);
++        udev_list_entry_foreach(item, first) {
++                _cleanup_(udev_device_unrefp) struct udev_device *d;
++                _cleanup_free_ char *p = NULL;
++                const char *dn;
++                MountPoint *m;
++                dev_t devnum;
++
++                d = udev_device_new_from_syspath(udev, udev_list_entry_get_name(item));
++                if (!d)
++                        return -ENOMEM;
++
++                devnum = udev_device_get_devnum(d);
++                dn = udev_device_get_devnode(d);
++                if (major(devnum) == 0 || !dn)
++                        continue;
++
++                p = strdup(dn);
++                if (!p)
++                        return -ENOMEM;
++
++                m = new(MountPoint, 1);
++                if (!m)
++                        return -ENOMEM;
++
++                *m = (MountPoint) {
++                        .path = TAKE_PTR(p),
++                        .devnum = devnum,
++                };
++
++                LIST_PREPEND(mount_point, *head, m);
++        }
++
++        return 0;
++}
++
+ static int delete_loopback(const char *device) {
+         _cleanup_close_ int fd = -1;
+         int r;
+@@ -379,6 +441,23 @@ static int delete_dm(dev_t devnum) {
+         return 0;
+ }
+ 
++static int delete_md(MountPoint *m) {
++
++        _cleanup_close_ int fd = -1;
++
++        assert(major(m->devnum) != 0);
++        assert(m->path != 0);
++
++        fd = open(m->path, O_RDONLY|O_CLOEXEC|O_EXCL);
++        if (fd < 0)
++                return -errno;
++
++        if (ioctl(fd, STOP_ARRAY, NULL) < 0)
++                return -errno;
++
++        return 0;
++}
++
+ static bool nonunmountable_path(const char *path) {
+         return path_equal(path, "/")
+ #if ! HAVE_SPLIT_USR
+@@ -618,6 +697,37 @@ static int dm_points_list_detach(MountPoint **head, bool *changed, int umount_lo
+         return n_failed;
+ }
+ 
++static int md_points_list_detach(MountPoint **head, bool *changed, int umount_log_level) {
++        MountPoint *m, *n;
++        int n_failed = 0, r;
++        dev_t rootdev = 0;
++
++        assert(head);
++        assert(changed);
++
++        (void) get_block_device("/", &rootdev);
++
++        LIST_FOREACH_SAFE(mount_point, m, n, *head) {
++                if (major(rootdev) != 0 && rootdev == m->devnum) {
++                        n_failed ++;
++                        continue;
++                }
++
++                log_info("Stopping MD %s (%u:%u).", m->path, major(m->devnum), minor(m->devnum));
++                r = delete_md(m);
++                if (r < 0) {
++                        log_full_errno(umount_log_level, r, "Could not stop MD %s: %m", m->path);
++                        n_failed++;
++                        continue;
++                }
++
++                *changed = true;
++                mount_point_free(head, m);
++        }
++
++        return n_failed;
++}
++
+ static int umount_all_once(bool *changed, int umount_log_level) {
+         int r;
+         _cleanup_(mount_points_list_free) LIST_HEAD(MountPoint, mp_list_head);
+@@ -696,3 +806,18 @@ int dm_detach_all(bool *changed, int umount_log_level) {
+ 
+         return dm_points_list_detach(&dm_list_head, changed, umount_log_level);
+ }
++
++int md_detach_all(bool *changed, int umount_log_level) {
++        _cleanup_(mount_points_list_free) LIST_HEAD(MountPoint, md_list_head);
++        int r;
++
++        assert(changed);
++
++        LIST_HEAD_INIT(md_list_head);
++
++        r = md_list_get(&md_list_head);
++        if (r < 0)
++                return r;
++
++        return md_points_list_detach(&md_list_head, changed, umount_log_level);
++}
+diff --git a/src/core/umount.h b/src/core/umount.h
+index 6f2b24d195..b01062484f 100644
+--- a/src/core/umount.h
++++ b/src/core/umount.h
+@@ -15,6 +15,8 @@ int loopback_detach_all(bool *changed, int umount_log_level);
+ 
+ int dm_detach_all(bool *changed, int umount_log_level);
+ 
++int md_detach_all(bool *changed, int umount_log_level);
++
+ /* This is exported just for testing */
+ typedef struct MountPoint {
+         char *path;

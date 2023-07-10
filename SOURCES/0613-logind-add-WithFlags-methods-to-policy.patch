@@ -1,0 +1,85 @@
+From e1b18ab36b2457a4896e531f03713b198725c919 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 9 Mar 2021 09:03:58 +0100
+Subject: [PATCH] =?UTF-8?q?logind:=20add=20=E2=80=A6WithFlags=20methods=20?=
+ =?UTF-8?q?to=20policy?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Without this, privilege escalation through polkit does not work, because all
+methods fail with permission errors.
+
+Forgotten in 8885fed4e3a52cf1bf105e42043203c485ed9d92.
+Fixes https://bugzilla.redhat.com/show_bug.cgi?id=1933335.
+
+(cherry picked from commit 2280db756eaff795091871feee8e47d4f6989a58)
+
+Related: #1269726
+---
+ src/login/org.freedesktop.login1.conf | 28 +++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/src/login/org.freedesktop.login1.conf b/src/login/org.freedesktop.login1.conf
+index f880f3e2da..dcde0c22c6 100644
+--- a/src/login/org.freedesktop.login1.conf
++++ b/src/login/org.freedesktop.login1.conf
+@@ -130,30 +130,58 @@
+                        send_interface="org.freedesktop.login1.Manager"
+                        send_member="PowerOff"/>
+ 
++                <allow send_destination="org.freedesktop.login1"
++                       send_interface="org.freedesktop.login1.Manager"
++                       send_member="PowerOffWithFlags"/>
++
+                 <allow send_destination="org.freedesktop.login1"
+                        send_interface="org.freedesktop.login1.Manager"
+                        send_member="Reboot"/>
+ 
++                <allow send_destination="org.freedesktop.login1"
++                       send_interface="org.freedesktop.login1.Manager"
++                       send_member="RebootWithFlags"/>
++
+                 <allow send_destination="org.freedesktop.login1"
+                        send_interface="org.freedesktop.login1.Manager"
+                        send_member="Halt"/>
+ 
++                <allow send_destination="org.freedesktop.login1"
++                       send_interface="org.freedesktop.login1.Manager"
++                       send_member="HaltWithFlags"/>
++
+                 <allow send_destination="org.freedesktop.login1"
+                        send_interface="org.freedesktop.login1.Manager"
+                        send_member="Suspend"/>
+ 
++                <allow send_destination="org.freedesktop.login1"
++                       send_interface="org.freedesktop.login1.Manager"
++                       send_member="SuspendWithFlags"/>
++
+                 <allow send_destination="org.freedesktop.login1"
+                        send_interface="org.freedesktop.login1.Manager"
+                        send_member="Hibernate"/>
+ 
++                <allow send_destination="org.freedesktop.login1"
++                       send_interface="org.freedesktop.login1.Manager"
++                       send_member="HibernateWithFlags"/>
++
+                 <allow send_destination="org.freedesktop.login1"
+                        send_interface="org.freedesktop.login1.Manager"
+                        send_member="HybridSleep"/>
+ 
++                <allow send_destination="org.freedesktop.login1"
++                       send_interface="org.freedesktop.login1.Manager"
++                       send_member="HybridSleepWithFlags"/>
++
+                 <allow send_destination="org.freedesktop.login1"
+                        send_interface="org.freedesktop.login1.Manager"
+                        send_member="SuspendThenHibernate"/>
+ 
++                <allow send_destination="org.freedesktop.login1"
++                       send_interface="org.freedesktop.login1.Manager"
++                       send_member="SuspendThenHibernateWithFlags"/>
++
+                 <allow send_destination="org.freedesktop.login1"
+                        send_interface="org.freedesktop.login1.Manager"
+                        send_member="CanPowerOff"/>

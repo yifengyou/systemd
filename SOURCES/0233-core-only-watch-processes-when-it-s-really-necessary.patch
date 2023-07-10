@@ -1,0 +1,55 @@
+From 25b93538eba0275d35ef4b0792c2cd63d63d5e8d Mon Sep 17 00:00:00 2001
+From: Franck Bui <fbui@suse.com>
+Date: Tue, 19 Mar 2019 10:59:26 +0100
+Subject: [PATCH] core: only watch processes when it's really necessary
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+If we know that main pid is our child then it's unnecessary to watch all
+other processes of a unit since in this case we will get SIGCHLD when the main
+process will exit and will act upon accordingly.
+
+So let's watch all processes only if the main process is not our child since in
+this case we need to detect when the cgroup will become empty in order to
+figure out when the service becomes dead. This is only needed by cgroupv1.
+
+Thanks Renaud Métrich for backporting this to RHEL.
+Resolves: #1744972
+---
+ src/core/service.c | 15 +++++++++------
+ 1 file changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/src/core/service.c b/src/core/service.c
+index 310838a5f6..b1ec52d220 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -3410,8 +3410,7 @@ static void service_sigchld_event(Unit *u, pid_t pid, int code, int status) {
+                                 if (main_pid_good(s) <= 0)
+                                         service_enter_stop_post(s, f);
+ 
+-                                /* If there is still a service
+-                                 * process around, wait until
++                                /* If there is still a service process around, wait until
+                                  * that one quit, too */
+                                 break;
+ 
+@@ -3433,10 +3432,14 @@ static void service_sigchld_event(Unit *u, pid_t pid, int code, int status) {
+         if (notify_dbus)
+                 unit_add_to_dbus_queue(u);
+ 
+-        /* If we get a SIGCHLD event for one of the processes we were interested in, then we look for others to watch,
+-         * under the assumption that we'll sooner or later get a SIGCHLD for them, as the original process we watched
+-         * was probably the parent of them, and they are hence now our children. */
+-        (void) unit_enqueue_rewatch_pids(u);
++        /* We watch the main/control process otherwise we can't retrieve the unit they
++         * belong to with cgroupv1. But if they are not our direct child, we won't get a
++         * SIGCHLD for them. Therefore we need to look for others to watch so we can
++         * detect when the cgroup becomes empty. Note that the control process is always
++         * our child so it's pointless to watch all other processes. */
++        if (!control_pid_good(s))
++                if (!s->main_pid_known || s->main_pid_alien)
++                        (void) unit_enqueue_rewatch_pids(u);
+ }
+ 
+ static int service_dispatch_timer(sd_event_source *source, usec_t usec, void *userdata) {

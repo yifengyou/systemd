@@ -1,0 +1,25 @@
+From a967622c58e1ae76bb7e22e83389295c77d560df Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Wed, 12 Jan 2022 15:35:54 +0100
+Subject: [PATCH] udev/net_id: remove extraneous bracket
+
+RHEL-only
+
+Related: #2039797
+---
+ man/systemd.net-naming-scheme.xml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/man/systemd.net-naming-scheme.xml b/man/systemd.net-naming-scheme.xml
+index be969bc8d0..a65da5c6c1 100644
+--- a/man/systemd.net-naming-scheme.xml
++++ b/man/systemd.net-naming-scheme.xml
+@@ -307,7 +307,7 @@
+           <para>Same as naming scheme <constant>rhel-8.4</constant>.</para>
+         </varlistentry>
+ 
+-        <para>Note that <constant>latest</constant> may be used to denote the latest scheme known (to this
++        <para>Note that <constant>latest</constant> may be used to denote the latest scheme known to this
+         particular version of systemd.</para>
+     </variablelist>
+   </refsect1>

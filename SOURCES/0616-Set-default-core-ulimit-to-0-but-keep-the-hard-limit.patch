@@ -1,0 +1,29 @@
+From e2f5e8ccb27f48717b50339f58582d70ad5f59b1 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <fsumsal@redhat.com>
+Date: Tue, 3 Aug 2021 11:52:36 +0200
+Subject: [PATCH] Set default core ulimit to 0, but keep the hard limit
+ ulimited
+
+so users can change it later.
+
+Follow-up to 830bd662276ee117e65a4b3d541f77e8b172eafd.
+
+rhel-only
+Resolves: #1905582
+---
+ src/core/system.conf.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/system.conf.in b/src/core/system.conf.in
+index b4d6dfa15a..84246c0e36 100644
+--- a/src/core/system.conf.in
++++ b/src/core/system.conf.in
+@@ -52,7 +52,7 @@
+ #DefaultLimitFSIZE=
+ #DefaultLimitDATA=
+ #DefaultLimitSTACK=
+-DefaultLimitCORE=0
++DefaultLimitCORE=0:infinity
+ #DefaultLimitRSS=
+ #DefaultLimitNOFILE=
+ #DefaultLimitAS=

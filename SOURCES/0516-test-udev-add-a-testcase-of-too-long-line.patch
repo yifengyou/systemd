@@ -1,0 +1,45 @@
+From 527d43064a93fae9a4490e5d152b120e91f5eade Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Mon, 18 Feb 2019 10:38:29 +0900
+Subject: [PATCH] test-udev: add a testcase of too long line
+
+(cherry picked from commit 1e797cf596df50a6bdd8cbf8e9b2467a3a934171)
+
+Related: #1642728
+---
+ test/udev-test.pl | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 957cda541c..3a50694fa9 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -39,6 +39,11 @@ for (my $i = 1; $i <= 10000; ++$i) {
+         $rules_10k_tags .= 'KERNEL=="sda", TAG+="test' . $i . "\"\n";
+ }
+ 
++my $rules_10k_tags_continuation = "";
++for (my $i = 1; $i <= 10000; ++$i) {
++        $rules_10k_tags_continuation .= 'KERNEL=="sda", TAG+="test' . $i . "\"\\\n";
++}
++
+ my @tests = (
+         {
+                 desc            => "no rules",
+@@ -1444,6 +1449,16 @@ EOF
+                 exp_name        => "found",
+                 rules           => $rules_10k_tags . <<EOF
+ TAGS=="test1", TAGS=="test500", TAGS=="test1234", TAGS=="test9999", TAGS=="test10000", SYMLINK+="found"
++EOF
++        },
++        {
++                desc            => "don't crash with lots of tags with continuation",
++                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
++                exp_name        => "found",
++                not_exp_name    => "bad" ,
++                rules           => $rules_10k_tags_continuation . <<EOF
++TAGS=="test1", TAGS=="test500", TAGS=="test1234", TAGS=="test9999", TAGS=="test10000", SYMLINK+="bad"
++KERNEL=="sda", SYMLINK+="found"
+ EOF
+         },
+ );

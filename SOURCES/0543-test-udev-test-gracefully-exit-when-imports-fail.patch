@@ -1,0 +1,48 @@
+From 2e50a00f6930f1c65ca804b78f4a853e2ae2d2c0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 17 Nov 2020 17:13:31 +0100
+Subject: [PATCH] test/udev-test: gracefully exit when imports fail
+
+In Fedora rawhide various perl modules are now available as separate
+packages that are not pulled in by dependencies. If we don't have some
+package, skip the tests.
+
+This ugly code is apparently the way to do conditional imports:
+https://www.cs.ait.ac.th/~on/O/oreilly/perl/cookbook/ch12_03.htm.
+
+(cherry picked from commit d40763838278246e2073d15ca927ee700e583afc)
+
+Related: #1642728
+---
+ test/udev-test.pl | 18 +++++++++++++-----
+ 1 file changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index cf6ca6b80c..5b1e33504e 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -18,11 +18,19 @@
+ 
+ use warnings;
+ use strict;
+-use POSIX qw(WIFEXITED WEXITSTATUS);
+-use IPC::SysV qw(IPC_PRIVATE S_IRUSR S_IWUSR IPC_CREAT);
+-use IPC::Semaphore;
+-use Time::HiRes qw(usleep);
+-use Cwd qw(getcwd abs_path);
++
++BEGIN {
++    my $EXIT_TEST_SKIP = 77;
++
++    unless (eval "use POSIX qw(WIFEXITED WEXITSTATUS);
++                  use Cwd qw(getcwd abs_path);
++                  use IPC::Semaphore;
++                  use IPC::SysV qw(IPC_PRIVATE S_IRUSR S_IWUSR IPC_CREAT);
++                  use Time::HiRes qw(usleep); 1") {
++        warn "Failed to import dependencies, skipping the test: $@";
++        exit($EXIT_TEST_SKIP);
++    }
++}
+ 
+ my $udev_bin            = "./test-udev";
+ my $valgrind            = 0;

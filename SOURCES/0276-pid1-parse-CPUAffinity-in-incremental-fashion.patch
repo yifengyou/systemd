@@ -1,0 +1,148 @@
+From 8bf8409c6e08f5aef35d1976e172b3f61b651c8d Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Fri, 24 May 2019 08:35:51 +0200
+Subject: [PATCH] pid1: parse CPUAffinity= in incremental fashion
+
+This makes the handling of this option match what we do in unit files. I think
+consistency is important here. (As it happens, it is the only option in
+system.conf that is "non-atomic", i.e. where there's a list of things which can
+be split over multiple assignments. All other options are single-valued, so
+there's no issue of how to handle multiple assignments.)
+
+(cherry picked from commit 61fbbac1d517a0b3498a689c736c6ca918497904)
+
+Related: #1734787
+---
+ man/systemd-system.conf.xml | 13 ++++++++-----
+ man/systemd.exec.xml        |  2 +-
+ src/core/main.c             | 36 ++++++++++++++++++++++++++----------
+ 3 files changed, 35 insertions(+), 16 deletions(-)
+
+diff --git a/man/systemd-system.conf.xml b/man/systemd-system.conf.xml
+index 085086200a..ab23779ec0 100644
+--- a/man/systemd-system.conf.xml
++++ b/man/systemd-system.conf.xml
+@@ -99,11 +99,14 @@
+       <varlistentry>
+         <term><varname>CPUAffinity=</varname></term>
+ 
+-        <listitem><para>Configures the initial CPU affinity for the
+-        init process. Takes a list of CPU indices or ranges separated
+-        by either whitespace or commas. CPU ranges are specified by
+-        the lower and upper CPU indices separated by a
+-        dash.</para></listitem>
++        <listitem><para>Configures the CPU affinity for the service manager as well as the default CPU
++        affinity for all forked off processes. Takes a list of CPU indices or ranges separated by either
++        whitespace or commas. CPU ranges are specified by the lower and upper CPU indices separated by a
++        dash. This option may be specified more than once, in which case the specified CPU affinity masks are
++        merged. If the empty string is assigned, the mask is reset, all assignments prior to this will have
++        no effect. Individual services may override the CPU affinity for their processes with the
++        <varname>CPUAffinity=</varname> setting in unit files, see
++        <citerefentry><refentrytitle>systemd.exec</refentrytitle><manvolnum>5</manvolnum></citerefentry>.</para></listitem>
+       </varlistentry>
+ 
+       <varlistentry>
+diff --git a/man/systemd.exec.xml b/man/systemd.exec.xml
+index 737c52bcc4..342b8385bc 100644
+--- a/man/systemd.exec.xml
++++ b/man/systemd.exec.xml
+@@ -703,7 +703,7 @@ CapabilityBoundingSet=~CAP_B CAP_C</programlisting>
+ 
+         <listitem><para>Controls the CPU affinity of the executed processes. Takes a list of CPU indices or ranges
+         separated by either whitespace or commas. CPU ranges are specified by the lower and upper CPU indices separated
+-        by a dash.  This option may be specified more than once, in which case the specified CPU affinity masks are
++        by a dash. This option may be specified more than once, in which case the specified CPU affinity masks are
+         merged. If the empty string is assigned, the mask is reset, all assignments prior to this will have no
+         effect. See
+         <citerefentry><refentrytitle>sched_setaffinity</refentrytitle><manvolnum>2</manvolnum></citerefentry> for
+diff --git a/src/core/main.c b/src/core/main.c
+index e62b2756ee..bc1db2af7b 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -127,6 +127,7 @@ static bool arg_default_tasks_accounting = true;
+ static uint64_t arg_default_tasks_max = UINT64_MAX;
+ static sd_id128_t arg_machine_id = {};
+ static EmergencyAction arg_cad_burst_action = EMERGENCY_ACTION_REBOOT_FORCE;
++static CPUSet arg_cpu_affinity = {};
+ 
+ _noreturn_ static void freeze_or_reboot(void) {
+ 
+@@ -537,17 +538,11 @@ static int config_parse_cpu_affinity2(
+                 void *data,
+                 void *userdata) {
+ 
+-        _cleanup_(cpu_set_reset) CPUSet c = {};
+-        int r;
+-
+-        r = parse_cpu_set_full(rvalue, &c, true, unit, filename, line, lvalue);
+-        if (r < 0)
+-                return r;
++        CPUSet *affinity = data;
+ 
+-        if (sched_setaffinity(0, c.allocated, c.set) < 0)
+-                log_warning_errno(errno, "Failed to set CPU affinity: %m");
++        assert(affinity);
+ 
+-        // FIXME: parsing and execution should be seperated.
++        (void) parse_cpu_set_extend(rvalue, affinity, true, unit, filename, line, lvalue);
+ 
+         return 0;
+ }
+@@ -655,7 +650,7 @@ static int parse_config_file(void) {
+                 { "Manager", "CrashShell",                config_parse_bool,             0, &arg_crash_shell                       },
+                 { "Manager", "CrashReboot",               config_parse_bool,             0, &arg_crash_reboot                      },
+                 { "Manager", "ShowStatus",                config_parse_show_status,      0, &arg_show_status                       },
+-                { "Manager", "CPUAffinity",               config_parse_cpu_affinity2,    0, NULL                                   },
++                { "Manager", "CPUAffinity",               config_parse_cpu_affinity2,    0, &arg_cpu_affinity                      },
+                 { "Manager", "JoinControllers",           config_parse_join_controllers, 0, &arg_join_controllers                  },
+                 { "Manager", "RuntimeWatchdogSec",        config_parse_sec,              0, &arg_runtime_watchdog                  },
+                 { "Manager", "ShutdownWatchdogSec",       config_parse_sec,              0, &arg_shutdown_watchdog                 },
+@@ -1483,6 +1478,21 @@ static void initialize_coredump(bool skip_setup) {
+ #endif
+ }
+ 
++static void update_cpu_affinity(bool skip_setup) {
++        _cleanup_free_ char *mask = NULL;
++
++        if (skip_setup || !arg_cpu_affinity.set)
++                return;
++
++        assert(arg_cpu_affinity.allocated > 0);
++
++        mask = cpu_set_to_string(&arg_cpu_affinity);
++        log_debug("Setting CPU affinity to %s.", strnull(mask));
++
++        if (sched_setaffinity(0, arg_cpu_affinity.allocated, arg_cpu_affinity.set) < 0)
++                log_warning_errno(errno, "Failed to set CPU affinity: %m");
++}
++
+ static void do_reexecute(
+                 int argc,
+                 char *argv[],
+@@ -1655,6 +1665,8 @@ static int invoke_main_loop(
+ 
+                         set_manager_defaults(m);
+ 
++                        update_cpu_affinity(false);
++
+                         if (saved_log_level >= 0)
+                                 manager_override_log_level(m, saved_log_level);
+                         if (saved_log_target >= 0)
+@@ -1813,6 +1825,8 @@ static int initialize_runtime(
+         if (arg_action != ACTION_RUN)
+                 return 0;
+ 
++        update_cpu_affinity(skip_setup);
++
+         if (arg_system) {
+                 /* Make sure we leave a core dump without panicing the kernel. */
+                 install_crash_handler();
+@@ -1947,6 +1961,8 @@ static void free_arguments(void) {
+         arg_join_controllers = strv_free_free(arg_join_controllers);
+         arg_default_environment = strv_free(arg_default_environment);
+         arg_syscall_archs = set_free(arg_syscall_archs);
++
++        cpu_set_reset(&arg_cpu_affinity);
+ }
+ 
+ static int load_configuration(int argc, char **argv, const char **ret_error_message) {

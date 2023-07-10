@@ -1,0 +1,738 @@
+From ab9c835796a27f0fbaee75a90f0311ec456941d8 Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Fri, 28 Jun 2019 17:02:30 -0700
+Subject: [PATCH] core: ExecCondition= for services
+
+Closes #10596
+
+(cherry picked from commit 31cd5f63ce86a0784c4ef869c4d323a11ff14adc)
+
+Resolves: #1737283
+---
+ TODO                                          |  2 -
+ catalog/systemd.catalog.in                    |  7 ++
+ doc/TRANSIENT-SETTINGS.md                     |  1 +
+ man/systemd.service.xml                       | 20 ++++
+ src/basic/unit-def.c                          |  1 +
+ src/basic/unit-def.h                          |  1 +
+ src/core/dbus-service.c                       |  1 +
+ src/core/job.c                                |  3 +-
+ src/core/job.h                                |  2 +-
+ src/core/load-fragment-gperf.gperf.m4         |  1 +
+ src/core/service.c                            | 93 ++++++++++++++++---
+ src/core/service.h                            |  2 +
+ src/core/unit.c                               | 25 ++++-
+ src/core/unit.h                               |  4 +
+ src/shared/bus-unit-util.c                    |  2 +-
+ src/systemd/sd-messages.h                     |  2 +
+ src/test/test-execute.c                       | 50 +++++++++-
+ test/fuzz/fuzz-unit-file/directives.service   |  1 +
+ test/meson.build                              |  2 +
+ .../exec-condition-failed.service             | 11 +++
+ test/test-execute/exec-condition-skip.service | 15 +++
+ 21 files changed, 222 insertions(+), 24 deletions(-)
+ create mode 100644 test/test-execute/exec-condition-failed.service
+ create mode 100644 test/test-execute/exec-condition-skip.service
+
+diff --git a/TODO b/TODO
+index ff1008accf..8f78000089 100644
+--- a/TODO
++++ b/TODO
+@@ -626,8 +626,6 @@ Features:
+ 
+ * merge unit_kill_common() and unit_kill_context()
+ 
+-* introduce ExecCondition= in services
+-
+ * EFI:
+   - honor language efi variables for default language selection (if there are any?)
+   - honor timezone efi variables for default timezone selection (if there are any?)
+diff --git a/catalog/systemd.catalog.in b/catalog/systemd.catalog.in
+index 2492ad2028..dc44414f9d 100644
+--- a/catalog/systemd.catalog.in
++++ b/catalog/systemd.catalog.in
+@@ -358,6 +358,13 @@ Support: %SUPPORT_URL%
+ 
+ The unit @UNIT@ has entered the 'failed' state with result '@UNIT_RESULT@'.
+ 
++-- 0e4284a0caca4bfc81c0bb6786972673
++Subject: Unit skipped
++Defined-By: systemd
++Support: %SUPPORT_URL%
++
++The unit @UNIT@ was skipped and has entered the 'dead' state with result '@UNIT_RESULT@'.
++
+ -- 50876a9db00f4c40bde1a2ad381c3a1b
+ Subject: The system is configured in a way that might cause problems
+ Defined-By: systemd
+diff --git a/doc/TRANSIENT-SETTINGS.md b/doc/TRANSIENT-SETTINGS.md
+index 0b2ad66dcb..23fe84e4d1 100644
+--- a/doc/TRANSIENT-SETTINGS.md
++++ b/doc/TRANSIENT-SETTINGS.md
+@@ -267,6 +267,7 @@ Most service unit settings are available for transient units.
+ 
+ ```
+ ✓ PIDFile=
++✓ ExecCondition=
+ ✓ ExecStartPre=
+ ✓ ExecStart=
+ ✓ ExecStartPost=
+diff --git a/man/systemd.service.xml b/man/systemd.service.xml
+index 315b80e704..54586d1948 100644
+--- a/man/systemd.service.xml
++++ b/man/systemd.service.xml
+@@ -414,6 +414,26 @@
+         </listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>ExecCondition=</varname></term>
++        <listitem><para>Optional commands that are executed before the command(s) in <varname>ExecStartPre=</varname>.
++        Syntax is the same as for <varname>ExecStart=</varname>, except that multiple command lines are allowed and the
++        commands are executed one after the other, serially.</para>
++
++        <para>The behavior is like an <varname>ExecStartPre=</varname> and condition check hybrid: when an
++        <varname>ExecCondition=</varname> command exits with exit code 1 through 254 (inclusive), the remaining
++        commands are skipped and the unit is <emphasis>not</emphasis> marked as failed. However, if an
++        <varname>ExecCondition=</varname> command exits with 255 or abnormally (e.g. timeout, killed by a
++        signal, etc.), the unit will be considered failed (and remaining commands will be skipped). Exit code of 0 or
++        those matching <varname>SuccessExitStatus=</varname> will continue execution to the next command(s).</para>
++
++        <para>The same recommendations about not running long-running processes in <varname>ExecStartPre=</varname>
++        also applies to <varname>ExecCondition=</varname>. <varname>ExecCondition=</varname> will also run the commands
++        in <varname>ExecStopPost=</varname>, as part of stopping the service, in the case of any non-zero or abnormal
++        exits, like the ones described above.</para>
++        </listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>ExecReload=</varname></term>
+         <listitem><para>Commands to execute to trigger a configuration
+diff --git a/src/basic/unit-def.c b/src/basic/unit-def.c
+index ac6a9b37e8..46593f6e65 100644
+--- a/src/basic/unit-def.c
++++ b/src/basic/unit-def.c
+@@ -162,6 +162,7 @@ DEFINE_STRING_TABLE_LOOKUP(scope_state, ScopeState);
+ 
+ static const char* const service_state_table[_SERVICE_STATE_MAX] = {
+         [SERVICE_DEAD] = "dead",
++        [SERVICE_CONDITION] = "condition",
+         [SERVICE_START_PRE] = "start-pre",
+         [SERVICE_START] = "start",
+         [SERVICE_START_POST] = "start-post",
+diff --git a/src/basic/unit-def.h b/src/basic/unit-def.h
+index d7e2d74669..db397a31ed 100644
+--- a/src/basic/unit-def.h
++++ b/src/basic/unit-def.h
+@@ -101,6 +101,7 @@ typedef enum ScopeState {
+ 
+ typedef enum ServiceState {
+         SERVICE_DEAD,
++        SERVICE_CONDITION,
+         SERVICE_START_PRE,
+         SERVICE_START,
+         SERVICE_START_POST,
+diff --git a/src/core/dbus-service.c b/src/core/dbus-service.c
+index 1b4c98c7d2..5f768a77c8 100644
+--- a/src/core/dbus-service.c
++++ b/src/core/dbus-service.c
+@@ -127,6 +127,7 @@ const sd_bus_vtable bus_service_vtable[] = {
+         SD_BUS_PROPERTY("NRestarts", "u", bus_property_get_unsigned, offsetof(Service, n_restarts), SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+ 
+         BUS_EXEC_STATUS_VTABLE("ExecMain", offsetof(Service, main_exec_status), SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
++        BUS_EXEC_COMMAND_LIST_VTABLE("ExecCondition", offsetof(Service, exec_command[SERVICE_EXEC_CONDITION]), SD_BUS_VTABLE_PROPERTY_EMITS_INVALIDATION),
+         BUS_EXEC_COMMAND_LIST_VTABLE("ExecStartPre", offsetof(Service, exec_command[SERVICE_EXEC_START_PRE]), SD_BUS_VTABLE_PROPERTY_EMITS_INVALIDATION),
+         BUS_EXEC_COMMAND_LIST_VTABLE("ExecStart", offsetof(Service, exec_command[SERVICE_EXEC_START]), SD_BUS_VTABLE_PROPERTY_EMITS_INVALIDATION),
+         BUS_EXEC_COMMAND_LIST_VTABLE("ExecStartPost", offsetof(Service, exec_command[SERVICE_EXEC_START_POST]), SD_BUS_VTABLE_PROPERTY_EMITS_INVALIDATION),
+diff --git a/src/core/job.c b/src/core/job.c
+index b9eee91cf3..870ec0a387 100644
+--- a/src/core/job.c
++++ b/src/core/job.c
+@@ -870,7 +870,8 @@ static void job_log_done_status_message(Unit *u, uint32_t job_id, JobType t, Job
+                 return;
+ 
+         /* Show condition check message if the job did not actually do anything due to failed condition. */
+-        if (t == JOB_START && result == JOB_DONE && !u->condition_result) {
++        if ((t == JOB_START && result == JOB_DONE && !u->condition_result) ||
++            (t == JOB_START && result == JOB_SKIPPED)) {
+                 log_struct(LOG_INFO,
+                            "MESSAGE=Condition check resulted in %s being skipped.", unit_description(u),
+                            "JOB_ID=%" PRIu32, job_id,
+diff --git a/src/core/job.h b/src/core/job.h
+index 2f5f3f3989..189fea20ca 100644
+--- a/src/core/job.h
++++ b/src/core/job.h
+@@ -85,7 +85,7 @@ enum JobResult {
+         JOB_TIMEOUT,             /* Job timeout elapsed */
+         JOB_FAILED,              /* Job failed */
+         JOB_DEPENDENCY,          /* A required dependency job did not result in JOB_DONE */
+-        JOB_SKIPPED,             /* Negative result of JOB_VERIFY_ACTIVE */
++        JOB_SKIPPED,             /* Negative result of JOB_VERIFY_ACTIVE or skip due to ExecCondition= */
+         JOB_INVALID,             /* JOB_RELOAD of inactive unit */
+         JOB_ASSERT,              /* Couldn't start a unit, because an assert didn't hold */
+         JOB_UNSUPPORTED,         /* Couldn't start a unit, because the unit type is not supported on the system */
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index 161c5a2c82..8883818ff2 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -291,6 +291,7 @@ Unit.AssertNull,                 config_parse_unit_condition_null,   0,
+ Unit.CollectMode,                config_parse_collect_mode,          0,                             offsetof(Unit, collect_mode)
+ m4_dnl
+ Service.PIDFile,                 config_parse_unit_path_printf,      0,                             offsetof(Service, pid_file)
++Service.ExecCondition,           config_parse_exec,                  SERVICE_EXEC_CONDITION,        offsetof(Service, exec_command)
+ Service.ExecStartPre,            config_parse_exec,                  SERVICE_EXEC_START_PRE,        offsetof(Service, exec_command)
+ Service.ExecStart,               config_parse_exec,                  SERVICE_EXEC_START,            offsetof(Service, exec_command)
+ Service.ExecStartPost,           config_parse_exec,                  SERVICE_EXEC_START_POST,       offsetof(Service, exec_command)
+diff --git a/src/core/service.c b/src/core/service.c
+index 2c31e70ef6..92be4280f6 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -41,6 +41,7 @@
+ 
+ static const UnitActiveState state_translation_table[_SERVICE_STATE_MAX] = {
+         [SERVICE_DEAD] = UNIT_INACTIVE,
++        [SERVICE_CONDITION] = UNIT_ACTIVATING,
+         [SERVICE_START_PRE] = UNIT_ACTIVATING,
+         [SERVICE_START] = UNIT_ACTIVATING,
+         [SERVICE_START_POST] = UNIT_ACTIVATING,
+@@ -62,6 +63,7 @@ static const UnitActiveState state_translation_table[_SERVICE_STATE_MAX] = {
+  * consider idle jobs active as soon as we start working on them */
+ static const UnitActiveState state_translation_table_idle[_SERVICE_STATE_MAX] = {
+         [SERVICE_DEAD] = UNIT_INACTIVE,
++        [SERVICE_CONDITION] = UNIT_ACTIVE,
+         [SERVICE_START_PRE] = UNIT_ACTIVE,
+         [SERVICE_START] = UNIT_ACTIVE,
+         [SERVICE_START_POST] = UNIT_ACTIVE,
+@@ -1024,7 +1026,7 @@ static void service_set_state(Service *s, ServiceState state) {
+         service_unwatch_pid_file(s);
+ 
+         if (!IN_SET(state,
+-                    SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST,
++                    SERVICE_CONDITION, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST,
+                     SERVICE_RUNNING,
+                     SERVICE_RELOAD,
+                     SERVICE_STOP, SERVICE_STOP_SIGABRT, SERVICE_STOP_SIGTERM, SERVICE_STOP_SIGKILL, SERVICE_STOP_POST,
+@@ -1042,7 +1044,7 @@ static void service_set_state(Service *s, ServiceState state) {
+         }
+ 
+         if (!IN_SET(state,
+-                    SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST,
++                    SERVICE_CONDITION, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST,
+                     SERVICE_RELOAD,
+                     SERVICE_STOP, SERVICE_STOP_SIGABRT, SERVICE_STOP_SIGTERM, SERVICE_STOP_SIGKILL, SERVICE_STOP_POST,
+                     SERVICE_FINAL_SIGTERM, SERVICE_FINAL_SIGKILL)) {
+@@ -1057,7 +1059,7 @@ static void service_set_state(Service *s, ServiceState state) {
+         }
+ 
+         if (!IN_SET(state,
+-                    SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST,
++                    SERVICE_CONDITION, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST,
+                     SERVICE_RUNNING, SERVICE_RELOAD,
+                     SERVICE_STOP, SERVICE_STOP_SIGABRT, SERVICE_STOP_SIGTERM, SERVICE_STOP_SIGKILL, SERVICE_STOP_POST,
+                     SERVICE_FINAL_SIGTERM, SERVICE_FINAL_SIGKILL) &&
+@@ -1080,7 +1082,8 @@ static void service_set_state(Service *s, ServiceState state) {
+ 
+         unit_notify(UNIT(s), table[old_state], table[state],
+                     (s->reload_result == SERVICE_SUCCESS ? 0 : UNIT_NOTIFY_RELOAD_FAILURE) |
+-                    (s->will_auto_restart ? UNIT_NOTIFY_WILL_AUTO_RESTART : 0));
++                    (s->will_auto_restart ? UNIT_NOTIFY_WILL_AUTO_RESTART : 0) |
++                    (s->result == SERVICE_SKIP_CONDITION ? UNIT_NOTIFY_SKIP_CONDITION : 0));
+ }
+ 
+ static usec_t service_coldplug_timeout(Service *s) {
+@@ -1088,6 +1091,7 @@ static usec_t service_coldplug_timeout(Service *s) {
+ 
+         switch (s->deserialized_state) {
+ 
++        case SERVICE_CONDITION:
+         case SERVICE_START_PRE:
+         case SERVICE_START:
+         case SERVICE_START_POST:
+@@ -1143,7 +1147,7 @@ static int service_coldplug(Unit *u) {
+         if (s->control_pid > 0 &&
+             pid_is_unwaited(s->control_pid) &&
+             IN_SET(s->deserialized_state,
+-                   SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST,
++                   SERVICE_CONDITION, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST,
+                    SERVICE_RELOAD,
+                    SERVICE_STOP, SERVICE_STOP_SIGABRT, SERVICE_STOP_SIGTERM, SERVICE_STOP_SIGKILL, SERVICE_STOP_POST,
+                    SERVICE_FINAL_SIGTERM, SERVICE_FINAL_SIGKILL)) {
+@@ -1667,6 +1671,7 @@ static bool service_will_restart(Unit *u) {
+ }
+ 
+ static void service_enter_dead(Service *s, ServiceResult f, bool allow_restart) {
++        ServiceState end_state;
+         int r;
+ 
+         assert(s);
+@@ -1679,10 +1684,16 @@ static void service_enter_dead(Service *s, ServiceResult f, bool allow_restart)
+         if (s->result == SERVICE_SUCCESS)
+                 s->result = f;
+ 
+-        if (s->result == SERVICE_SUCCESS)
++        if (s->result == SERVICE_SUCCESS) {
+                 unit_log_success(UNIT(s));
+-        else
++                end_state = SERVICE_DEAD;
++        } else if (s->result == SERVICE_SKIP_CONDITION) {
++                unit_log_skip(UNIT(s), service_result_to_string(s->result));
++                end_state = SERVICE_DEAD;
++        } else {
+                 unit_log_failure(UNIT(s), service_result_to_string(s->result));
++                end_state = SERVICE_FAILED;
++        }
+ 
+         if (allow_restart && service_shall_restart(s))
+                 s->will_auto_restart = true;
+@@ -1691,7 +1702,7 @@ static void service_enter_dead(Service *s, ServiceResult f, bool allow_restart)
+          * SERVICE_FAILED/SERVICE_DEAD before entering into SERVICE_AUTO_RESTART. */
+         s->n_keep_fd_store ++;
+ 
+-        service_set_state(s, s->result != SERVICE_SUCCESS ? SERVICE_FAILED : SERVICE_DEAD);
++        service_set_state(s, end_state);
+ 
+         if (s->will_auto_restart) {
+                 s->will_auto_restart = false;
+@@ -2110,6 +2121,40 @@ fail:
+         service_enter_dead(s, SERVICE_FAILURE_RESOURCES, true);
+ }
+ 
++static void service_enter_condition(Service *s) {
++        int r;
++
++        assert(s);
++
++        service_unwatch_control_pid(s);
++
++        s->control_command = s->exec_command[SERVICE_EXEC_CONDITION];
++        if (s->control_command) {
++
++                unit_warn_leftover_processes(UNIT(s));
++
++                s->control_command_id = SERVICE_EXEC_CONDITION;
++
++                r = service_spawn(s,
++                                  s->control_command,
++                                  s->timeout_start_usec,
++                                  EXEC_APPLY_SANDBOXING|EXEC_APPLY_CHROOT|EXEC_IS_CONTROL|EXEC_APPLY_TTY_STDIN,
++                                  &s->control_pid);
++
++                if (r < 0)
++                        goto fail;
++
++                service_set_state(s, SERVICE_CONDITION);
++        } else
++                service_enter_start_pre(s);
++
++        return;
++
++fail:
++        log_unit_warning_errno(UNIT(s), r, "Failed to run 'exec-condition' task: %m");
++        service_enter_dead(s, SERVICE_FAILURE_RESOURCES, true);
++}
++
+ static void service_enter_restart(Service *s) {
+         _cleanup_(sd_bus_error_free) sd_bus_error error = SD_BUS_ERROR_NULL;
+         int r;
+@@ -2222,7 +2267,7 @@ static void service_run_next_control(Service *s) {
+         s->control_command = s->control_command->command_next;
+         service_unwatch_control_pid(s);
+ 
+-        if (IN_SET(s->state, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST, SERVICE_RUNNING, SERVICE_RELOAD))
++        if (IN_SET(s->state, SERVICE_CONDITION, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST, SERVICE_RUNNING, SERVICE_RELOAD))
+                 timeout = s->timeout_start_usec;
+         else
+                 timeout = s->timeout_stop_usec;
+@@ -2231,7 +2276,7 @@ static void service_run_next_control(Service *s) {
+                           s->control_command,
+                           timeout,
+                           EXEC_APPLY_SANDBOXING|EXEC_APPLY_CHROOT|EXEC_IS_CONTROL|
+-                          (IN_SET(s->control_command_id, SERVICE_EXEC_START_PRE, SERVICE_EXEC_STOP_POST) ? EXEC_APPLY_TTY_STDIN : 0)|
++                          (IN_SET(s->control_command_id, SERVICE_EXEC_CONDITION, SERVICE_EXEC_START_PRE, SERVICE_EXEC_STOP_POST) ? EXEC_APPLY_TTY_STDIN : 0)|
+                           (IN_SET(s->control_command_id, SERVICE_EXEC_STOP, SERVICE_EXEC_STOP_POST) ? EXEC_SETENV_RESULT : 0),
+                           &s->control_pid);
+         if (r < 0)
+@@ -2242,7 +2287,7 @@ static void service_run_next_control(Service *s) {
+ fail:
+         log_unit_warning_errno(UNIT(s), r, "Failed to run next control task: %m");
+ 
+-        if (IN_SET(s->state, SERVICE_START_PRE, SERVICE_START_POST, SERVICE_STOP))
++        if (IN_SET(s->state, SERVICE_CONDITION, SERVICE_START_PRE, SERVICE_START_POST, SERVICE_STOP))
+                 service_enter_signal(s, SERVICE_STOP_SIGTERM, SERVICE_FAILURE_RESOURCES);
+         else if (s->state == SERVICE_STOP_POST)
+                 service_enter_dead(s, SERVICE_FAILURE_RESOURCES, true);
+@@ -2296,7 +2341,7 @@ static int service_start(Unit *u) {
+                 return -EAGAIN;
+ 
+         /* Already on it! */
+-        if (IN_SET(s->state, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST))
++        if (IN_SET(s->state, SERVICE_CONDITION, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST))
+                 return 0;
+ 
+         /* A service that will be restarted must be stopped first to
+@@ -2344,7 +2389,9 @@ static int service_start(Unit *u) {
+                 s->flush_n_restarts = false;
+         }
+ 
+-        service_enter_start_pre(s);
++        u->reset_accounting = true;
++
++        service_enter_condition(s);
+         return 1;
+ }
+ 
+@@ -2370,7 +2417,7 @@ static int service_stop(Unit *u) {
+ 
+         /* If there's already something running we go directly into
+          * kill mode. */
+-        if (IN_SET(s->state, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST, SERVICE_RELOAD)) {
++        if (IN_SET(s->state, SERVICE_CONDITION, SERVICE_START_PRE, SERVICE_START, SERVICE_START_POST, SERVICE_RELOAD)) {
+                 service_enter_signal(s, SERVICE_STOP_SIGTERM, SERVICE_SUCCESS);
+                 return 0;
+         }
+@@ -3303,6 +3350,10 @@ static void service_sigchld_event(Unit *u, pid_t pid, int code, int status) {
+         } else if (s->control_pid == pid) {
+                 s->control_pid = 0;
+ 
++                /* ExecCondition= calls that exit with (0, 254] should invoke skip-like behavior instead of failing */
++                if (f == SERVICE_FAILURE_EXIT_CODE && s->state == SERVICE_CONDITION && status < 255)
++                        f = SERVICE_SKIP_CONDITION;
++
+                 if (s->control_command) {
+                         exec_status_exit(&s->control_command->exec_status, &s->exec_context, pid, code, status);
+ 
+@@ -3338,6 +3389,13 @@ static void service_sigchld_event(Unit *u, pid_t pid, int code, int status) {
+ 
+                         switch (s->state) {
+ 
++                        case SERVICE_CONDITION:
++                                if (f == SERVICE_SUCCESS)
++                                        service_enter_start_pre(s);
++                                else
++                                        service_enter_signal(s, SERVICE_STOP_SIGTERM, f);
++                                break;
++
+                         case SERVICE_START_PRE:
+                                 if (f == SERVICE_SUCCESS)
+                                         service_enter_start(s);
+@@ -3462,9 +3520,10 @@ static int service_dispatch_timer(sd_event_source *source, usec_t usec, void *us
+ 
+         switch (s->state) {
+ 
++        case SERVICE_CONDITION:
+         case SERVICE_START_PRE:
+         case SERVICE_START:
+-                log_unit_warning(UNIT(s), "%s operation timed out. Terminating.", s->state == SERVICE_START ? "Start" : "Start-pre");
++                log_unit_warning(UNIT(s), "%s operation timed out. Terminating.", service_state_to_string(s->state));
+                 service_enter_signal(s, SERVICE_STOP_SIGTERM, SERVICE_FAILURE_TIMEOUT);
+                 break;
+ 
+@@ -3975,6 +4034,7 @@ static bool service_needs_console(Unit *u) {
+                 return false;
+ 
+         return IN_SET(s->state,
++                      SERVICE_CONDITION,
+                       SERVICE_START_PRE,
+                       SERVICE_START,
+                       SERVICE_START_POST,
+@@ -4014,6 +4074,7 @@ static const char* const service_type_table[_SERVICE_TYPE_MAX] = {
+ DEFINE_STRING_TABLE_LOOKUP(service_type, ServiceType);
+ 
+ static const char* const service_exec_command_table[_SERVICE_EXEC_COMMAND_MAX] = {
++        [SERVICE_EXEC_CONDITION] = "ExecCondition",
+         [SERVICE_EXEC_START_PRE] = "ExecStartPre",
+         [SERVICE_EXEC_START] = "ExecStart",
+         [SERVICE_EXEC_START_POST] = "ExecStartPost",
+@@ -4043,6 +4104,7 @@ static const char* const service_result_table[_SERVICE_RESULT_MAX] = {
+         [SERVICE_FAILURE_CORE_DUMP] = "core-dump",
+         [SERVICE_FAILURE_WATCHDOG] = "watchdog",
+         [SERVICE_FAILURE_START_LIMIT_HIT] = "start-limit-hit",
++        [SERVICE_SKIP_CONDITION] = "exec-condition",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP(service_result, ServiceResult);
+@@ -4118,6 +4180,7 @@ const UnitVTable service_vtable = {
+                 .finished_start_job = {
+                         [JOB_DONE]       = "Started %s.",
+                         [JOB_FAILED]     = "Failed to start %s.",
++                        [JOB_SKIPPED]    = "Skipped %s.",
+                 },
+                 .finished_stop_job = {
+                         [JOB_DONE]       = "Stopped %s.",
+diff --git a/src/core/service.h b/src/core/service.h
+index 1206e3cdda..62b78cadf1 100644
+--- a/src/core/service.h
++++ b/src/core/service.h
+@@ -36,6 +36,7 @@ typedef enum ServiceType {
+ } ServiceType;
+ 
+ typedef enum ServiceExecCommand {
++        SERVICE_EXEC_CONDITION,
+         SERVICE_EXEC_START_PRE,
+         SERVICE_EXEC_START,
+         SERVICE_EXEC_START_POST,
+@@ -67,6 +68,7 @@ typedef enum ServiceResult {
+         SERVICE_FAILURE_CORE_DUMP,
+         SERVICE_FAILURE_WATCHDOG,
+         SERVICE_FAILURE_START_LIMIT_HIT,
++        SERVICE_SKIP_CONDITION,
+         _SERVICE_RESULT_MAX,
+         _SERVICE_RESULT_INVALID = -1
+ } ServiceResult;
+diff --git a/src/core/unit.c b/src/core/unit.c
+index ccb0106719..61799bf9e3 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -2227,6 +2227,7 @@ static void unit_update_on_console(Unit *u) {
+ 
+ static bool unit_process_job(Job *j, UnitActiveState ns, UnitNotifyFlags flags) {
+         bool unexpected = false;
++        JobResult result;
+ 
+         assert(j);
+ 
+@@ -2249,8 +2250,16 @@ static bool unit_process_job(Job *j, UnitActiveState ns, UnitNotifyFlags flags)
+                 else if (j->state == JOB_RUNNING && ns != UNIT_ACTIVATING) {
+                         unexpected = true;
+ 
+-                        if (UNIT_IS_INACTIVE_OR_FAILED(ns))
+-                                job_finish_and_invalidate(j, ns == UNIT_FAILED ? JOB_FAILED : JOB_DONE, true, false);
++                        if (UNIT_IS_INACTIVE_OR_FAILED(ns)) {
++                                if (ns == UNIT_FAILED)
++                                        result = JOB_FAILED;
++                                else if (FLAGS_SET(flags, UNIT_NOTIFY_SKIP_CONDITION))
++                                        result = JOB_SKIPPED;
++                                else
++                                        result = JOB_DONE;
++
++                                job_finish_and_invalidate(j, result, true, false);
++                        }
+                 }
+ 
+                 break;
+@@ -5484,6 +5493,18 @@ void unit_log_failure(Unit *u, const char *result) {
+                    "UNIT_RESULT=%s", result);
+ }
+ 
++void unit_log_skip(Unit *u, const char *result) {
++        assert(u);
++        assert(result);
++
++        log_struct(LOG_INFO,
++                   "MESSAGE_ID=" SD_MESSAGE_UNIT_SKIPPED_STR,
++                   LOG_UNIT_ID(u),
++                   LOG_UNIT_INVOCATION_ID(u),
++                   LOG_UNIT_MESSAGE(u, "Skipped due to '%s'.", result),
++                   "UNIT_RESULT=%s", result);
++}
++
+ static const char* const collect_mode_table[_COLLECT_MODE_MAX] = {
+         [COLLECT_INACTIVE] = "inactive",
+         [COLLECT_INACTIVE_OR_FAILED] = "inactive-or-failed",
+diff --git a/src/core/unit.h b/src/core/unit.h
+index 4ae1b38624..39179f5fd4 100644
+--- a/src/core/unit.h
++++ b/src/core/unit.h
+@@ -658,6 +658,7 @@ int unit_kill_common(Unit *u, KillWho who, int signo, pid_t main_pid, pid_t cont
+ typedef enum UnitNotifyFlags {
+         UNIT_NOTIFY_RELOAD_FAILURE    = 1 << 0,
+         UNIT_NOTIFY_WILL_AUTO_RESTART = 1 << 1,
++        UNIT_NOTIFY_SKIP_CONDITION    = 1 << 2,
+ } UnitNotifyFlags;
+ 
+ void unit_notify(Unit *u, UnitActiveState os, UnitActiveState ns, UnitNotifyFlags flags);
+@@ -806,6 +807,9 @@ int unit_pid_attachable(Unit *unit, pid_t pid, sd_bus_error *error);
+ 
+ void unit_log_success(Unit *u);
+ void unit_log_failure(Unit *u, const char *result);
++/* unit_log_skip is for cases like ExecCondition= where a unit is considered "done"
++ * after some execution, rather than succeeded or failed. */
++void unit_log_skip(Unit *u, const char *result);
+ 
+ /* Macros which append UNIT= or USER_UNIT= to the message */
+ 
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index 8f3b463c6b..e0b2cfb170 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -1334,7 +1334,7 @@ static int bus_append_service_property(sd_bus_message *m, const char *field, con
+                 return bus_append_safe_atou(m, field, eq);
+ 
+         if (STR_IN_SET(field,
+-                       "ExecStartPre", "ExecStart", "ExecStartPost",
++                       "ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost",
+                        "ExecReload", "ExecStop", "ExecStopPost"))
+ 
+                 return bus_append_exec_command(m, field, eq);
+diff --git a/src/systemd/sd-messages.h b/src/systemd/sd-messages.h
+index e7ef81b597..bdd4fd3974 100644
+--- a/src/systemd/sd-messages.h
++++ b/src/systemd/sd-messages.h
+@@ -111,6 +111,8 @@ _SD_BEGIN_DECLARATIONS;
+ #define SD_MESSAGE_UNIT_FAILURE_RESULT    SD_ID128_MAKE(d9,b3,73,ed,55,a6,4f,eb,82,42,e0,2d,be,79,a4,9c)
+ #define SD_MESSAGE_UNIT_FAILURE_RESULT_STR \
+                                           SD_ID128_MAKE_STR(d9,b3,73,ed,55,a6,4f,eb,82,42,e0,2d,be,79,a4,9c)
++#define SD_MESSAGE_UNIT_SKIPPED           SD_ID128_MAKE(0e,42,84,a0,ca,ca,4b,fc,81,c0,bb,67,86,97,26,73)
++#define SD_MESSAGE_UNIT_SKIPPED_STR       SD_ID128_MAKE_STR(0e,42,84,a0,ca,ca,4b,fc,81,c0,bb,67,86,97,26,73)
+ 
+ #define SD_MESSAGE_SPAWN_FAILED           SD_ID128_MAKE(64,12,57,65,1c,1b,4e,c9,a8,62,4d,7a,40,a9,e1,e7)
+ #define SD_MESSAGE_SPAWN_FAILED_STR       SD_ID128_MAKE_STR(64,12,57,65,1c,1b,4e,c9,a8,62,4d,7a,40,a9,e1,e7)
+diff --git a/src/test/test-execute.c b/src/test/test-execute.c
+index e42d0d30a8..882e866ea9 100644
+--- a/src/test/test-execute.c
++++ b/src/test/test-execute.c
+@@ -30,7 +30,7 @@
+ 
+ typedef void (*test_function_t)(Manager *m);
+ 
+-static void check(const char *func, Manager *m, Unit *unit, int status_expected, int code_expected) {
++static void wait_for_service_finish(Manager *m, Unit *unit) {
+         Service *service = NULL;
+         usec_t ts;
+         usec_t timeout = 2 * USEC_PER_MINUTE;
+@@ -55,6 +55,17 @@ static void check(const char *func, Manager *m, Unit *unit, int status_expected,
+                         exit(EXIT_FAILURE);
+                 }
+         }
++}
++
++static void check_main_result(const char *func, Manager *m, Unit *unit, int status_expected, int code_expected) {
++        Service *service = NULL;
++
++        assert_se(m);
++        assert_se(unit);
++
++        wait_for_service_finish(m, unit);
++
++        service = SERVICE(unit);
+         exec_status_dump(&service->main_exec_status, stdout, "\t");
+         if (service->main_exec_status.status != status_expected) {
+                 log_error("%s: %s: exit status %d, expected %d",
+@@ -70,6 +81,25 @@ static void check(const char *func, Manager *m, Unit *unit, int status_expected,
+         }
+ }
+ 
++static void check_service_result(const char *func, Manager *m, Unit *unit, ServiceResult result_expected) {
++        Service *service = NULL;
++
++        assert_se(m);
++        assert_se(unit);
++
++        wait_for_service_finish(m, unit);
++
++        service = SERVICE(unit);
++
++        if (service->result != result_expected) {
++                log_error("%s: %s: service end result %s, expected %s",
++                          func, unit->id,
++                          service_result_to_string(service->result),
++                          service_result_to_string(result_expected));
++                abort();
++        }
++}
++
+ static bool check_nobody_user_and_group(void) {
+         static int cache = -1;
+         struct passwd *p;
+@@ -140,7 +170,17 @@ static void test(const char *func, Manager *m, const char *unit_name, int status
+ 
+         assert_se(manager_load_startable_unit_or_warn(m, unit_name, NULL, &unit) >= 0);
+         assert_se(unit_start(unit) >= 0);
+-        check(func, m, unit, status_expected, code_expected);
++        check_main_result(func, m, unit, status_expected, code_expected);
++}
++
++static void test_service(const char *func, Manager *m, const char *unit_name, ServiceResult result_expected) {
++        Unit *unit;
++
++        assert_se(unit_name);
++
++        assert_se(manager_load_startable_unit_or_warn(m, unit_name, NULL, &unit) >= 0);
++        assert_se(unit_start(unit) >= 0);
++        check_service_result(func, m, unit, result_expected);
+ }
+ 
+ static void test_exec_bindpaths(Manager *m) {
+@@ -669,6 +709,11 @@ static void test_exec_standardoutput_append(Manager *m) {
+         test(__func__, m, "exec-standardoutput-append.service", 0, CLD_EXITED);
+ }
+ 
++static void test_exec_condition(Manager *m) {
++        test_service(__func__, m, "exec-condition-failed.service", SERVICE_FAILURE_EXIT_CODE);
++        test_service(__func__, m, "exec-condition-skip.service", SERVICE_SKIP_CONDITION);
++}
++
+ typedef struct test_entry {
+         test_function_t f;
+         const char *name;
+@@ -709,6 +754,7 @@ int main(int argc, char *argv[]) {
+                 entry(test_exec_ambientcapabilities),
+                 entry(test_exec_bindpaths),
+                 entry(test_exec_capabilityboundingset),
++                entry(test_exec_condition),
+                 entry(test_exec_cpuaffinity),
+                 entry(test_exec_environment),
+                 entry(test_exec_environmentfile),
+diff --git a/test/fuzz/fuzz-unit-file/directives.service b/test/fuzz/fuzz-unit-file/directives.service
+index eab1820e20..9d0530df72 100644
+--- a/test/fuzz/fuzz-unit-file/directives.service
++++ b/test/fuzz/fuzz-unit-file/directives.service
+@@ -83,6 +83,7 @@ DirectoryNotEmpty=
+ Documentation=
+ DynamicUser=
+ ExecReload=
++ExecCondition=
+ ExecStart=
+ ExecStartPost=
+ ExecStartPre=
+diff --git a/test/meson.build b/test/meson.build
+index 4d1c51048c..070731c4a9 100644
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -42,6 +42,8 @@ test_data_files = '''
+         test-execute/exec-capabilityboundingset-merge.service
+         test-execute/exec-capabilityboundingset-reset.service
+         test-execute/exec-capabilityboundingset-simple.service
++        test-execute/exec-condition-failed.service
++        test-execute/exec-condition-skip.service
+         test-execute/exec-cpuaffinity1.service
+         test-execute/exec-cpuaffinity2.service
+         test-execute/exec-cpuaffinity3.service
+diff --git a/test/test-execute/exec-condition-failed.service b/test/test-execute/exec-condition-failed.service
+new file mode 100644
+index 0000000000..4a406dc17f
+--- /dev/null
++++ b/test/test-execute/exec-condition-failed.service
+@@ -0,0 +1,11 @@
++[Unit]
++Description=Test for exec condition that fails the unit
++
++[Service]
++Type=oneshot
++
++# exit 255 will fail the unit
++ExecCondition=/bin/sh -c 'exit 255'
++
++# This should not get run
++ExecStart=/bin/sh -c 'true'
+diff --git a/test/test-execute/exec-condition-skip.service b/test/test-execute/exec-condition-skip.service
+new file mode 100644
+index 0000000000..9450e8442a
+--- /dev/null
++++ b/test/test-execute/exec-condition-skip.service
+@@ -0,0 +1,15 @@
++[Unit]
++Description=Test for exec condition that triggers skipping
++
++[Service]
++Type=oneshot
++
++# exit codes [1, 254] will result in skipping the rest of execution
++ExecCondition=/bin/sh -c 'exit 0'
++ExecCondition=/bin/sh -c 'exit 254'
++
++# This would normally fail the unit but will not get run due to the skip above
++ExecCondition=/bin/sh -c 'exit 255'
++
++# This should not get run
++ExecStart=/bin/sh -c 'true'

@@ -1,0 +1,24 @@
+From 3cdbda49a4eca0dc28f1ebc7923c387bc9b69a9f Mon Sep 17 00:00:00 2001
+From: Jacek Migacz <jmigacz@redhat.com>
+Date: Sun, 26 Jun 2022 22:11:55 +0200
+Subject: [PATCH] mkosi: Add gnutls package
+
+RHEL-only
+
+Resolves: #2101227
+---
+ .mkosi/mkosi.fedora | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/.mkosi/mkosi.fedora b/.mkosi/mkosi.fedora
+index 63027d9fc7..b0451adec2 100644
+--- a/.mkosi/mkosi.fedora
++++ b/.mkosi/mkosi.fedora
+@@ -61,6 +61,7 @@ BuildPackages=
+ 
+ Packages=
+         libidn2
++        gnutls
+ 
+ BuildDirectory=mkosi.builddir
+ Cache=mkosi.cache

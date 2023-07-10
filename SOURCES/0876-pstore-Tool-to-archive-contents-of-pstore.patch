@@ -1,0 +1,929 @@
+From 2f75df5cd6dcd56775fec9e89fc79672e702d826 Mon Sep 17 00:00:00 2001
+From: Eric DeVolder <eric.devolder@oracle.com>
+Date: Thu, 16 May 2019 08:59:01 -0500
+Subject: [PATCH] pstore: Tool to archive contents of pstore
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This patch introduces the systemd pstore service which will archive the
+contents of the Linux persistent storage filesystem, pstore, to other storage,
+thus preserving the existing information contained in the pstore, and clearing
+pstore storage for future error events.
+
+Linux provides a persistent storage file system, pstore[1], that can store
+error records when the kernel dies (or reboots or powers-off). These records in
+turn can be referenced to debug kernel problems (currently the kernel stuffs
+the tail of the dmesg, which also contains a stack backtrace, into pstore).
+
+The pstore file system supports a variety of backends that map onto persistent
+storage, such as the ACPI ERST[2, Section 18.5 Error Serialization] and UEFI
+variables[3 Appendix N Common Platform Error Record]. The pstore backends
+typically offer a relatively small amount of persistent storage, e.g. 64KiB,
+which can quickly fill up and thus prevent subsequent kernel crashes from
+recording errors. Thus there is a need to monitor and extract the pstore
+contents so that future kernel problems can also record information in the
+pstore.
+
+The pstore service is independent of the kdump service. In cloud environments
+specifically, host and guest filesystems are on remote filesystems (eg. iSCSI
+or NFS), thus kdump relies [implicitly and/or explicitly] upon proper operation
+of networking software *and* hardware *and* infrastructure.  Thus it may not be
+possible to capture a kernel coredump to a file since writes over the network
+may not be possible.
+
+The pstore backend, on the other hand, is completely local and provides a path
+to store error records which will survive a reboot and aid in post-mortem
+debugging.
+
+Usage Notes:
+This tool moves files from /sys/fs/pstore into /var/lib/systemd/pstore.
+
+To enable kernel recording of error records into pstore, one must either pass
+crash_kexec_post_notifiers[4] to the kernel command line or enable via 'echo Y
+ > /sys/module/kernel/parameters/crash_kexec_post_notifiers'. This option
+invokes the recording of errors into pstore *before* an attempt to kexec/kdump
+on a kernel crash.
+
+Optionally, to record reboots and shutdowns in the pstore, one can either pass
+the printk.always_kmsg_dump[4] to the kernel command line or enable via 'echo Y >
+/sys/module/printk/parameters/always_kmsg_dump'. This option enables code on the
+shutdown path to record information via pstore.
+
+This pstore service is a oneshot service. When run, the service invokes
+systemd-pstore which is a tool that performs the following:
+ - reads the pstore.conf configuration file
+ - collects the lists of files in the pstore (eg. /sys/fs/pstore)
+ - for certain file types (eg. dmesg) a handler is invoked
+ - for all other files, the file is moved from pstore
+
+ - In the case of dmesg handler, final processing occurs as such:
+   - files processed in reverse lexigraphical order to faciliate
+     reconstruction of original dmesg
+   - the filename is examined to determine which dmesg it is a part
+   - the file is appended to the reconstructed dmesg
+
+For example, the following pstore contents:
+
+ root@vm356:~# ls -al /sys/fs/pstore
+ total 0
+ drwxr-x--- 2 root root    0 May  9 09:50 .
+ drwxr-xr-x 7 root root    0 May  9 09:50 ..
+ -r--r--r-- 1 root root 1610 May  9 09:49 dmesg-efi-155741337601001
+ -r--r--r-- 1 root root 1778 May  9 09:49 dmesg-efi-155741337602001
+ -r--r--r-- 1 root root 1726 May  9 09:49 dmesg-efi-155741337603001
+ -r--r--r-- 1 root root 1746 May  9 09:49 dmesg-efi-155741337604001
+ -r--r--r-- 1 root root 1686 May  9 09:49 dmesg-efi-155741337605001
+ -r--r--r-- 1 root root 1690 May  9 09:49 dmesg-efi-155741337606001
+ -r--r--r-- 1 root root 1775 May  9 09:49 dmesg-efi-155741337607001
+ -r--r--r-- 1 root root 1811 May  9 09:49 dmesg-efi-155741337608001
+ -r--r--r-- 1 root root 1817 May  9 09:49 dmesg-efi-155741337609001
+ -r--r--r-- 1 root root 1795 May  9 09:49 dmesg-efi-155741337710001
+ -r--r--r-- 1 root root 1770 May  9 09:49 dmesg-efi-155741337711001
+ -r--r--r-- 1 root root 1796 May  9 09:49 dmesg-efi-155741337712001
+ -r--r--r-- 1 root root 1787 May  9 09:49 dmesg-efi-155741337713001
+ -r--r--r-- 1 root root 1808 May  9 09:49 dmesg-efi-155741337714001
+ -r--r--r-- 1 root root 1754 May  9 09:49 dmesg-efi-155741337715001
+
+results in the following:
+
+ root@vm356:~# ls -al /var/lib/systemd/pstore/155741337/
+ total 92
+ drwxr-xr-x 2 root root  4096 May  9 09:50 .
+ drwxr-xr-x 4 root root    40 May  9 09:50 ..
+ -rw-r--r-- 1 root root  1610 May  9 09:50 dmesg-efi-155741337601001
+ -rw-r--r-- 1 root root  1778 May  9 09:50 dmesg-efi-155741337602001
+ -rw-r--r-- 1 root root  1726 May  9 09:50 dmesg-efi-155741337603001
+ -rw-r--r-- 1 root root  1746 May  9 09:50 dmesg-efi-155741337604001
+ -rw-r--r-- 1 root root  1686 May  9 09:50 dmesg-efi-155741337605001
+ -rw-r--r-- 1 root root  1690 May  9 09:50 dmesg-efi-155741337606001
+ -rw-r--r-- 1 root root  1775 May  9 09:50 dmesg-efi-155741337607001
+ -rw-r--r-- 1 root root  1811 May  9 09:50 dmesg-efi-155741337608001
+ -rw-r--r-- 1 root root  1817 May  9 09:50 dmesg-efi-155741337609001
+ -rw-r--r-- 1 root root  1795 May  9 09:50 dmesg-efi-155741337710001
+ -rw-r--r-- 1 root root  1770 May  9 09:50 dmesg-efi-155741337711001
+ -rw-r--r-- 1 root root  1796 May  9 09:50 dmesg-efi-155741337712001
+ -rw-r--r-- 1 root root  1787 May  9 09:50 dmesg-efi-155741337713001
+ -rw-r--r-- 1 root root  1808 May  9 09:50 dmesg-efi-155741337714001
+ -rw-r--r-- 1 root root  1754 May  9 09:50 dmesg-efi-155741337715001
+ -rw-r--r-- 1 root root 26754 May  9 09:50 dmesg.txt
+
+where dmesg.txt is reconstructed from the group of related
+dmesg-efi-155741337* files.
+
+Configuration file:
+The pstore.conf configuration file has four settings, described below.
+ - Storage : one of "none", "external", or "journal". With "none", this
+   tool leaves the contents of pstore untouched. With "external", the
+   contents of the pstore are moved into the /var/lib/systemd/pstore,
+   as well as logged into the journal.  With "journal", the contents of
+   the pstore are recorded only in the systemd journal. The default is
+   "external".
+ - Unlink : is a boolean. When "true", the default, then files in the
+   pstore are removed once processed. When "false", processing of the
+   pstore occurs normally, but the pstore files remain.
+
+References:
+[1] "Persistent storage for a kernel's dying breath",
+    March 23, 2011.
+    https://lwn.net/Articles/434821/
+
+[2] "Advanced Configuration and Power Interface Specification",
+    version 6.2, May 2017.
+    https://www.uefi.org/sites/default/files/resources/ACPI_6_2.pdf
+
+[3] "Unified Extensible Firmware Interface Specification",
+    version 2.8, March 2019.
+    https://uefi.org/sites/default/files/resources/UEFI_Spec_2_8_final.pdf
+
+[4] "The kernel’s command-line parameters",
+    https://static.lwn.net/kerneldoc/admin-guide/kernel-parameters.html
+
+(cherry picked from commit 9b4abc69b201e5d7295e1b0762883659f053e747)
+
+Resolves: #2158832
+---
+ man/pstore.conf.xml             |  89 +++++++
+ man/rules/meson.build           |   2 +
+ man/systemd-pstore.xml          |  99 ++++++++
+ meson.build                     |  20 ++
+ meson_options.txt               |   2 +
+ src/pstore/meson.build          |  10 +
+ src/pstore/pstore.c             | 395 ++++++++++++++++++++++++++++++++
+ src/pstore/pstore.conf          |  16 ++
+ units/meson.build               |   1 +
+ units/systemd-pstore.service.in |  24 ++
+ 10 files changed, 658 insertions(+)
+ create mode 100644 man/pstore.conf.xml
+ create mode 100644 man/systemd-pstore.xml
+ create mode 100644 src/pstore/meson.build
+ create mode 100644 src/pstore/pstore.c
+ create mode 100644 src/pstore/pstore.conf
+ create mode 100644 units/systemd-pstore.service.in
+
+diff --git a/man/pstore.conf.xml b/man/pstore.conf.xml
+new file mode 100644
+index 0000000000..b5cda47d02
+--- /dev/null
++++ b/man/pstore.conf.xml
+@@ -0,0 +1,89 @@
++<?xml version='1.0'?>
++<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.5//EN"
++  "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
++<!-- SPDX-License-Identifier: LGPL-2.1+ -->
++
++<refentry id="pstore.conf" conditional="ENABLE_PSTORE"
++          xmlns:xi="http://www.w3.org/2001/XInclude">
++  <refentryinfo>
++    <title>pstore.conf</title>
++    <productname>systemd</productname>
++  </refentryinfo>
++
++  <refmeta>
++    <refentrytitle>pstore.conf</refentrytitle>
++    <manvolnum>5</manvolnum>
++  </refmeta>
++
++  <refnamediv>
++    <refname>pstore.conf</refname>
++    <refname>pstore.conf.d</refname>
++    <refpurpose>PStore configuration file</refpurpose>
++  </refnamediv>
++
++  <refsynopsisdiv>
++    <para>
++    <filename>/etc/systemd/pstore.conf</filename>
++    <filename>/etc/systemd/pstore.conf.d/*</filename>
++    </para>
++  </refsynopsisdiv>
++
++  <refsect1>
++    <title>Description</title>
++
++    <para>This file configures the behavior of
++    <citerefentry><refentrytitle>systemd-pstore</refentrytitle><manvolnum>8</manvolnum></citerefentry>,
++    a tool for archiving the contents of the persistent storage filesystem,
++    <ulink url="https://www.kernel.org/doc/Documentation/ABI/testing/pstore">pstore</ulink>.
++    </para>
++  </refsect1>
++
++  <xi:include href="standard-conf.xml" xpointer="main-conf" />
++
++  <refsect1>
++    <title>Options</title>
++
++    <para>All options are configured in the
++    <literal>[PStore]</literal> section:</para>
++
++    <variablelist>
++
++      <varlistentry>
++        <term><varname>Storage=</varname></term>
++
++        <listitem><para>Controls where to archive (i.e. copy) files from the pstore filesystem. One of <literal>none</literal>,
++        <literal>external</literal>, and <literal>journal</literal>. When
++        <literal>none</literal>, the tool exits without processing files in the pstore filesystem.
++        When <literal>external</literal> (the default), files are archived into <filename>/var/lib/systemd/pstore/</filename>,
++        and logged into the journal.
++        When <literal>journal</literal>, pstore file contents are logged only in the journal.</para>
++        </listitem>
++
++      </varlistentry>
++
++      <varlistentry>
++        <term><varname>Unlink=</varname></term>
++
++        <listitem><para>Controls whether or not files are removed from pstore after processing.
++        Takes a boolean value. When true, a pstore file is removed from the pstore once it has been
++        archived (either to disk or into the journal). When false, processing of pstore files occurs
++        normally, but the files remain in the pstore.
++        The default is true in order to maintain the pstore in a nearly empty state, so that the pstore
++        has storage available for the next kernel error event.
++        </para></listitem>
++      </varlistentry>
++    </variablelist>
++
++    <para>The defaults for all values are listed as comments in the
++    template <filename>/etc/systemd/pstore.conf</filename> file that
++    is installed by default.</para>
++  </refsect1>
++
++  <refsect1>
++    <title>See Also</title>
++    <para>
++      <citerefentry><refentrytitle>systemd-journald.service</refentrytitle><manvolnum>8</manvolnum></citerefentry>,
++    </para>
++  </refsect1>
++
++</refentry>
+diff --git a/man/rules/meson.build b/man/rules/meson.build
+index e6c0a99bbd..6295330c5e 100644
+--- a/man/rules/meson.build
++++ b/man/rules/meson.build
+@@ -44,6 +44,7 @@ manpages = [
+  ['os-release', '5', [], ''],
+  ['pam_systemd', '8', [], 'HAVE_PAM'],
+  ['portablectl', '1', [], 'ENABLE_PORTABLED'],
++ ['pstore.conf', '5', ['pstore.conf.d'], 'ENABLE_PSTORE'],
+  ['resolvectl', '1', ['resolvconf'], 'ENABLE_RESOLVE'],
+  ['resolved.conf', '5', ['resolved.conf.d'], 'ENABLE_RESOLVE'],
+  ['runlevel', '8', [], 'ENABLE_UTMP'],
+@@ -633,6 +634,7 @@ manpages = [
+  ['systemd-nspawn', '1', [], ''],
+  ['systemd-path', '1', [], ''],
+  ['systemd-portabled.service', '8', ['systemd-portabled'], 'ENABLE_PORTABLED'],
++ ['systemd-pstore', '8', ['systemd-pstore.service'], 'ENABLE_PSTORE'],
+  ['systemd-quotacheck.service',
+   '8',
+   ['systemd-quotacheck'],
+diff --git a/man/systemd-pstore.xml b/man/systemd-pstore.xml
+new file mode 100644
+index 0000000000..dd1aa5e83b
+--- /dev/null
++++ b/man/systemd-pstore.xml
+@@ -0,0 +1,99 @@
++<?xml version='1.0'?>
++<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.5//EN"
++  "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
++<!-- SPDX-License-Identifier: LGPL-2.1+ -->
++
++<refentry id="systemd-pstore" conditional='ENABLE_PSTORE'
++          xmlns:xi="http://www.w3.org/2001/XInclude">
++
++  <refentryinfo>
++    <title>systemd-pstore</title>
++    <productname>systemd</productname>
++  </refentryinfo>
++
++  <refmeta>
++    <refentrytitle>systemd-pstore</refentrytitle>
++    <manvolnum>8</manvolnum>
++  </refmeta>
++
++  <refnamediv>
++    <refname>systemd-pstore</refname>
++    <refname>systemd-pstore.service</refname>
++    <refpurpose>Tool to archive contents of the persistent storage filesytem</refpurpose>
++  </refnamediv>
++
++  <refsynopsisdiv>
++    <para><filename>/usr/lib/systemd/systemd-pstore</filename></para>
++    <para><filename>systemd-pstore.service</filename></para>
++  </refsynopsisdiv>
++
++  <refsect1>
++    <title>Description</title>
++    <para><filename>systemd-pstore.service</filename> is a system service that archives the
++    contents of the Linux persistent storage filesystem, pstore, to other storage,
++    thus preserving the existing information contained in the pstore, and clearing
++    pstore storage for future error events.</para>
++
++    <para>Linux provides a persistent storage file system, pstore, that can store
++    error records when the kernel dies (or reboots or powers-off). These records in
++    turn can be referenced to debug kernel problems (currently the kernel stuffs
++    the tail of the dmesg, which also contains a stack backtrace, into pstore).</para>
++
++    <para>The pstore file system supports a variety of backends that map onto persistent
++    storage, such as the ACPI ERST and UEFI variables. The pstore backends
++    typically offer a relatively small amount of persistent storage, e.g. 64KiB,
++    which can quickly fill up and thus prevent subsequent kernel crashes from
++    recording errors. Thus there is a need to monitor and extract the pstore
++    contents so that future kernel problems can also record information in the
++    pstore.</para>
++
++    <para>The pstore service is independent of the kdump service. In cloud environments
++    specifically, host and guest filesystems are on remote filesystems (eg. iSCSI
++    or NFS), thus kdump relies [implicitly and/or explicitly] upon proper operation
++    of networking software *and* hardware *and* infrastructure.  Thus it may not be
++    possible to capture a kernel coredump to a file since writes over the network
++    may not be possible.</para>
++
++    <para>The pstore backend, on the other hand, is completely local and provides a path
++    to store error records which will survive a reboot and aid in post-mortem
++    debugging.</para>
++
++    <para>The <command>systemd-pstore</command> executable does the actual work. Upon starting,
++    the <filename>pstore.conf</filename> is read to obtain options, then the /sys/fs/pstore
++    directory contents are processed according to the options. Pstore files are written to the
++    journal, and optionally saved into /var/lib/systemd/pstore.</para>
++  </refsect1>
++
++  <refsect1>
++    <title>Configuration</title>
++
++    <para>The behavior of <command>systemd-pstore</command> is configured through the configuration file
++    <filename>/etc/systemd/pstore.conf</filename> and corresponding snippets
++    <filename>/etc/systemd/pstore.conf.d/*.conf</filename>, see
++    <citerefentry><refentrytitle>pstore.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>.
++    </para>
++
++    <refsect2>
++      <title>Disabling pstore processing</title>
++
++      <para>To disable pstore processing by <command>systemd-pstore</command>,
++      set <programlisting>Storage=none</programlisting> in
++      <citerefentry><refentrytitle>pstore.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>.
++      </para>
++    </refsect2>
++  </refsect1>
++
++  <refsect1>
++    <title>Usage</title>
++    <para>Data stored in the journal can be viewed with
++    <citerefentry><refentrytitle>journalctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>
++    as usual.</para>
++  </refsect1>
++
++  <refsect1>
++    <title>See Also</title>
++    <para>
++      <citerefentry><refentrytitle>pstore.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>
++    </para>
++  </refsect1>
++</refentry>
+diff --git a/meson.build b/meson.build
+index af4cf331da..972a8fb6f7 100644
+--- a/meson.build
++++ b/meson.build
+@@ -1224,6 +1224,7 @@ foreach term : ['utmp',
+                 'environment-d',
+                 'binfmt',
+                 'coredump',
++                'pstore',
+                 'resolve',
+                 'logind',
+                 'hostnamed',
+@@ -1439,6 +1440,7 @@ subdir('src/network')
+ subdir('src/analyze')
+ subdir('src/journal-remote')
+ subdir('src/coredump')
++subdir('src/pstore')
+ subdir('src/hostname')
+ subdir('src/import')
+ subdir('src/kernel-install')
+@@ -2151,6 +2153,23 @@ if conf.get('ENABLE_COREDUMP') == 1
+         public_programs += [exe]
+ endif
+ 
++if conf.get('ENABLE_PSTORE') == 1
++        executable('systemd-pstore',
++                   systemd_pstore_sources,
++                   include_directories : includes,
++                   link_with : [libshared],
++                   dependencies : [threads,
++                                   libacl,
++                                   libdw,
++                                   libxz,
++                                   liblz4],
++                   install_rpath : rootlibexecdir,
++                   install : true,
++                   install_dir : rootlibexecdir)
++
++        public_programs += exe
++endif
++
+ if conf.get('ENABLE_BINFMT') == 1
+         exe = executable('systemd-binfmt',
+                          'src/binfmt/binfmt.c',
+@@ -3014,6 +3033,7 @@ foreach tuple : [
+         ['resolve'],
+         ['DNS-over-TLS'],
+         ['coredump'],
++        ['pstore'],
+         ['polkit'],
+         ['legacy pkla',      install_polkit_pkla],
+         ['efi'],
+diff --git a/meson_options.txt b/meson_options.txt
+index 213079ac15..5624304bf4 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -76,6 +76,8 @@ option('binfmt', type : 'boolean',
+        description : 'support for custom binary formats')
+ option('coredump', type : 'boolean',
+        description : 'install the coredump handler')
++option('pstore', type : 'boolean',
++       description : 'install the pstore archival tool')
+ option('logind', type : 'boolean',
+        description : 'install the systemd-logind stack')
+ option('hostnamed', type : 'boolean',
+diff --git a/src/pstore/meson.build b/src/pstore/meson.build
+new file mode 100644
+index 0000000000..adbac24b54
+--- /dev/null
++++ b/src/pstore/meson.build
+@@ -0,0 +1,10 @@
++# SPDX-License-Identifier: LGPL-2.1+
++
++systemd_pstore_sources = files('''
++        pstore.c
++'''.split())
++
++if conf.get('ENABLE_PSTORE') == 1
++        install_data('pstore.conf',
++                     install_dir : pkgsysconfdir)
++endif
+diff --git a/src/pstore/pstore.c b/src/pstore/pstore.c
+new file mode 100644
+index 0000000000..f95e016eb6
+--- /dev/null
++++ b/src/pstore/pstore.c
+@@ -0,0 +1,395 @@
++/* SPDX-License-Identifier: LGPL-2.1+ */
++
++/* Copyright © 2019 Oracle and/or its affiliates. */
++
++/* Generally speaking, the pstore contains a small number of files
++ * that in turn contain a small amount of data.  */
++#include <errno.h>
++#include <stdio.h>
++#include <stdio_ext.h>
++#include <sys/prctl.h>
++#include <sys/xattr.h>
++#include <unistd.h>
++
++#include "sd-daemon.h"
++#include "sd-journal.h"
++#include "sd-login.h"
++#include "sd-messages.h"
++
++#include "acl-util.h"
++#include "alloc-util.h"
++#include "capability-util.h"
++#include "cgroup-util.h"
++#include "compress.h"
++#include "conf-parser.h"
++#include "copy.h"
++#include "dirent-util.h"
++#include "escape.h"
++#include "fd-util.h"
++#include "fileio.h"
++#include "fs-util.h"
++#include "io-util.h"
++#include "journal-importer.h"
++#include "log.h"
++#include "macro.h"
++#include "missing.h"
++#include "mkdir.h"
++#include "parse-util.h"
++#include "process-util.h"
++#include "signal-util.h"
++#include "socket-util.h"
++#include "special.h"
++#include "string-table.h"
++#include "string-util.h"
++#include "strv.h"
++#include "user-util.h"
++#include "util.h"
++
++/* Command line argument handling */
++typedef enum PStoreStorage {
++        PSTORE_STORAGE_NONE,
++        PSTORE_STORAGE_EXTERNAL,
++        PSTORE_STORAGE_JOURNAL,
++        _PSTORE_STORAGE_MAX,
++        _PSTORE_STORAGE_INVALID = -1
++} PStoreStorage;
++
++static const char* const pstore_storage_table[_PSTORE_STORAGE_MAX] = {
++        [PSTORE_STORAGE_NONE] = "none",
++        [PSTORE_STORAGE_EXTERNAL] = "external",
++        [PSTORE_STORAGE_JOURNAL] = "journal",
++};
++
++DEFINE_PRIVATE_STRING_TABLE_LOOKUP(pstore_storage, PStoreStorage);
++static DEFINE_CONFIG_PARSE_ENUM(config_parse_pstore_storage, pstore_storage, PStoreStorage, "Failed to parse storage setting");
++
++static PStoreStorage arg_storage = PSTORE_STORAGE_EXTERNAL;
++
++static bool arg_unlink = true;
++static const char *arg_sourcedir = "/sys/fs/pstore";
++static const char *arg_archivedir = "/var/lib/systemd/pstore";
++
++static int parse_config(void) {
++        static const ConfigTableItem items[] = {
++                { "PStore", "Unlink",  config_parse_bool,           0, &arg_unlink },
++                { "PStore", "Storage", config_parse_pstore_storage, 0, &arg_storage },
++                {}
++        };
++
++        return config_parse_many_nulstr(PKGSYSCONFDIR "/pstore.conf",
++                                        CONF_PATHS_NULSTR("systemd/pstore.conf.d"),
++                                        "PStore\0",
++                                        config_item_table_lookup, items,
++                                        CONFIG_PARSE_WARN, NULL);
++}
++
++/* File list handling - PStoreEntry is the struct and
++ * and PStoreEntry is the type that contains all info
++ * about a pstore entry.  */
++typedef struct PStoreEntry {
++        struct dirent dirent;
++        bool is_binary;
++        bool handled;
++        char *content;
++        size_t content_size;
++} PStoreEntry;
++
++typedef struct PStoreList {
++        PStoreEntry *entries;
++        size_t n_entries;
++        size_t n_entries_allocated;
++} PStoreList;
++
++static void pstore_entries_reset(PStoreList *list) {
++        for (size_t i = 0; i < list->n_entries; i++)
++                free(list->entries[i].content);
++        free(list->entries);
++        list->n_entries = 0;
++}
++
++static int compare_pstore_entries(const void *_a, const void *_b) {
++        PStoreEntry *a = (PStoreEntry *)_a, *b = (PStoreEntry *)_b;
++        return strcmp(a->dirent.d_name, b->dirent.d_name);
++}
++
++static int move_file(PStoreEntry *pe, const char *subdir) {
++        _cleanup_free_ char *ifd_path = NULL;
++        _cleanup_free_ char *ofd_path = NULL;
++        int r = 0;
++        struct iovec iovec[2] = {};
++        int n_iovec = 0;
++        _cleanup_free_ void *field = NULL;
++        const char *suffix = NULL;
++        size_t field_size;
++
++        if (pe->handled)
++                return 0;
++
++        ifd_path = path_join(NULL, arg_sourcedir, pe->dirent.d_name);
++        if (!ifd_path)
++                return log_oom();
++
++        ofd_path = path_join(arg_archivedir, subdir, pe->dirent.d_name);
++        if (!ofd_path)
++                return log_oom();
++
++        /* Always log to the journal */
++        suffix = arg_storage == PSTORE_STORAGE_EXTERNAL ? strjoina(" moved to ", ofd_path) : (char *)".";
++        field = strjoina("MESSAGE=PStore ", pe->dirent.d_name, suffix);
++        iovec[n_iovec++] = IOVEC_MAKE_STRING(field);
++
++        field_size = strlen("FILE=") + pe->content_size;
++        field = malloc(field_size);
++        if (!field)
++                return log_oom();
++        memcpy(stpcpy(field, "FILE="), pe->content, pe->content_size);
++        iovec[n_iovec++] = IOVEC_MAKE(field, field_size);
++
++        r = sd_journal_sendv(iovec, n_iovec);
++        if (r < 0)
++                return log_error_errno(r, "Failed to log pstore entry: %m");
++
++        if (arg_storage == PSTORE_STORAGE_EXTERNAL) {
++                /* Move file from pstore to external storage */
++                r = mkdir_parents(ofd_path, 0755);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to create directoy %s: %m", ofd_path);
++                r = copy_file_atomic(ifd_path, ofd_path, 0600, 0, COPY_REPLACE);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to copy_file_atomic: %s to %s", ifd_path, ofd_path);
++        }
++
++        /* If file copied properly, remove it from pstore */
++        if (arg_unlink)
++                (void) unlink(ifd_path);
++
++        pe->handled = true;
++
++        return 0;
++}
++
++static int write_dmesg(const char *dmesg, size_t size, const char *id) {
++        _cleanup_(unlink_and_freep) char *ofd_path = NULL;
++        _cleanup_free_ char *tmp_path = NULL;
++        _cleanup_close_ int ofd = -1;
++        ssize_t wr;
++        int r;
++
++        if (isempty(dmesg) || size == 0)
++                return 0;
++
++        /* log_info("Record ID %s", id); */
++
++        ofd_path = path_join(arg_archivedir, id, "dmesg.txt");
++        if (!ofd_path)
++                return log_oom();
++
++        ofd = open_tmpfile_linkable(ofd_path, O_CLOEXEC|O_CREAT|O_TRUNC|O_WRONLY, &tmp_path);
++        if (ofd < 0)
++                return log_error_errno(ofd, "Failed to open temporary file %s: %m", ofd_path);
++        wr = write(ofd, dmesg, size);
++        if (wr < 0)
++                return log_error_errno(errno, "Failed to store dmesg to %s: %m", ofd_path);
++        if (wr != (ssize_t)size)
++                return log_error_errno(-EIO, "Failed to store dmesg to %s. %zu bytes are lost.", ofd_path, size - wr);
++        r = link_tmpfile(ofd, tmp_path, ofd_path);
++        if (r < 0)
++                return log_error_errno(r, "Failed to write temporary file %s: %m", ofd_path);
++        ofd_path = mfree(ofd_path);
++
++        return 0;
++}
++
++static void process_dmesg_files(PStoreList *list) {
++        /* Move files, reconstruct dmesg.txt */
++        PStoreEntry *pe;
++        _cleanup_free_ char *dmesg = NULL;
++        size_t dmesg_size = 0;
++        _cleanup_free_ char *dmesg_id = NULL;
++
++        /* Handle each dmesg file: files processed in reverse
++         * order so as to properly reconstruct original dmesg */
++        for (size_t n = list->n_entries; n > 0; n--) {
++                bool move_file_and_continue = false;
++                _cleanup_free_ char *pe_id = NULL;
++                char *p;
++                size_t plen;
++
++                pe = &list->entries[n-1];
++
++                if (pe->handled)
++                        continue;
++                if (!startswith(pe->dirent.d_name, "dmesg-"))
++                        continue;
++
++                if (endswith(pe->dirent.d_name, ".enc.z")) /* indicates a problem */
++                        move_file_and_continue = true;
++                p = strrchr(pe->dirent.d_name, '-');
++                if (!p)
++                        move_file_and_continue = true;
++
++                if (move_file_and_continue) {
++                        /* A dmesg file on which we do NO additional processing */
++                        (void) move_file(pe, NULL);
++                        continue;
++                }
++
++                /* See if this file is one of a related group of files
++                 * in order to reconstruct dmesg */
++
++                /* When dmesg is written into pstore, it is done so in
++                 * small chunks, whatever the exchange buffer size is
++                 * with the underlying pstore backend (ie. EFI may be
++                 * ~2KiB), which means an example pstore with approximately
++                 * 64KB of storage may have up to roughly 32 dmesg files
++                 * that could be related, depending upon the size of the
++                 * original dmesg.
++                 *
++                 * Here we look at the dmesg filename and try to discern
++                 * if files are part of a related group, meaning the same
++                 * original dmesg.
++                 *
++                 * The two known pstore backends are EFI and ERST. These
++                 * backends store data in the Common Platform Error
++                 * Record, CPER, format. The dmesg- filename contains the
++                 * CPER record id, a 64bit number (in decimal notation).
++                 * In Linux, the record id is encoded with two digits for
++                 * the dmesg part (chunk) number and 3 digits for the
++                 * count number. So allowing an additional digit to
++                 * compensate for advancing time, this code ignores the
++                 * last six digits of the filename in determining the
++                 * record id.
++                 *
++                 * For the EFI backend, the record id encodes an id in the
++                 * upper 32 bits, and a timestamp in the lower 32-bits.
++                 * So ignoring the least significant 6 digits has proven
++                 * to generally identify related dmesg entries.  */
++#define PSTORE_FILENAME_IGNORE 6
++
++                /* determine common portion of record id */
++                ++p; /* move beyond dmesg- */
++                plen = strlen(p);
++                if (plen > PSTORE_FILENAME_IGNORE) {
++                        pe_id = memdup_suffix0(p, plen - PSTORE_FILENAME_IGNORE);
++                        if (!pe_id) {
++                                log_oom();
++                                return;
++                        }
++                } else
++                        pe_id = mfree(pe_id);
++
++                /* Now move file from pstore to archive storage */
++                move_file(pe, pe_id);
++
++                /* If the current record id is NOT the same as the
++                 * previous record id, then start a new dmesg.txt file */
++                if (!pe_id || !dmesg_id || !streq(pe_id, dmesg_id)) {
++                        /* Encountered a new dmesg group, close out old one, open new one */
++                        if (dmesg) {
++                                (void) write_dmesg(dmesg, dmesg_size, dmesg_id);
++                                dmesg = mfree(dmesg);
++                                dmesg_size = 0;
++                        }
++
++                        /* now point dmesg_id to storage of pe_id */
++                        free_and_replace(dmesg_id, pe_id);
++                }
++
++                /* Reconstruction of dmesg is done as a useful courtesy, do not log errors */
++                dmesg = realloc(dmesg, dmesg_size + strlen(pe->dirent.d_name) + strlen(":\n") + pe->content_size + 1);
++                if (dmesg) {
++                        dmesg_size += sprintf(&dmesg[dmesg_size], "%s:\n", pe->dirent.d_name);
++                        if (pe->content) {
++                                memcpy(&dmesg[dmesg_size], pe->content, pe->content_size);
++                                dmesg_size += pe->content_size;
++                        }
++                }
++
++                pe_id = mfree(pe_id);
++        }
++        if (dmesg)
++                (void) write_dmesg(dmesg, dmesg_size, dmesg_id);
++}
++
++static int list_files(PStoreList *list, const char *sourcepath) {
++        _cleanup_(closedirp) DIR *dirp = NULL;
++        struct dirent *de;
++        int r = 0;
++
++        dirp = opendir(sourcepath);
++        if (!dirp)
++                return log_error_errno(errno, "Failed to opendir %s: %m", sourcepath);
++
++        FOREACH_DIRENT(de, dirp, return log_error_errno(errno, "Failed to iterate through %s: %m", sourcepath)) {
++                _cleanup_free_ char *ifd_path = NULL;
++
++                ifd_path = path_join(NULL, sourcepath, de->d_name);
++                if (!ifd_path)
++                        return log_oom();
++
++                _cleanup_free_ char *buf = NULL;
++                size_t buf_size;
++
++                /* Now read contents of pstore file */
++                r = read_full_file(ifd_path, &buf, &buf_size);
++                if (r < 0) {
++                        log_warning_errno(r, "Failed to read file %s: %m", ifd_path);
++                        continue;
++                }
++
++                if (!GREEDY_REALLOC(list->entries, list->n_entries_allocated, list->n_entries + 1))
++                        return log_oom();
++
++                list->entries[list->n_entries++] = (PStoreEntry) {
++                        .dirent = *de,
++                        .content = TAKE_PTR(buf),
++                        .content_size = buf_size,
++                        .is_binary = true,
++                        .handled = false,
++                };
++        }
++
++        return r;
++}
++
++static int run(int argc, char *argv[]) {
++        _cleanup_(pstore_entries_reset) PStoreList list = {};
++        int r;
++
++        log_open();
++
++        /* Ignore all parse errors */
++        (void) parse_config();
++
++        log_debug("Selected storage '%s'.", pstore_storage_to_string(arg_storage));
++        log_debug("Selected Unlink '%d'.", arg_unlink);
++
++        if (arg_storage == PSTORE_STORAGE_NONE)
++                /* Do nothing, intentionally, leaving pstore untouched */
++                return 0;
++
++        /* Obtain list of files in pstore */
++        r = list_files(&list, arg_sourcedir);
++        if (r < 0)
++                return r;
++
++        /* Handle each pstore file */
++        /* Sort files lexigraphically ascending, generally needed by all */
++        qsort_safe(list.entries, list.n_entries, sizeof(PStoreEntry), compare_pstore_entries);
++
++        /* Process known file types */
++        process_dmesg_files(&list);
++
++        /* Move left over files out of pstore */
++        for (size_t n = 0; n < list.n_entries; n++)
++                move_file(&list.entries[n], NULL);
++
++        return 0;
++}
++
++int main(int argc, char *argv[]) {
++        int r;
++
++        r = run(argc, argv);
++        return r < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
++}
+diff --git a/src/pstore/pstore.conf b/src/pstore/pstore.conf
+new file mode 100644
+index 0000000000..93a8b6707c
+--- /dev/null
++++ b/src/pstore/pstore.conf
+@@ -0,0 +1,16 @@
++#  This file is part of systemd.
++#
++#  systemd is free software; you can redistribute it and/or modify it
++#  under the terms of the GNU Lesser General Public License as published by
++#  the Free Software Foundation; either version 2.1 of the License, or
++#  (at your option) any later version.
++#
++# Entries in this file show the compile time defaults.
++# You can change settings by editing this file.
++# Defaults can be restored by simply deleting this file.
++#
++# See pstore.conf(5) for details.
++
++[PStore]
++#Storage=external
++#Unlink=yes
+diff --git a/units/meson.build b/units/meson.build
+index a74fa95195..e8e64eb30a 100644
+--- a/units/meson.build
++++ b/units/meson.build
+@@ -136,6 +136,7 @@ in_units = [
+         ['systemd-binfmt.service',               'ENABLE_BINFMT',
+          'sysinit.target.wants/'],
+         ['systemd-coredump@.service',            'ENABLE_COREDUMP'],
++        ['systemd-pstore.service',               'ENABLE_PSTORE'],
+         ['systemd-firstboot.service',            'ENABLE_FIRSTBOOT',
+          'sysinit.target.wants/'],
+         ['systemd-fsck-root.service',            ''],
+diff --git a/units/systemd-pstore.service.in b/units/systemd-pstore.service.in
+new file mode 100644
+index 0000000000..fec2b1aebf
+--- /dev/null
++++ b/units/systemd-pstore.service.in
+@@ -0,0 +1,24 @@
++#  SPDX-License-Identifier: LGPL-2.1+
++#
++#  This file is part of systemd.
++#
++#  systemd is free software; you can redistribute it and/or modify it
++#  under the terms of the GNU Lesser General Public License as published by
++#  the Free Software Foundation; either version 2.1 of the License, or
++#  (at your option) any later version.
++
++[Unit]
++Description=Platform Persistent Storage Archival
++Documentation=man:systemd-pstore(8)
++DefaultDependencies=no
++Wants=systemd-remount-fs.service
++After=systemd-remount-fs.service
++
++[Service]
++Type=oneshot
++ExecStart=@rootlibexecdir@/systemd-pstore
++RemainAfterExit=yes
++StateDirectory=systemd/pstore
++
++[Install]
++WantedBy=systemd-remount-fs.service

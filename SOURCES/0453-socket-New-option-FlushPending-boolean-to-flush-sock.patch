@@ -1,0 +1,153 @@
+From 262544a451c11c38e92c45047ec2adeaeb2a0a7e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Renaud=20M=C3=A9trich?= <rmetrich@redhat.com>
+Date: Thu, 20 Aug 2020 13:00:37 +0200
+Subject: [PATCH] socket: New option 'FlushPending' (boolean) to flush socket
+ before entering listening state
+
+Disabled by default. When Enabled, before listening on the socket, flush the content.
+Applies when Accept=no only.
+
+(cherry picked from commit 3e5f04bf6468fcb79c080f02b0eab08f258bff0c)
+
+Resolves: #1870638
+---
+ doc/TRANSIENT-SETTINGS.md             |  1 +
+ man/systemd.socket.xml                | 12 ++++++++++++
+ src/core/dbus-socket.c                |  4 ++++
+ src/core/load-fragment-gperf.gperf.m4 |  1 +
+ src/core/socket.c                     | 11 +++++++++++
+ src/core/socket.h                     |  1 +
+ src/shared/bus-unit-util.c            |  3 ++-
+ 7 files changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/doc/TRANSIENT-SETTINGS.md b/doc/TRANSIENT-SETTINGS.md
+index 1a4e79190a..995b8797ef 100644
+--- a/doc/TRANSIENT-SETTINGS.md
++++ b/doc/TRANSIENT-SETTINGS.md
+@@ -388,6 +388,7 @@ Most socket unit settings are available to transient units.
+ ✓ SocketMode=
+ ✓ DirectoryMode=
+ ✓ Accept=
++✓ FlushPending=
+ ✓ Writable=
+ ✓ MaxConnections=
+ ✓ MaxConnectionsPerSource=
+diff --git a/man/systemd.socket.xml b/man/systemd.socket.xml
+index 19c2ca9907..8676b4e03f 100644
+--- a/man/systemd.socket.xml
++++ b/man/systemd.socket.xml
+@@ -425,6 +425,18 @@
+         false, in read-only mode. Defaults to false.</para></listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>FlushPending=</varname></term>
++        <listitem><para>Takes a boolean argument. May only be used when
++        <option>Accept=no</option>. If yes, the socket's buffers are cleared after the
++        triggered service exited. This causes any pending data to be
++        flushed and any pending incoming connections to be rejected. If no, the
++        socket's buffers won't be cleared, permitting the service to handle any
++        pending connections after restart, which is the usually expected behaviour.
++        Defaults to <option>no</option>.
++        </para></listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>MaxConnections=</varname></term>
+         <listitem><para>The maximum number of connections to
+diff --git a/src/core/dbus-socket.c b/src/core/dbus-socket.c
+index 913cc74918..bb77539030 100644
+--- a/src/core/dbus-socket.c
++++ b/src/core/dbus-socket.c
+@@ -85,6 +85,7 @@ const sd_bus_vtable bus_socket_vtable[] = {
+         SD_BUS_PROPERTY("SocketMode", "u", bus_property_get_mode, offsetof(Socket, socket_mode), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("DirectoryMode", "u", bus_property_get_mode, offsetof(Socket, directory_mode), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("Accept", "b", bus_property_get_bool, offsetof(Socket, accept), SD_BUS_VTABLE_PROPERTY_CONST),
++        SD_BUS_PROPERTY("FlushPending", "b", bus_property_get_bool, offsetof(Socket, flush_pending), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("Writable", "b", bus_property_get_bool, offsetof(Socket, writable), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("KeepAlive", "b", bus_property_get_bool, offsetof(Socket, keep_alive), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("KeepAliveTimeUSec", "t", bus_property_get_usec, offsetof(Socket, keep_alive_time), SD_BUS_VTABLE_PROPERTY_CONST),
+@@ -177,6 +178,9 @@ static int bus_socket_set_transient_property(
+         if (streq(name, "Accept"))
+                 return bus_set_transient_bool(u, name, &s->accept, message, flags, error);
+ 
++        if (streq(name, "FlushPending"))
++                return bus_set_transient_bool(u, name, &s->flush_pending, message, flags, error);
++
+         if (streq(name, "Writable"))
+                 return bus_set_transient_bool(u, name, &s->writable, message, flags, error);
+ 
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index 6d21b2e433..24ee5ae6fe 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -359,6 +359,7 @@ Socket.SocketGroup,              config_parse_user_group,            0,
+ Socket.SocketMode,               config_parse_mode,                  0,                             offsetof(Socket, socket_mode)
+ Socket.DirectoryMode,            config_parse_mode,                  0,                             offsetof(Socket, directory_mode)
+ Socket.Accept,                   config_parse_bool,                  0,                             offsetof(Socket, accept)
++Socket.FlushPending,             config_parse_bool,                  0,                             offsetof(Socket, flush_pending)
+ Socket.Writable,                 config_parse_bool,                  0,                             offsetof(Socket, writable)
+ Socket.MaxConnections,           config_parse_unsigned,              0,                             offsetof(Socket, max_connections)
+ Socket.MaxConnectionsPerSource,  config_parse_unsigned,              0,                             offsetof(Socket, max_connections_per_source)
+diff --git a/src/core/socket.c b/src/core/socket.c
+index fe061eb73b..97c3a7fc9a 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -70,6 +70,7 @@ static const UnitActiveState state_translation_table[_SOCKET_STATE_MAX] = {
+ 
+ static int socket_dispatch_io(sd_event_source *source, int fd, uint32_t revents, void *userdata);
+ static int socket_dispatch_timer(sd_event_source *source, usec_t usec, void *userdata);
++static void flush_ports(Socket *s);
+ 
+ static void socket_init(Unit *u) {
+         Socket *s = SOCKET(u);
+@@ -703,6 +704,11 @@ static void socket_dump(Unit *u, FILE *f, const char *prefix) {
+                         prefix, s->n_connections,
+                         prefix, s->max_connections,
+                         prefix, s->max_connections_per_source);
++        else
++                fprintf(f,
++                        "%sFlushPending: %s\n",
++                         prefix, yes_no(s->flush_pending));
++
+ 
+         if (s->priority >= 0)
+                 fprintf(f,
+@@ -2111,6 +2117,11 @@ static void socket_enter_listening(Socket *s) {
+         int r;
+         assert(s);
+ 
++        if (!s->accept && s->flush_pending) {
++                log_unit_debug(UNIT(s), "Flushing socket before listening.");
++                flush_ports(s);
++        }
++
+         r = socket_watch_fds(s);
+         if (r < 0) {
+                 log_unit_warning_errno(UNIT(s), r, "Failed to watch sockets: %m");
+diff --git a/src/core/socket.h b/src/core/socket.h
+index c4e25db1fc..b7a25d91fd 100644
+--- a/src/core/socket.h
++++ b/src/core/socket.h
+@@ -109,6 +109,7 @@ struct Socket {
+         bool accept;
+         bool remove_on_stop;
+         bool writable;
++        bool flush_pending;
+ 
+         int socket_protocol;
+ 
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index 77788f0fe2..7029aa5615 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -1468,7 +1468,8 @@ static int bus_append_socket_property(sd_bus_message *m, const char *field, cons
+ 
+         if (STR_IN_SET(field,
+                        "Accept", "Writable", "KeepAlive", "NoDelay", "FreeBind", "Transparent", "Broadcast",
+-                       "PassCredentials", "PassSecurity", "ReusePort", "RemoveOnStop", "SELinuxContextFromNet"))
++                       "PassCredentials", "PassSecurity", "ReusePort", "RemoveOnStop", "SELinuxContextFromNet",
++                       "FlushPending"))
+ 
+                 return bus_append_parse_boolean(m, field, eq);
+ 

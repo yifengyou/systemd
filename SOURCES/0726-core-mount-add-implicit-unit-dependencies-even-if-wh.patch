@@ -1,0 +1,46 @@
+From 1fb992c50f7fc6a5c399e302ba79097d36a0cedf Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Sun, 29 Aug 2021 21:20:43 +0900
+Subject: [PATCH] core/mount: add implicit unit dependencies even if when mount
+ unit is generated from /proc/self/mountinfo
+
+Hopefully fixes #20566.
+
+(cherry picked from commit aebff2e7ce209fc2d75b894a3ae8b80f6f36ec11)
+
+Resolves: #2008825
+---
+ src/core/mount.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/mount.c b/src/core/mount.c
+index 73c0531158..9547cb9b29 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -1437,6 +1437,7 @@ static int mount_setup_new_unit(
+                 MountSetupFlags *flags) {
+ 
+         MountParameters *p;
++        int r;
+ 
+         assert(u);
+         assert(flags);
+@@ -1458,7 +1459,6 @@ static int mount_setup_new_unit(
+ 
+         if (!mount_is_extrinsic(MOUNT(u))) {
+                 const char *target;
+-                int r;
+ 
+                 target = mount_is_network(p) ? SPECIAL_REMOTE_FS_TARGET : SPECIAL_LOCAL_FS_TARGET;
+                 r = unit_add_dependency_by_name(u, UNIT_BEFORE, target, NULL, true, UNIT_DEPENDENCY_MOUNTINFO_IMPLICIT);
+@@ -1470,6 +1470,10 @@ static int mount_setup_new_unit(
+                         return r;
+         }
+ 
++        r = mount_add_non_exec_dependencies(MOUNT(u));
++        if (r < 0)
++                return r;
++
+         unit_add_to_load_queue(u);
+         flags->is_mounted = true;
+         flags->just_mounted = true;

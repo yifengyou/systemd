@@ -1,0 +1,55 @@
+From 4a1405998671caaaad5b24d4cef309c05175b1c1 Mon Sep 17 00:00:00 2001
+From: ypf791 <ypf791@gmail.com>
+Date: Fri, 19 Jul 2019 18:28:04 +0800
+Subject: [PATCH] core: coldplug possible nop_job
+
+When a unit in a state INACTIVE or DEACTIVATING, JobType JOB_TRY_RESTART or
+JOB_TRY_RELOAD will be collapsed to JOB_NOP. And use u->nop_job instead
+of u->job.
+
+If a JOB_NOP job is going on with a waiting state, a parallel daemon-reload
+just install it during deserialization. Without a coldplug, the job will
+not be in m->run_queue, which results in a hung try-restart or
+try-reload process.
+
+Reproduce:
+
+    run systemctl try-restart test.servcie (inactive) repeatly in a terminal.
+    run systemctl daemon-reload repeatly in other terminals.
+
+After successful reproduce, systemctl list-jobs will list the hang job.
+
+Upsteam:
+systemd/systemd#13124
+
+(cherry picked from commit b49e14d5f3081dfcd363d8199a14c0924ae9152f)
+
+Resolves: #1829798
+---
+ src/core/unit.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/unit.c b/src/core/unit.c
+index 61799bf9e3..f57260727f 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -3696,6 +3696,7 @@ int unit_add_node_dependency(Unit *u, const char *what, bool wants, UnitDependen
+ int unit_coldplug(Unit *u) {
+         int r = 0, q;
+         char **i;
++        Job *uj;
+ 
+         assert(u);
+ 
+@@ -3718,8 +3719,9 @@ int unit_coldplug(Unit *u) {
+                         r = q;
+         }
+ 
+-        if (u->job) {
+-                q = job_coldplug(u->job);
++        uj = u->job ?: u->nop_job;
++        if (uj) {
++                q = job_coldplug(uj);
+                 if (q < 0 && r >= 0)
+                         r = q;
+         }

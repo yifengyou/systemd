@@ -1,0 +1,34 @@
+From 5e74048399c4610da27b5f7fbbb53784030aeb70 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Mon, 9 Nov 2020 09:27:02 +0100
+Subject: [PATCH] remove references of non-existent man pages
+
+This is a follow-up to commit 8ad89170001c9aba8849630ddb5da81d9e24a1bc,
+which introduced the man page change.
+
+Resolves: #1876807
+---
+ man/systemd.special.xml | 10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/man/systemd.special.xml b/man/systemd.special.xml
+index c9d4345016..fe6324a4a0 100644
+--- a/man/systemd.special.xml
++++ b/man/systemd.special.xml
+@@ -657,16 +657,6 @@
+             target unit and pull in the target from it, also with <varname>Requires=</varname>. Note that by default this
+             target unit is not part of the initial boot transaction, but is supposed to be pulled in only if required by
+             units that want to run only on successful boots.</para>
+-
+-            <para>See
+-            <citerefentry><refentrytitle>systemd-boot-check-no-failures.service</refentrytitle><manvolnum>8</manvolnum></citerefentry>
+-            for a service that implements a generic system health check and orders itself before
+-            <filename>boot-complete.target</filename>.</para>
+-
+-            <para>See
+-            <citerefentry><refentrytitle>systemd-bless-boot.service</refentrytitle><manvolnum>8</manvolnum></citerefentry>
+-            for a service that propagates boot success information to the boot loader, and orders itself after
+-            <filename>boot-complete.target</filename>.</para>
+           </listitem>
+         </varlistentry>
+       <varlistentry>

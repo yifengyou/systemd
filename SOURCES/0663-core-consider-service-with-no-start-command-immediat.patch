@@ -1,0 +1,33 @@
+From c667291303bb876707d86ac3ab9ca62355bae1b3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 22:45:34 +0200
+Subject: [PATCH] core: consider service with no start command immediately
+ started
+
+The service would always be in state == SERVICE_INACTIVE, but it needs to go
+through state == SERVICE_START so that SuccessAction/FailureAction are executed.
+
+(cherry picked from commit ef5ae8e71329e43c277e6d4f983f0c0793047b94)
+
+Related: #1860899
+---
+ src/core/service.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/core/service.c b/src/core/service.c
+index ae31973774..4da1c5accb 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -2055,6 +2055,12 @@ static void service_enter_start(Service *s) {
+                         goto fail;
+                 }
+ 
++                /* We force a fake state transition here. Otherwise, the unit would go directly from
++                 * SERVICE_DEAD to SERVICE_DEAD without SERVICE_ACTIVATING or SERVICE_ACTIVE
++                 * inbetween. This way we can later trigger actions that depend on the state
++                 * transition, including SuccessAction=. */
++                service_set_state(s, SERVICE_START);
++
+                 service_enter_start_post(s);
+                 return;
+         }

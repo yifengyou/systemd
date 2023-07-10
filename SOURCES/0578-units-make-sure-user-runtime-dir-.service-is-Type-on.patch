@@ -1,0 +1,26 @@
+From 780d1d9fa7ccc036e6e237221ac51ed69453c8c6 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Thu, 2 Aug 2018 20:57:56 +0200
+Subject: [PATCH] units: make sure user-runtime-dir@.service is Type=oneshot
+
+We order user@.service after it, hence we need to properly know when it
+finished starting up.
+
+(cherry picked from commit d06e8fbce35c2b52ee1d09af4888876d5f2d7ae4)
+
+Related: #1946453
+---
+ units/user-runtime-dir@.service.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/units/user-runtime-dir@.service.in b/units/user-runtime-dir@.service.in
+index 31354c9bf2..bfd6488d61 100644
+--- a/units/user-runtime-dir@.service.in
++++ b/units/user-runtime-dir@.service.in
+@@ -15,5 +15,6 @@ StopWhenUnneeded=yes
+ [Service]
+ ExecStart=@rootlibexecdir@/systemd-user-runtime-dir start %i
+ ExecStop=@rootlibexecdir@/systemd-user-runtime-dir stop %i
++Type=oneshot
+ RemainAfterExit=true
+ Slice=user-%i.slice

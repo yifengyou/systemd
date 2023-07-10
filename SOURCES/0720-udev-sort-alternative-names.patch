@@ -1,0 +1,27 @@
+From f5d149095f95704fe7660069a493c0329ddbb5aa Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 17 Dec 2019 20:41:21 +0900
+Subject: [PATCH] udev: sort alternative names
+
+Kernel preserves the order of alternative names. So, for user
+visibility, let's sort the alternative names.
+
+(cherry picked from commit 4d016e965b13883cccc963a34a1299a0c4f900ca)
+
+Related: #2005008
+---
+ src/udev/net/link-config.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/udev/net/link-config.c b/src/udev/net/link-config.c
+index 6ceb4c698e..8bd374d352 100644
+--- a/src/udev/net/link-config.c
++++ b/src/udev/net/link-config.c
+@@ -515,6 +515,7 @@ int link_config_apply(link_config_ctx *ctx, link_config *config,
+                 strv_remove(altnames, new_name);
+         strv_remove(altnames, old_name);
+         strv_uniq(altnames);
++        strv_sort(altnames);
+ 
+         r = rtnl_set_link_alternative_names(&ctx->rtnl, ifindex, altnames);
+         if (r == -EOPNOTSUPP)

@@ -1,0 +1,263 @@
+From 3674514b7220a136dcfd464c205d41609f0c99a7 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Mon, 4 Oct 2021 17:51:52 +0200
+Subject: [PATCH] core: rename/generalize UNIT(u)->test_start_limit() hook
+
+Up until now the main reason why we didn't proceed with starting the
+unit was exceed start limit burst. However, for unit types like mounts
+the other reason could be effective ratelimit on /proc/self/mountinfo
+event source. That means our mount unit state may not reflect current
+kernel state. Hence, we need to attempt to re-run the start job again
+after ratelimit on event source expires.
+
+As we will be introducing another reason than start limit let's rename
+the virtual function that implements the check.
+
+(cherry picked from commit 705578c3b9d794097233aa66010cf67b2a444716)
+
+Related: #2036608
+---
+ src/core/automount.c | 6 +++---
+ src/core/mount.c     | 6 +++---
+ src/core/path.c      | 6 +++---
+ src/core/service.c   | 6 +++---
+ src/core/socket.c    | 6 +++---
+ src/core/swap.c      | 6 +++---
+ src/core/timer.c     | 6 +++---
+ src/core/unit.c      | 6 +++---
+ src/core/unit.h      | 2 +-
+ 9 files changed, 25 insertions(+), 25 deletions(-)
+
+diff --git a/src/core/automount.c b/src/core/automount.c
+index 5e16adabb5..f212620c8f 100644
+--- a/src/core/automount.c
++++ b/src/core/automount.c
+@@ -1071,7 +1071,7 @@ static bool automount_supported(void) {
+         return supported;
+ }
+ 
+-static int automount_test_start_limit(Unit *u) {
++static int automount_can_start(Unit *u) {
+         Automount *a = AUTOMOUNT(u);
+         int r;
+ 
+@@ -1083,7 +1083,7 @@ static int automount_test_start_limit(Unit *u) {
+                 return r;
+         }
+ 
+-        return 0;
++        return 1;
+ }
+ 
+ static const char* const automount_result_table[_AUTOMOUNT_RESULT_MAX] = {
+@@ -1145,5 +1145,5 @@ const UnitVTable automount_vtable = {
+                 },
+         },
+ 
+-        .test_start_limit = automount_test_start_limit,
++        .can_start = automount_can_start,
+ };
+diff --git a/src/core/mount.c b/src/core/mount.c
+index 22848847e5..032a2ca156 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -1951,7 +1951,7 @@ static int mount_control_pid(Unit *u) {
+         return m->control_pid;
+ }
+ 
+-static int mount_test_start_limit(Unit *u) {
++static int mount_can_start(Unit *u) {
+         Mount *m = MOUNT(u);
+         int r;
+ 
+@@ -1963,7 +1963,7 @@ static int mount_test_start_limit(Unit *u) {
+                 return r;
+         }
+ 
+-        return 0;
++        return 1;
+ }
+ 
+ static const char* const mount_exec_command_table[_MOUNT_EXEC_COMMAND_MAX] = {
+@@ -2058,5 +2058,5 @@ const UnitVTable mount_vtable = {
+                 },
+         },
+ 
+-        .test_start_limit = mount_test_start_limit,
++        .can_start = mount_can_start,
+ };
+diff --git a/src/core/path.c b/src/core/path.c
+index 1e69a1f05f..58f490589d 100644
+--- a/src/core/path.c
++++ b/src/core/path.c
+@@ -724,7 +724,7 @@ static void path_reset_failed(Unit *u) {
+         p->result = PATH_SUCCESS;
+ }
+ 
+-static int path_test_start_limit(Unit *u) {
++static int path_can_start(Unit *u) {
+         Path *p = PATH(u);
+         int r;
+ 
+@@ -736,7 +736,7 @@ static int path_test_start_limit(Unit *u) {
+                 return r;
+         }
+ 
+-        return 0;
++        return 1;
+ }
+ 
+ static const char* const path_type_table[_PATH_TYPE_MAX] = {
+@@ -792,5 +792,5 @@ const UnitVTable path_vtable = {
+         .bus_vtable = bus_path_vtable,
+         .bus_set_property = bus_path_set_property,
+ 
+-        .test_start_limit = path_test_start_limit,
++        .can_start = path_can_start,
+ };
+diff --git a/src/core/service.c b/src/core/service.c
+index c5f408d817..e8ae1a5772 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -4074,7 +4074,7 @@ static bool service_needs_console(Unit *u) {
+                       SERVICE_FINAL_SIGKILL);
+ }
+ 
+-static int service_test_start_limit(Unit *u) {
++static int service_can_start(Unit *u) {
+         Service *s = SERVICE(u);
+         int r;
+ 
+@@ -4087,7 +4087,7 @@ static int service_test_start_limit(Unit *u) {
+                 return r;
+         }
+ 
+-        return 0;
++        return 1;
+ }
+ 
+ static const char* const service_restart_table[_SERVICE_RESTART_MAX] = {
+@@ -4232,5 +4232,5 @@ const UnitVTable service_vtable = {
+                 },
+         },
+ 
+-        .test_start_limit = service_test_start_limit,
++        .can_start = service_can_start,
+ };
+diff --git a/src/core/socket.c b/src/core/socket.c
+index 36d2e4f823..3589300e68 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -3261,7 +3261,7 @@ static int socket_control_pid(Unit *u) {
+         return s->control_pid;
+ }
+ 
+-static int socket_test_start_limit(Unit *u) {
++static int socket_can_start(Unit *u) {
+         Socket *s = SOCKET(u);
+         int r;
+ 
+@@ -3273,7 +3273,7 @@ static int socket_test_start_limit(Unit *u) {
+                 return r;
+         }
+ 
+-        return 0;
++        return 1;
+ }
+ 
+ static const char* const socket_exec_command_table[_SOCKET_EXEC_COMMAND_MAX] = {
+@@ -3369,5 +3369,5 @@ const UnitVTable socket_vtable = {
+                 },
+         },
+ 
+-        .test_start_limit = socket_test_start_limit,
++        .can_start = socket_can_start,
+ };
+diff --git a/src/core/swap.c b/src/core/swap.c
+index 90fcd69300..498c5a6d69 100644
+--- a/src/core/swap.c
++++ b/src/core/swap.c
+@@ -1452,7 +1452,7 @@ static int swap_control_pid(Unit *u) {
+         return s->control_pid;
+ }
+ 
+-static int swap_test_start_limit(Unit *u) {
++static int swap_can_start(Unit *u) {
+         Swap *s = SWAP(u);
+         int r;
+ 
+@@ -1464,7 +1464,7 @@ static int swap_test_start_limit(Unit *u) {
+                 return r;
+         }
+ 
+-        return 0;
++        return 1;
+ }
+ 
+ static const char* const swap_exec_command_table[_SWAP_EXEC_COMMAND_MAX] = {
+@@ -1557,5 +1557,5 @@ const UnitVTable swap_vtable = {
+                 },
+         },
+ 
+-        .test_start_limit = swap_test_start_limit,
++        .can_start = swap_can_start,
+ };
+diff --git a/src/core/timer.c b/src/core/timer.c
+index fb9ae17990..684180bf99 100644
+--- a/src/core/timer.c
++++ b/src/core/timer.c
+@@ -823,7 +823,7 @@ static void timer_timezone_change(Unit *u) {
+         timer_enter_waiting(t, false);
+ }
+ 
+-static int timer_test_start_limit(Unit *u) {
++static int timer_can_start(Unit *u) {
+         Timer *t = TIMER(u);
+         int r;
+ 
+@@ -835,7 +835,7 @@ static int timer_test_start_limit(Unit *u) {
+                 return r;
+         }
+ 
+-        return 0;
++        return 1;
+ }
+ 
+ static const char* const timer_base_table[_TIMER_BASE_MAX] = {
+@@ -893,5 +893,5 @@ const UnitVTable timer_vtable = {
+         .bus_set_property = bus_timer_set_property,
+ 
+         .can_transient = true,
+-        .test_start_limit = timer_test_start_limit,
++        .can_start = timer_can_start,
+ };
+diff --git a/src/core/unit.c b/src/core/unit.c
+index f0df7452fa..4de218feac 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -1728,9 +1728,9 @@ int unit_start(Unit *u) {
+ 
+         assert(u);
+ 
+-        /* Check start rate limiting early so that failure conditions don't cause us to enter a busy loop. */
+-        if (UNIT_VTABLE(u)->test_start_limit) {
+-                int r = UNIT_VTABLE(u)->test_start_limit(u);
++        /* Check our ability to start early so that failure conditions don't cause us to enter a busy loop. */
++        if (UNIT_VTABLE(u)->can_start) {
++                int r = UNIT_VTABLE(u)->can_start(u);
+                 if (r < 0)
+                         return r;
+         }
+diff --git a/src/core/unit.h b/src/core/unit.h
+index 9e6f1bcf81..0cd259411f 100644
+--- a/src/core/unit.h
++++ b/src/core/unit.h
+@@ -569,7 +569,7 @@ typedef struct UnitVTable {
+ 
+         /* If this function is set, it's invoked first as part of starting a unit to allow start rate
+          * limiting checks to occur before we do anything else. */
+-        int (*test_start_limit)(Unit *u);
++        int (*can_start)(Unit *u);
+ 
+         /* The strings to print in status messages */
+         UnitStatusMessageFormats status_message_formats;

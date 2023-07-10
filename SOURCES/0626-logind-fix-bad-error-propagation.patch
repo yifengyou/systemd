@@ -1,0 +1,25 @@
+From 7662d7c86d1fbb01693d4eb008fa27bf1e0030a9 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 6 Aug 2018 18:21:37 +0200
+Subject: [PATCH] logind: fix bad error propagation
+
+(cherry picked from commit cce08496e7353e3e9903b42695aba3f9d259b90a)
+
+Related: #1642460
+---
+ src/login/logind-seat.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/login/logind-seat.c b/src/login/logind-seat.c
+index f68fc0ceaa..9e4f009643 100644
+--- a/src/login/logind-seat.c
++++ b/src/login/logind-seat.c
+@@ -175,7 +175,7 @@ static int vt_allocate(unsigned int vtnr) {
+         xsprintf(p, "/dev/tty%u", vtnr);
+         fd = open_terminal(p, O_RDWR|O_NOCTTY|O_CLOEXEC);
+         if (fd < 0)
+-                return -errno;
++                return fd;
+ 
+         return 0;
+ }

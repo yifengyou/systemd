@@ -1,0 +1,136 @@
+From 2bbaa4b647c8a60a6c6a591f71313b0667447246 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 26 Nov 2018 21:09:07 +0100
+Subject: [PATCH] =?UTF-8?q?test:=20add=20a=20test=20for=20StandardError=3D?=
+ =?UTF-8?q?file:=E2=80=A6?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This deserves a test of its, given how broken on so many levels this
+previously was.
+
+(cherry picked from commit 196b0a11f306b8041e35316feb05ed1f00380957)
+
+Related: #2093479
+---
+ test/TEST-27-STDOUTFILE/Makefile     |  1 +
+ test/TEST-27-STDOUTFILE/test.sh      | 52 ++++++++++++++++++++++++++++
+ test/TEST-27-STDOUTFILE/testsuite.sh | 40 +++++++++++++++++++++
+ 3 files changed, 93 insertions(+)
+ create mode 120000 test/TEST-27-STDOUTFILE/Makefile
+ create mode 100755 test/TEST-27-STDOUTFILE/test.sh
+ create mode 100755 test/TEST-27-STDOUTFILE/testsuite.sh
+
+diff --git a/test/TEST-27-STDOUTFILE/Makefile b/test/TEST-27-STDOUTFILE/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-27-STDOUTFILE/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-27-STDOUTFILE/test.sh b/test/TEST-27-STDOUTFILE/test.sh
+new file mode 100755
+index 0000000000..724dbef231
+--- /dev/null
++++ b/test/TEST-27-STDOUTFILE/test.sh
+@@ -0,0 +1,52 @@
++#!/bin/bash
++# -*- mode: shell-script; indent-tabs-mode: nil; sh-basic-offset: 4; -*-
++# ex: ts=8 sw=4 sts=4 et filetype=sh
++set -e
++TEST_DESCRIPTION="test StandardOutput=file:"
++
++. $TEST_BASE_DIR/test-functions
++
++test_setup() {
++    create_empty_image
++    mkdir -p $TESTDIR/root
++    mount ${LOOPDEV}p1 $TESTDIR/root
++
++    (
++        LOG_LEVEL=5
++        eval $(udevadm info --export --query=env --name=${LOOPDEV}p2)
++
++        inst_binary cmp
++
++        setup_basic_environment
++
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
++        # setup the testsuite service
++        cat >$initdir/etc/systemd/system/testsuite.service <<EOF
++[Unit]
++Description=Testsuite service
++
++[Service]
++ExecStart=/testsuite.sh
++Type=oneshot
++StandardOutput=tty
++StandardError=tty
++NotifyAccess=all
++EOF
++        cp testsuite.sh $initdir/
++
++        setup_testsuite
++    ) || return 1
++    setup_nspawn_root
++
++    ddebug "umount $TESTDIR/root"
++    umount $TESTDIR/root
++}
++
++do_test "$@"
+diff --git a/test/TEST-27-STDOUTFILE/testsuite.sh b/test/TEST-27-STDOUTFILE/testsuite.sh
+new file mode 100755
+index 0000000000..75559e03e5
+--- /dev/null
++++ b/test/TEST-27-STDOUTFILE/testsuite.sh
+@@ -0,0 +1,40 @@
++#!/bin/bash
++# -*- mode: shell-script; indent-tabs-mode: nil; sh-basic-offset: 4; -*-
++# ex: ts=8 sw=4 sts=4 et filetype=sh
++set -ex
++set -o pipefail
++
++systemd-analyze set-log-level debug
++systemd-analyze set-log-target console
++
++systemd-run --unit=one -p StandardOutput=file:/tmp/stdout -p StandardError=file:/tmp/stderr -p Type=exec sh -c 'echo x ; echo y >&2'
++cmp /tmp/stdout <<EOF
++x
++EOF
++cmp /tmp/stderr <<EOF
++y
++EOF
++
++systemd-run --unit=two -p StandardOutput=file:/tmp/stdout -p StandardError=file:/tmp/stderr -p Type=exec sh -c 'echo z ; echo a >&2'
++cmp /tmp/stdout <<EOF
++z
++EOF
++cmp /tmp/stderr <<EOF
++a
++EOF
++
++systemd-run --unit=three -p StandardOutput=append:/tmp/stdout -p StandardError=append:/tmp/stderr -p Type=exec sh -c 'echo b ; echo c >&2'
++cmp /tmp/stdout <<EOF
++z
++b
++EOF
++cmp /tmp/stderr <<EOF
++a
++c
++EOF
++
++systemd-analyze set-log-level info
++
++echo OK > /testok
++
++exit 0

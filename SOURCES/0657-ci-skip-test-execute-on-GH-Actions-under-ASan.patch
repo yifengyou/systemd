@@ -1,0 +1,34 @@
+From c0c7a5d73bd53375f90fbe70287512269bc8de16 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Tue, 12 Jan 2021 22:14:59 +0100
+Subject: [PATCH] ci: skip test-execute on GH Actions under ASan
+
+It seems to suffer from the same issue as on Travis CI, where the test
+randomly fails due to timeouts in its subtests.
+
+See: https://github.com/systemd/systemd/issues/10696#issuecomment-758501797
+(cherry picked from commit f1a8fed286e3b9527b1837e9d5c6cb8d88bd2041)
+
+Related: #2017033
+---
+ src/test/test-execute.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/test/test-execute.c b/src/test/test-execute.c
+index 294f8fe7dd..5303652b93 100644
+--- a/src/test/test-execute.c
++++ b/src/test/test-execute.c
+@@ -798,6 +798,13 @@ int main(int argc, char *argv[]) {
+         log_parse_environment();
+         log_open();
+ 
++#if HAS_FEATURE_ADDRESS_SANITIZER
++        if (strstr_ptr(ci_environment(), "travis") || strstr_ptr(ci_environment(), "github-actions")) {
++                log_notice("Running on Travis CI/GH Actions under ASan, skipping, see https://github.com/systemd/systemd/issues/10696");
++                return EXIT_TEST_SKIP;
++        }
++#endif
++
+         (void) unsetenv("USER");
+         (void) unsetenv("LOGNAME");
+         (void) unsetenv("SHELL");

@@ -1,0 +1,30 @@
+From c078d4d4bc3a61d186a98e03afc699b11134e09f Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 20 Nov 2019 12:22:40 +0100
+Subject: [PATCH] errno-util: add ERRNO_IS_PRIVILEGE() helper
+
+(cherry picked from commit e884e000714c2db006384058a63788ffcce8c8b8)
+
+Related: #1977569
+---
+ src/basic/util.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/basic/util.h b/src/basic/util.h
+index c70467f98c..76b76d7e91 100644
+--- a/src/basic/util.h
++++ b/src/basic/util.h
+@@ -170,6 +170,13 @@ static inline int negative_errno(void) {
+         return -errno;
+ }
+ 
++/* Two different errors for access problems */
++static inline bool ERRNO_IS_PRIVILEGE(int r) {
++        return IN_SET(abs(r),
++                      EACCES,
++                      EPERM);
++}
++
+ static inline unsigned u64log2(uint64_t n) {
+ #if __SIZEOF_LONG_LONG__ == 8
+         return (n > 1) ? (unsigned) __builtin_clzll(n) ^ 63U : 0;

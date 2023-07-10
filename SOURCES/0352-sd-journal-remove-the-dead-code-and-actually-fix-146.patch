@@ -1,0 +1,42 @@
+From 0f7ee0007b8267cc66b638a44da6ddd984ece412 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Fri, 27 Mar 2020 17:01:59 +0100
+Subject: [PATCH] sd-journal: remove the dead code and actually fix #14695
+
+journal_file_fstat() returns an error if we call it on already unlinked
+journal file and hence we never reach remove_file_real() which is the
+entire point.
+
+I must have made some mistake while testing the fix that got me thinking
+the issue is gone while opposite was true.
+
+Fixes #14695
+
+(cherry picked from commit 8581b9f9732d4c158bb5f773230a65ce77f2c292)
+
+Resolves: #1796128
+---
+ src/journal/sd-journal.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/src/journal/sd-journal.c b/src/journal/sd-journal.c
+index c06255e273..4c502978de 100644
+--- a/src/journal/sd-journal.c
++++ b/src/journal/sd-journal.c
+@@ -2597,13 +2597,12 @@ _public_ int sd_journal_wait(sd_journal *j, uint64_t timeout_usec) {
+                    Get rid of the deleted files now so they don't stay around indefinitely. */
+                 ORDERED_HASHMAP_FOREACH(f, j->files, i) {
+                         r = journal_file_fstat(f);
+-                        if (r < 0) {
++                        if (r == -EIDRM)
++                                remove_file_real(j, f);
++                        else if (r < 0) {
+                                 log_debug_errno(r,"Failed to fstat() journal file '%s' : %m", f->path);
+                                 continue;
+                         }
+-
+-                        if (f->last_stat.st_nlink <= 0)
+-                                remove_file_real(j, f);
+                 }
+ 
+                 /* The journal might have changed since the context

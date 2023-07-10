@@ -1,0 +1,47 @@
+From 2d197adc6d7109d5901401a90288530582f3f991 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 26 Feb 2019 13:00:35 +0100
+Subject: [PATCH] fuzz-journal-stream: avoid assertion failure on samples which
+ don't fit in pipe
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fixes https://bugs.chromium.org/p/oss-fuzz/issues/detail?id=11587.
+We had a sample which was large enough that write(2) failed to push all the
+data into the pipe, and an assert failed. The code could be changed to use
+a loop, but then we'd need to interleave writes and sd_event_run (to process
+the journal). I don't think the complexity is worth it — fuzzing works best
+if the sample is not too huge anyway. So let's just reject samples above 64k,
+and tell oss-fuzz about this limit.
+
+(cherry picked from commit eafadd069c4e30ed62173123326a7237448615d1)
+
+Resolves: #1764560
+---
+ src/fuzz/fuzz-journald-stream.c       | 2 +-
+ src/fuzz/fuzz-journald-stream.options | 2 ++
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+ create mode 100644 src/fuzz/fuzz-journald-stream.options
+
+diff --git a/src/fuzz/fuzz-journald-stream.c b/src/fuzz/fuzz-journald-stream.c
+index 247c0889bc..693b197d3a 100644
+--- a/src/fuzz/fuzz-journald-stream.c
++++ b/src/fuzz/fuzz-journald-stream.c
+@@ -14,7 +14,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+         StdoutStream *stream;
+         int v;
+ 
+-        if (size == 0)
++        if (size == 0 || size > 65536)
+                 return 0;
+ 
+         if (!getenv("SYSTEMD_LOG_LEVEL"))
+diff --git a/src/fuzz/fuzz-journald-stream.options b/src/fuzz/fuzz-journald-stream.options
+new file mode 100644
+index 0000000000..678d526b1e
+--- /dev/null
++++ b/src/fuzz/fuzz-journald-stream.options
+@@ -0,0 +1,2 @@
++[libfuzzer]
++max_len = 65536

@@ -1,0 +1,34 @@
+From 40612e4e7690c613cba7ac87b9d782724e623a39 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Wed, 27 Nov 2019 14:27:58 +0100
+Subject: [PATCH] cryptsetup: reduce the chance that we will be OOM killed
+
+cryptsetup introduced optional locking scheme that should serialize
+unlocking keyslots which use memory hard key derivation
+function (argon2). Using the serialization should prevent OOM situation
+in early boot while unlocking encrypted volumes.
+
+(cherry picked from commit 408c81f62454684dfbff1c95ce3210d06f256e58)
+
+Resolves: #1696602
+---
+ src/cryptsetup/cryptsetup.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/cryptsetup/cryptsetup.c b/src/cryptsetup/cryptsetup.c
+index 4e1b3eff19..9071126c2e 100644
+--- a/src/cryptsetup/cryptsetup.c
++++ b/src/cryptsetup/cryptsetup.c
+@@ -656,6 +656,12 @@ int main(int argc, char *argv[]) {
+                 if (arg_discards)
+                         flags |= CRYPT_ACTIVATE_ALLOW_DISCARDS;
+ 
++#ifdef CRYPT_ACTIVATE_SERIALIZE_MEMORY_HARD_PBKDF
++                /* Try to decrease the risk of OOM event if memory hard key derivation function is in use */
++                /* https://gitlab.com/cryptsetup/cryptsetup/issues/446/ */
++                flags |= CRYPT_ACTIVATE_SERIALIZE_MEMORY_HARD_PBKDF;
++#endif
++
+                 if (arg_timeout == USEC_INFINITY)
+                         until = 0;
+                 else

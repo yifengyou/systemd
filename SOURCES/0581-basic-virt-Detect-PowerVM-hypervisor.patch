@@ -1,0 +1,80 @@
+From 48dacf8d30cd61b72939e9c3419acced4b2fde74 Mon Sep 17 00:00:00 2001
+From: Michal Suchanek <msuchanek@suse.de>
+Date: Fri, 2 Oct 2020 11:05:23 +0200
+Subject: [PATCH] basic/virt: Detect PowerVM hypervisor
+
+Currently systemd-detect-virt fails to detect running under PowerVM.
+
+Add code to detect PowerVM based on code in util-linux.
+
+Signed-off-by: Michal Suchanek <msuchanek@suse.de>
+(cherry picked from commit 3224e38bb6b3287ca253cbafb460a150544d5818)
+
+Resolves: #1937989
+---
+ man/systemd-detect-virt.xml | 7 ++++++-
+ src/basic/virt.c            | 6 ++++++
+ src/basic/virt.h            | 1 +
+ 3 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/man/systemd-detect-virt.xml b/man/systemd-detect-virt.xml
+index c4763fd561..6beb2c2aa1 100644
+--- a/man/systemd-detect-virt.xml
++++ b/man/systemd-detect-virt.xml
+@@ -65,7 +65,7 @@
+         </thead>
+         <tbody>
+           <row>
+-            <entry valign="top" morerows="11">VM</entry>
++            <entry valign="top" morerows="12">VM</entry>
+             <entry><varname>qemu</varname></entry>
+             <entry>QEMU software virtualization, without KVM</entry>
+           </row>
+@@ -95,6 +95,11 @@
+             <entry>Oracle VM VirtualBox (historically marketed by innotek and Sun Microsystems), for legacy and KVM hypervisor</entry>
+           </row>
+ 
++          <row>
++            <entry><varname>powervm</varname></entry>
++            <entry>IBM PowerVM hypervisor - comes as firmware with some IBM POWER servers</entry>
++          </row>
++
+           <row>
+             <entry><varname>xen</varname></entry>
+             <entry>Xen hypervisor (only domU, not dom0)</entry>
+diff --git a/src/basic/virt.c b/src/basic/virt.c
+index dfa1525219..0b88005ed6 100644
+--- a/src/basic/virt.c
++++ b/src/basic/virt.c
+@@ -92,6 +92,11 @@ static int detect_vm_device_tree(void) {
+                 _cleanup_closedir_ DIR *dir = NULL;
+                 struct dirent *dent;
+ 
++                if (access("/proc/device-tree/ibm,partition-name", F_OK) == 0 &&
++                    access("/proc/device-tree/hmc-managed?", F_OK) == 0 &&
++                    access("/proc/device-tree/chosen/qemu,graphic-width", F_OK) != 0)
++                        return VIRTUALIZATION_POWERVM;
++
+                 dir = opendir("/proc/device-tree");
+                 if (!dir) {
+                         if (errno == ENOENT) {
+@@ -635,6 +640,7 @@ static const char *const virtualization_table[_VIRTUALIZATION_MAX] = {
+         [VIRTUALIZATION_PARALLELS] = "parallels",
+         [VIRTUALIZATION_BHYVE] = "bhyve",
+         [VIRTUALIZATION_QNX] = "qnx",
++        [VIRTUALIZATION_POWERVM] = "powervm",
+         [VIRTUALIZATION_VM_OTHER] = "vm-other",
+ 
+         [VIRTUALIZATION_SYSTEMD_NSPAWN] = "systemd-nspawn",
+diff --git a/src/basic/virt.h b/src/basic/virt.h
+index c4cf4bfeab..640b3ed779 100644
+--- a/src/basic/virt.h
++++ b/src/basic/virt.h
+@@ -21,6 +21,7 @@ enum {
+         VIRTUALIZATION_PARALLELS,
+         VIRTUALIZATION_BHYVE,
+         VIRTUALIZATION_QNX,
++        VIRTUALIZATION_POWERVM,
+         VIRTUALIZATION_VM_OTHER,
+         VIRTUALIZATION_VM_LAST = VIRTUALIZATION_VM_OTHER,
+ 

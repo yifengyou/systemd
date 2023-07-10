@@ -1,0 +1,68 @@
+From d6ffd324cc933efec946a3ffbed6fccfe7077203 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 26 Nov 2018 21:07:48 +0100
+Subject: [PATCH] core: be more careful when inheriting stdout fds to stderr
+
+We need to compare the fd name/file name if we inherit an fd from stdout
+to stderr. Let's do that.
+
+Fixes: #10875
+(cherry picked from commit 41fc585a7a3b8ae857cad5fdad1bc70cdacfa8e5)
+
+Related: #2093479
+---
+ src/core/execute.c | 27 +++++++++++++++++++++++++--
+ 1 file changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/execute.c b/src/core/execute.c
+index 9cbb678ac4..b1d8dceb32 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -545,6 +545,30 @@ static int setup_input(
+         }
+ }
+ 
++static bool can_inherit_stderr_from_stdout(
++                const ExecContext *context,
++                ExecOutput o,
++                ExecOutput e) {
++
++        assert(context);
++
++        /* Returns true, if given the specified STDERR and STDOUT output we can directly dup() the stdout fd to the
++         * stderr fd */
++
++        if (e == EXEC_OUTPUT_INHERIT)
++                return true;
++        if (e != o)
++                return false;
++
++        if (e == EXEC_OUTPUT_NAMED_FD)
++                return streq_ptr(context->stdio_fdname[STDOUT_FILENO], context->stdio_fdname[STDERR_FILENO]);
++
++        if (IN_SET(e, EXEC_OUTPUT_FILE, EXEC_OUTPUT_FILE_APPEND))
++                return streq_ptr(context->stdio_file[STDOUT_FILENO], context->stdio_file[STDERR_FILENO]);
++
++        return true;
++}
++
+ static int setup_output(
+                 const Unit *unit,
+                 const ExecContext *context,
+@@ -603,7 +627,7 @@ static int setup_output(
+                         return fileno;
+ 
+                 /* Duplicate from stdout if possible */
+-                if ((e == o && e != EXEC_OUTPUT_NAMED_FD) || e == EXEC_OUTPUT_INHERIT)
++                if (can_inherit_stderr_from_stdout(context, o, e))
+                         return dup2(STDOUT_FILENO, fileno) < 0 ? -errno : fileno;
+ 
+                 o = e;
+@@ -694,7 +718,6 @@ static int setup_output(
+                         flags |= O_APPEND;
+ 
+                 fd = acquire_path(context->stdio_file[fileno], flags, 0666 & ~context->umask);
+-
+                 if (fd < 0)
+                         return fd;
+ 

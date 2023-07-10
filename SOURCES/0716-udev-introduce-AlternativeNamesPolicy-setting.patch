@@ -1,0 +1,169 @@
+From 2faf160d0b8122e0dca603a441db68dc38c1bab6 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Mon, 16 Dec 2019 23:44:42 +0900
+Subject: [PATCH] udev: introduce AlternativeNamesPolicy= setting
+
+(cherry picked from commit ef1d2c07f9567dfea8a4e012d8779a4ded2d9ae6)
+
+Related: #2005008
+---
+ man/systemd.link.xml                 | 11 +++++
+ src/udev/net/link-config-gperf.gperf |  1 +
+ src/udev/net/link-config.c           | 62 ++++++++++++++++++++++++++--
+ src/udev/net/link-config.h           |  5 +++
+ 4 files changed, 76 insertions(+), 3 deletions(-)
+
+diff --git a/man/systemd.link.xml b/man/systemd.link.xml
+index c8ebb751ee..13dcce0879 100644
+--- a/man/systemd.link.xml
++++ b/man/systemd.link.xml
+@@ -343,6 +343,17 @@
+           </para>
+         </listitem>
+       </varlistentry>
++      <varlistentry>
++        <term><varname>AlternativeNamesPolicy=</varname></term>
++        <listitem>
++          <para>A space-separated list of policies by which the interface's alternative names
++          should be set. Each of the policies may fail, and all successful policies are used. The
++          available policies are <literal>database</literal>, <literal>onboard</literal>,
++          <literal>slot</literal>, <literal>path</literal>, and <literal>mac</literal>. If the
++          kernel does not support the alternative names, then this setting will be ignored.
++          </para>
++        </listitem>
++      </varlistentry>
+       <varlistentry>
+         <term><varname>AlternativeName=</varname></term>
+         <listitem>
+diff --git a/src/udev/net/link-config-gperf.gperf b/src/udev/net/link-config-gperf.gperf
+index 913c754145..df8404e7b8 100644
+--- a/src/udev/net/link-config-gperf.gperf
++++ b/src/udev/net/link-config-gperf.gperf
+@@ -35,6 +35,7 @@ Link.MACAddress,                 config_parse_hwaddr,        0,
+ Link.NamePolicy,                 config_parse_name_policy,   0,                             offsetof(link_config, name_policy)
+ Link.Name,                       config_parse_ifname,        0,                             offsetof(link_config, name)
+ Link.AlternativeName,            config_parse_ifnames,       1,                             offsetof(link_config, alternative_names)
++Link.AlternativeNamesPolicy,     config_parse_alternative_names_policy, 0,                  offsetof(link_config, alternative_names_policy)
+ Link.Alias,                      config_parse_ifalias,       0,                             offsetof(link_config, alias)
+ Link.MTUBytes,                   config_parse_mtu,           AF_UNSPEC,                     offsetof(link_config, mtu)
+ Link.BitsPerSecond,              config_parse_si_size,       0,                             offsetof(link_config, speed)
+diff --git a/src/udev/net/link-config.c b/src/udev/net/link-config.c
+index 8e88c8e5c4..6ceb4c698e 100644
+--- a/src/udev/net/link-config.c
++++ b/src/udev/net/link-config.c
+@@ -69,6 +69,7 @@ static void link_config_free(link_config *link) {
+         free(link->name_policy);
+         free(link->name);
+         strv_free(link->alternative_names);
++        free(link->alternative_names_policy);
+         free(link->alias);
+ 
+         free(link);
+@@ -349,6 +350,7 @@ static int get_mac(struct udev_device *device, bool want_random,
+ 
+ int link_config_apply(link_config_ctx *ctx, link_config *config,
+                       struct udev_device *device, const char **name) {
++        _cleanup_strv_free_ char **altnames = NULL;
+         bool respect_predictable = false;
+         struct ether_addr generated_mac;
+         struct ether_addr *mac = NULL;
+@@ -473,11 +475,52 @@ int link_config_apply(link_config_ctx *ctx, link_config *config,
+         if (r < 0)
+                 return log_warning_errno(r, "Could not set Alias=, MACAddress= or MTU= on %s: %m", old_name);
+ 
+-        r = rtnl_set_link_alternative_names(&ctx->rtnl, ifindex, config->alternative_names);
++        if (config->alternative_names) {
++                altnames = strv_copy(config->alternative_names);
++                if (!altnames)
++                        return log_oom();
++        }
++
++        if (config->alternative_names_policy)
++                for (NamePolicy *p = config->alternative_names_policy; *p != _NAMEPOLICY_INVALID; p++) {
++                        const char *n;
++
++                        switch (*p) {
++                        case NAMEPOLICY_DATABASE:
++                                n = udev_device_get_property_value(device, "ID_NET_NAME_FROM_DATABASE");
++                                break;
++                        case NAMEPOLICY_ONBOARD:
++                                n = udev_device_get_property_value(device, "ID_NET_NAME_ONBOARD");
++                                break;
++                        case NAMEPOLICY_SLOT:
++                                n = udev_device_get_property_value(device, "ID_NET_NAME_SLOT");
++                                break;
++                        case NAMEPOLICY_PATH:
++                                n = udev_device_get_property_value(device, "ID_NET_NAME_PATH");
++                                break;
++                        case NAMEPOLICY_MAC:
++                                n = udev_device_get_property_value(device, "ID_NET_NAME_MAC");
++                                break;
++                        default:
++                                assert_not_reached("invalid policy");
++                        }
++                        if (!isempty(n)) {
++                                r = strv_extend(&altnames, n);
++                                if (r < 0)
++                                        return log_oom();
++                        }
++                }
++
++        if (new_name)
++                strv_remove(altnames, new_name);
++        strv_remove(altnames, old_name);
++        strv_uniq(altnames);
++
++        r = rtnl_set_link_alternative_names(&ctx->rtnl, ifindex, altnames);
+         if (r == -EOPNOTSUPP)
+-                log_debug_errno(r, "Could not set AlternativeName= on %s, ignoring: %m", old_name);
++                log_debug_errno(r, "Could not set AlternativeName= or apply AlternativeNamesPolicy= on %s, ignoring: %m", old_name);
+         else if (r < 0)
+-                return log_warning_errno(r, "Could not set AlternativeName= on %s: %m", old_name);
++                return log_warning_errno(r, "Could not set AlternativeName= or apply AlternativeNamesPolicy= on %s: %m", old_name);
+ 
+         *name = new_name;
+ 
+@@ -524,3 +567,16 @@ DEFINE_STRING_TABLE_LOOKUP(name_policy, NamePolicy);
+ DEFINE_CONFIG_PARSE_ENUMV(config_parse_name_policy, name_policy, NamePolicy,
+                           _NAMEPOLICY_INVALID,
+                           "Failed to parse interface name policy");
++
++static const char* const alternative_names_policy_table[_NAMEPOLICY_MAX] = {
++        [NAMEPOLICY_DATABASE] = "database",
++        [NAMEPOLICY_ONBOARD] = "onboard",
++        [NAMEPOLICY_SLOT] = "slot",
++        [NAMEPOLICY_PATH] = "path",
++        [NAMEPOLICY_MAC] = "mac",
++};
++
++DEFINE_STRING_TABLE_LOOKUP(alternative_names_policy, NamePolicy);
++DEFINE_CONFIG_PARSE_ENUMV(config_parse_alternative_names_policy, alternative_names_policy, NamePolicy,
++                          _NAMEPOLICY_INVALID,
++                          "Failed to parse alternative names policy");
+diff --git a/src/udev/net/link-config.h b/src/udev/net/link-config.h
+index 93d5fdce59..634bd2ec54 100644
+--- a/src/udev/net/link-config.h
++++ b/src/udev/net/link-config.h
+@@ -49,6 +49,7 @@ struct link_config {
+         struct ether_addr *mac;
+         MACPolicy mac_policy;
+         NamePolicy *name_policy;
++        NamePolicy *alternative_names_policy;
+         char *name;
+         char **alternative_names;
+         char *alias;
+@@ -78,6 +79,9 @@ int link_get_driver(link_config_ctx *ctx, struct udev_device *device, char **ret
+ const char *name_policy_to_string(NamePolicy p) _const_;
+ NamePolicy name_policy_from_string(const char *p) _pure_;
+ 
++const char *alternative_names_policy_to_string(NamePolicy p) _const_;
++NamePolicy alternative_names_policy_from_string(const char *p) _pure_;
++
+ const char *mac_policy_to_string(MACPolicy p) _const_;
+ MACPolicy mac_policy_from_string(const char *p) _pure_;
+ 
+@@ -86,3 +90,4 @@ const struct ConfigPerfItem* link_config_gperf_lookup(const char *key, GPERF_LEN
+ 
+ int config_parse_mac_policy(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);
+ int config_parse_name_policy(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);
++int config_parse_alternative_names_policy(const char *unit, const char *filename, unsigned line, const char *section, unsigned section_line, const char *lvalue, int ltype, const char *rvalue, void *data, void *userdata);

@@ -1,0 +1,82 @@
+From 64705366e134f06438e88f0b7fbef341d0a01431 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 19 Aug 2020 17:43:40 +0200
+Subject: [PATCH] shared/seccomp: reduce scope of indexing variables
+
+(cherry picked from commit 077e8fc0cad5a4532348d20a1eef8621295dd75a)
+
+Related: #2040247
+---
+ src/shared/seccomp-util.c | 14 +++++---------
+ 1 file changed, 5 insertions(+), 9 deletions(-)
+
+diff --git a/src/shared/seccomp-util.c b/src/shared/seccomp-util.c
+index c2b2f2da92..4d2ba31d47 100644
+--- a/src/shared/seccomp-util.c
++++ b/src/shared/seccomp-util.c
+@@ -864,12 +864,10 @@ const SyscallFilterSet syscall_filter_sets[_SYSCALL_FILTER_SET_MAX] = {
+ };
+ 
+ const SyscallFilterSet *syscall_filter_set_find(const char *name) {
+-        unsigned i;
+-
+         if (isempty(name) || name[0] != '@')
+                 return NULL;
+ 
+-        for (i = 0; i < _SYSCALL_FILTER_SET_MAX; i++)
++        for (unsigned i = 0; i < _SYSCALL_FILTER_SET_MAX; i++)
+                 if (streq(syscall_filter_sets[i].name, name))
+                         return syscall_filter_sets + i;
+ 
+@@ -1105,7 +1103,6 @@ int seccomp_restrict_namespaces(unsigned long retain) {
+ 
+         SECCOMP_FOREACH_LOCAL_ARCH(arch) {
+                 _cleanup_(seccomp_releasep) scmp_filter_ctx seccomp = NULL;
+-                unsigned i;
+ 
+                 log_debug("Operating on architecture: %s", seccomp_arch_to_string(arch));
+ 
+@@ -1135,7 +1132,7 @@ int seccomp_restrict_namespaces(unsigned long retain) {
+                         continue;
+                 }
+ 
+-                for (i = 0; namespace_flag_map[i].name; i++) {
++                for (unsigned i = 0; namespace_flag_map[i].name; i++) {
+                         unsigned long f;
+ 
+                         f = namespace_flag_map[i].flag;
+@@ -1288,7 +1285,7 @@ int seccomp_restrict_address_families(Set *address_families, bool whitelist) {
+                         return r;
+ 
+                 if (whitelist) {
+-                        int af, first = 0, last = 0;
++                        int first = 0, last = 0;
+                         void *afp;
+ 
+                         /* If this is a whitelist, we first block the address families that are out of range and then
+@@ -1296,7 +1293,7 @@ int seccomp_restrict_address_families(Set *address_families, bool whitelist) {
+                          * the set. */
+ 
+                         SET_FOREACH(afp, address_families, i) {
+-                                af = PTR_TO_INT(afp);
++                                int af = PTR_TO_INT(afp);
+ 
+                                 if (af <= 0 || af >= af_max())
+                                         continue;
+@@ -1350,7 +1347,7 @@ int seccomp_restrict_address_families(Set *address_families, bool whitelist) {
+                                 }
+ 
+                                 /* Block everything between the first and last entry */
+-                                for (af = 1; af < af_max(); af++) {
++                                for (int af = 1; af < af_max(); af++) {
+ 
+                                         if (set_contains(address_families, INT_TO_PTR(af)))
+                                                 continue;
+@@ -1378,7 +1375,6 @@ int seccomp_restrict_address_families(Set *address_families, bool whitelist) {
+                          * checks. */
+ 
+                         SET_FOREACH(af, address_families, i) {
+-
+                                 r = seccomp_rule_add_exact(
+                                                 seccomp,
+                                                 SCMP_ACT_ERRNO(EAFNOSUPPORT),

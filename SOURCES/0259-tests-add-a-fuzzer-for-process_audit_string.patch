@@ -1,0 +1,99 @@
+From f991a9c7644f3fb5155ff823600ba5a6ea403dc4 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Fri, 16 Nov 2018 21:23:56 +0100
+Subject: [PATCH] tests: add a fuzzer for process_audit_string
+
+(cherry picked from commit 090a20cfaf3d5439fa39c5d8df473b0cfef181dd)
+
+Resolves: #1764560
+---
+ src/fuzz/fuzz-journald-audit.c      | 27 +++++++++++++++++++++++++++
+ src/fuzz/meson.build                |  5 +++++
+ src/journal/journald-audit.c        |  2 +-
+ src/journal/journald-audit.h        |  2 ++
+ test/fuzz/fuzz-journald-audit/basic |  1 +
+ 5 files changed, 36 insertions(+), 1 deletion(-)
+ create mode 100644 src/fuzz/fuzz-journald-audit.c
+ create mode 100644 test/fuzz/fuzz-journald-audit/basic
+
+diff --git a/src/fuzz/fuzz-journald-audit.c b/src/fuzz/fuzz-journald-audit.c
+new file mode 100644
+index 0000000000..fe401c0d98
+--- /dev/null
++++ b/src/fuzz/fuzz-journald-audit.c
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: LGPL-2.1+ */
++
++#include "fuzz.h"
++#include "journald-audit.h"
++
++int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
++        Server s;
++        _cleanup_free_ char *buffer = NULL;
++
++        s = (Server) {
++                .syslog_fd = -1,
++                .native_fd = -1,
++                .stdout_fd = -1,
++                .dev_kmsg_fd = -1,
++                .audit_fd = -1,
++                .hostname_fd = -1,
++                .notify_fd = -1,
++                .storage = STORAGE_NONE,
++        };
++        assert_se(sd_event_default(&s.event) >= 0);
++        buffer = memdup_suffix0(data, size);
++        assert_se(buffer);
++        process_audit_string(&s, 0, buffer, size);
++        server_done(&s);
++
++        return 0;
++}
+diff --git a/src/fuzz/meson.build b/src/fuzz/meson.build
+index 0520e448a9..5548da3822 100644
+--- a/src/fuzz/meson.build
++++ b/src/fuzz/meson.build
+@@ -33,6 +33,11 @@ fuzzers += [
+           libshared],
+          [libmount]],
+ 
++        [['src/fuzz/fuzz-journald-audit.c'],
++         [libjournal_core,
++          libshared],
++         [libselinux]],
++
+         [['src/fuzz/fuzz-journald-kmsg.c'],
+          [libjournal_core,
+           libshared],
+diff --git a/src/journal/journald-audit.c b/src/journal/journald-audit.c
+index 87726684af..7810a0139a 100644
+--- a/src/journal/journald-audit.c
++++ b/src/journal/journald-audit.c
+@@ -313,7 +313,7 @@ static int map_all_fields(
+         }
+ }
+ 
+-static void process_audit_string(Server *s, int type, const char *data, size_t size) {
++void process_audit_string(Server *s, int type, const char *data, size_t size) {
+         size_t n_iov_allocated = 0, n_iov = 0, z;
+         _cleanup_free_ struct iovec *iov = NULL;
+         uint64_t seconds, msec, id;
+diff --git a/src/journal/journald-audit.h b/src/journal/journald-audit.h
+index 57bb1711c9..7766618c98 100644
+--- a/src/journal/journald-audit.h
++++ b/src/journal/journald-audit.h
+@@ -6,4 +6,6 @@
+ 
+ void server_process_audit_message(Server *s, const void *buffer, size_t buffer_size, const struct ucred *ucred, const union sockaddr_union *sa, socklen_t salen);
+ 
++void process_audit_string(Server *s, int type, const char *data, size_t size);
++
+ int server_open_audit(Server*s);
+diff --git a/test/fuzz/fuzz-journald-audit/basic b/test/fuzz/fuzz-journald-audit/basic
+new file mode 100644
+index 0000000000..d1ce8cc5f0
+--- /dev/null
++++ b/test/fuzz/fuzz-journald-audit/basic
+@@ -0,0 +1 @@
++audit(1542398162.211:744): pid=7376 uid=1000 auid=1000 ses=6 subj=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023 msg='op=PAM:accounting grantors=pam_unix,pam_localuser acct="vagrant" exe="/usr/bin/sudo" hostname=? addr=? terminal=/dev/pts/1 res=success'
+\ No newline at end of file

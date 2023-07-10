@@ -1,0 +1,69 @@
+From 23ef6c470418b50119dc0bf13b681bfeae820352 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 11 Sep 2018 13:22:31 +0900
+Subject: [PATCH] strv: introduce strv_join_prefix()
+
+(cherry picked from commit 2b9a7d2e96f5f852cdf8cc704930ea2ee456f6a1)
+
+Related: #2049788
+---
+ src/basic/strv.c | 10 +++++++---
+ src/basic/strv.h |  5 ++++-
+ 2 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/src/basic/strv.c b/src/basic/strv.c
+index b3716233b5..f1605e4fbb 100644
+--- a/src/basic/strv.c
++++ b/src/basic/strv.c
+@@ -335,21 +335,22 @@ int strv_split_extract(char ***t, const char *s, const char *separators, Extract
+         return (int) n;
+ }
+ 
+-char *strv_join(char **l, const char *separator) {
++char *strv_join_prefix(char **l, const char *separator, const char *prefix) {
+         char *r, *e;
+         char **s;
+-        size_t n, k;
++        size_t n, k, m;
+ 
+         if (!separator)
+                 separator = " ";
+ 
+         k = strlen(separator);
++        m = strlen_ptr(prefix);
+ 
+         n = 0;
+         STRV_FOREACH(s, l) {
+                 if (s != l)
+                         n += k;
+-                n += strlen(*s);
++                n += m + strlen(*s);
+         }
+ 
+         r = new(char, n+1);
+@@ -361,6 +362,9 @@ char *strv_join(char **l, const char *separator) {
+                 if (s != l)
+                         e = stpcpy(e, separator);
+ 
++                if (prefix)
++                        e = stpcpy(e, prefix);
++
+                 e = stpcpy(e, *s);
+         }
+ 
+diff --git a/src/basic/strv.h b/src/basic/strv.h
+index a09d76706d..9285bc2642 100644
+--- a/src/basic/strv.h
++++ b/src/basic/strv.h
+@@ -71,7 +71,10 @@ char **strv_split_newlines(const char *s);
+ 
+ int strv_split_extract(char ***t, const char *s, const char *separators, ExtractFlags flags);
+ 
+-char *strv_join(char **l, const char *separator);
++char *strv_join_prefix(char **l, const char *separator, const char *prefix);
++static inline char *strv_join(char **l, const char *separator) {
++        return strv_join_prefix(l, separator, NULL);
++}
+ 
+ char **strv_parse_nulstr(const char *s, size_t l);
+ char **strv_split_nulstr(const char *s);

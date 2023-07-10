@@ -1,0 +1,31 @@
+From f4a34d97bd7e1564a51f590df591cb31a1a3f333 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Mon, 17 Sep 2018 07:12:38 +0000
+Subject: [PATCH] nspawn: chown() the legacy hierarchy when it's used in a
+ container
+
+This is a follow-up to 720f0a2f3c928cc9379501a52146be9fbb4d9be2.
+
+Closes https://github.com/systemd/systemd/issues/10026
+Closes https://github.com/systemd/systemd/issues/9563
+
+(cherry picked from commit 89f180201cd8c0f3ce5cb6e8dd7e2b3cbcf71527)
+
+Resolves: 1837094
+---
+ src/nspawn/nspawn-cgroup.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/nspawn/nspawn-cgroup.c b/src/nspawn/nspawn-cgroup.c
+index d8a39a6959..a231622e29 100644
+--- a/src/nspawn/nspawn-cgroup.c
++++ b/src/nspawn/nspawn-cgroup.c
+@@ -55,7 +55,7 @@ int chown_cgroup(pid_t pid, CGroupUnified unified_requested, uid_t uid_shift) {
+         if (r < 0)
+                 return log_error_errno(r, "Failed to chown() cgroup %s: %m", fs);
+ 
+-        if (unified_requested == CGROUP_UNIFIED_SYSTEMD) {
++        if (unified_requested == CGROUP_UNIFIED_SYSTEMD || (unified_requested == CGROUP_UNIFIED_NONE && cg_unified_controller(SYSTEMD_CGROUP_CONTROLLER) > 0)) {
+                 _cleanup_free_ char *lfs = NULL;
+                 /* Always propagate access rights from unified to legacy controller */
+ 

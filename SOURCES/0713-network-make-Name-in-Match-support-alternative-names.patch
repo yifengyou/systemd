@@ -1,0 +1,143 @@
+From 0c178bf442aebcd2b42f10a0e4d2382a15505bb6 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Sun, 15 Dec 2019 22:46:19 +0900
+Subject: [PATCH] network: make Name= in [Match] support alternative names of
+ interfaces
+
+(cherry picked from commit 572b21d96cabd5860b0670e98440b6cb99a4b749
+src/network bits have been left out.)
+
+Related: #2005008
+---
+ man/systemd.network.xml                   |  7 +++----
+ src/libsystemd-network/network-internal.c | 20 ++++++++++++++++++--
+ src/libsystemd-network/network-internal.h |  3 ++-
+ src/network/netdev/netdev.c               |  2 +-
+ src/network/networkd-network.c            |  2 +-
+ src/udev/net/link-config.c                |  3 ++-
+ 6 files changed, 27 insertions(+), 10 deletions(-)
+
+diff --git a/man/systemd.network.xml b/man/systemd.network.xml
+index fc8e0aea68..8300540096 100644
+--- a/man/systemd.network.xml
++++ b/man/systemd.network.xml
+@@ -133,10 +133,9 @@
+         <varlistentry>
+           <term><varname>Name=</varname></term>
+           <listitem>
+-            <para>A whitespace-separated list of shell-style globs
+-            matching the device name, as exposed by the udev property
+-            <literal>INTERFACE</literal>. If the list is prefixed
+-            with a "!", the test is inverted.</para>
++            <para>A whitespace-separated list of shell-style globs matching the device name, as exposed
++            by the udev property <literal>INTERFACE</literal>, or device's alternative names. If the
++            list is prefixed with a "!", the test is inverted.</para>
+           </listitem>
+         </varlistentry>
+         <varlistentry>
+diff --git a/src/libsystemd-network/network-internal.c b/src/libsystemd-network/network-internal.c
+index 629e858def..a935709cd0 100644
+--- a/src/libsystemd-network/network-internal.c
++++ b/src/libsystemd-network/network-internal.c
+@@ -92,6 +92,18 @@ static bool net_condition_test_strv(char * const *raw_patterns,
+         return string && strv_fnmatch(raw_patterns, string, 0);
+ }
+ 
++static bool net_condition_test_ifname(char * const *patterns, const char *ifname, char * const *alternative_names) {
++        if (net_condition_test_strv(patterns, ifname))
++                return true;
++
++        char * const *p;
++        STRV_FOREACH(p, alternative_names)
++                if (net_condition_test_strv(patterns, *p))
++                        return true;
++
++        return false;
++}
++
+ bool net_match_config(Set *match_mac,
+                       char * const *match_paths,
+                       char * const *match_drivers,
+@@ -107,7 +119,8 @@ bool net_match_config(Set *match_mac,
+                       const char *dev_parent_driver,
+                       const char *dev_driver,
+                       const char *dev_type,
+-                      const char *dev_name) {
++                      const char *dev_name,
++                      char * const *alternative_names) {
+ 
+         if (match_host && condition_test(match_host) <= 0)
+                 return false;
+@@ -124,6 +137,9 @@ bool net_match_config(Set *match_mac,
+         if (match_arch && condition_test(match_arch) <= 0)
+                 return false;
+ 
++        if (!net_condition_test_ifname(match_names, dev_name, alternative_names))
++                return false;
++
+         if (match_mac && dev_mac && !set_contains(match_mac, dev_mac))
+                 return false;
+ 
+@@ -214,7 +230,7 @@ int config_parse_match_ifnames(
+                 if (r == 0)
+                         break;
+ 
+-                if (!ifname_valid(word)) {
++                if (!ifname_valid_full(word, ltype)) {
+                         log_syntax(unit, LOG_ERR, filename, line, 0, "Interface name is not valid or too long, ignoring assignment: %s", rvalue);
+                         return 0;
+                 }
+diff --git a/src/libsystemd-network/network-internal.h b/src/libsystemd-network/network-internal.h
+index 9074758bbb..e1d098f3fe 100644
+--- a/src/libsystemd-network/network-internal.h
++++ b/src/libsystemd-network/network-internal.h
+@@ -29,7 +29,8 @@ bool net_match_config(Set *match_mac,
+                       const char *dev_parent_driver,
+                       const char *dev_driver,
+                       const char *dev_type,
+-                      const char *dev_name);
++                      const char *dev_name,
++                      char * const *alternative_names);
+ 
+ CONFIG_PARSER_PROTOTYPE(config_parse_net_condition);
+ CONFIG_PARSER_PROTOTYPE(config_parse_hwaddr);
+diff --git a/src/network/netdev/netdev.c b/src/network/netdev/netdev.c
+index 82ce88402f..e97cc07028 100644
+--- a/src/network/netdev/netdev.c
++++ b/src/network/netdev/netdev.c
+@@ -640,7 +640,7 @@ static int netdev_load_one(Manager *manager, const char *filename) {
+                              netdev_raw->match_host, netdev_raw->match_virt,
+                              netdev_raw->match_kernel_cmdline, netdev_raw->match_kernel_version,
+                              netdev_raw->match_arch,
+-                             NULL, NULL, NULL, NULL, NULL, NULL) <= 0)
++                             NULL, NULL, NULL, NULL, NULL, NULL, NULL) <= 0)
+                 return 0;
+ 
+         if (netdev_raw->kind == _NETDEV_KIND_INVALID) {
+diff --git a/src/network/networkd-network.c b/src/network/networkd-network.c
+index 429aac5e6c..7637d135a4 100644
+--- a/src/network/networkd-network.c
++++ b/src/network/networkd-network.c
+@@ -479,7 +479,7 @@ int network_get(Manager *manager, struct udev_device *device,
+                                      network->match_virt, network->match_kernel_cmdline,
+                                      network->match_kernel_version, network->match_arch,
+                                      address, path, parent_driver, driver,
+-                                     devtype, ifname)) {
++                                     devtype, ifname, NULL)) {
+                         if (network->match_name && device) {
+                                 const char *attr;
+                                 uint8_t name_assign_type = NET_NAME_UNKNOWN;
+diff --git a/src/udev/net/link-config.c b/src/udev/net/link-config.c
+index d07a1a1874..e5052f8f29 100644
+--- a/src/udev/net/link-config.c
++++ b/src/udev/net/link-config.c
+@@ -238,7 +238,8 @@ int link_config_get(link_config_ctx *ctx, struct udev_device *device,
+                                      udev_device_get_driver(udev_device_get_parent(device)),
+                                      udev_device_get_property_value(device, "ID_NET_DRIVER"),
+                                      udev_device_get_devtype(device),
+-                                     udev_device_get_sysname(device))) {
++                                     udev_device_get_sysname(device),
++                                     NULL)) {
+                         if (link->match_name) {
+                                 unsigned char name_assign_type = NET_NAME_UNKNOWN;
+ 

@@ -1,0 +1,124 @@
+From f41927c026d65e9005c0ba418c6bfff511055bd2 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 11 Sep 2018 14:05:08 +0900
+Subject: [PATCH] core: add new environment variable $RUNTIME_DIRECTORY= or
+ friends
+
+The variable is generated from RuntimeDirectory= or friends.
+If multiple directories are set, then they are concatenated with
+the separator ':'.
+
+(cherry picked from commit fb2042dd55de5019f55931b4f20a44700ec1222b)
+
+Resolves: #2049788
+---
+ TODO               |  9 ---------
+ src/core/execute.c | 46 ++++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 44 insertions(+), 11 deletions(-)
+
+diff --git a/TODO b/TODO
+index 0705b6b08e..c52f9b25f3 100644
+--- a/TODO
++++ b/TODO
+@@ -214,15 +214,6 @@ Features:
+   for all units. It should be both a way to pin units into memory as well as a
+   wait to retrieve their exit data.
+ 
+-* maybe set a new set of env vars for services, based on RuntimeDirectory=,
+-  StateDirectory=, LogsDirectory=, CacheDirectory= and ConfigurationDirectory=
+-  automatically. For example, there could be $RUNTIME_DIRECTORY,
+-  $STATE_DIRECTORY, $LOGS_DIRECTORY=, $CACHE_DIRECTORY and
+-  $CONFIGURATION_DIRECTORY or so. This could be useful to write services that
+-  can adapt to varying directories for these purposes. Special care has to be
+-  taken if multiple dirs are configured. Maybe avoid setting the env vars in
+-  that case?
+-
+ * expose IO accounting data on the bus, show it in systemd-run --wait and log
+   about it in the resource log message
+ 
+diff --git a/src/core/execute.c b/src/core/execute.c
+index 3ff1a51aa1..9cbb678ac4 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -1606,6 +1606,8 @@ static void do_idle_pipe_dance(int idle_pipe[4]) {
+         idle_pipe[3] = safe_close(idle_pipe[3]);
+ }
+ 
++static const char *exec_directory_env_name_to_string(ExecDirectoryType t);
++
+ static int build_environment(
+                 const Unit *u,
+                 const ExecContext *c,
+@@ -1619,6 +1621,7 @@ static int build_environment(
+                 char ***ret) {
+ 
+         _cleanup_strv_free_ char **our_env = NULL;
++        ExecDirectoryType t;
+         size_t n_env = 0;
+         char *x;
+ 
+@@ -1627,7 +1630,7 @@ static int build_environment(
+         assert(p);
+         assert(ret);
+ 
+-        our_env = new0(char*, 14);
++        our_env = new0(char*, 14 + _EXEC_DIRECTORY_TYPE_MAX);
+         if (!our_env)
+                 return -ENOMEM;
+ 
+@@ -1733,8 +1736,37 @@ static int build_environment(
+                 our_env[n_env++] = x;
+         }
+ 
++        for (t = 0; t < _EXEC_DIRECTORY_TYPE_MAX; t++) {
++                _cleanup_free_ char *pre = NULL, *joined = NULL;
++                const char *n;
++
++                if (!p->prefix[t])
++                        continue;
++
++                if (strv_isempty(c->directories[t].paths))
++                        continue;
++
++                n = exec_directory_env_name_to_string(t);
++                if (!n)
++                        continue;
++
++                pre = strjoin(p->prefix[t], "/");
++                if (!pre)
++                        return -ENOMEM;
++
++                joined = strv_join_prefix(c->directories[t].paths, ":", pre);
++                if (!joined)
++                        return -ENOMEM;
++
++                x = strjoin(n, "=", joined);
++                if (!x)
++                        return -ENOMEM;
++
++                our_env[n_env++] = x;
++        }
++
+         our_env[n_env++] = NULL;
+-        assert(n_env <= 14);
++        assert(n_env <= 14 + _EXEC_DIRECTORY_TYPE_MAX);
+ 
+         *ret = TAKE_PTR(our_env);
+ 
+@@ -5197,6 +5229,16 @@ static const char* const exec_directory_type_table[_EXEC_DIRECTORY_TYPE_MAX] = {
+ 
+ DEFINE_STRING_TABLE_LOOKUP(exec_directory_type, ExecDirectoryType);
+ 
++static const char* const exec_directory_env_name_table[_EXEC_DIRECTORY_TYPE_MAX] = {
++        [EXEC_DIRECTORY_RUNTIME] = "RUNTIME_DIRECTORY",
++        [EXEC_DIRECTORY_STATE] = "STATE_DIRECTORY",
++        [EXEC_DIRECTORY_CACHE] = "CACHE_DIRECTORY",
++        [EXEC_DIRECTORY_LOGS] = "LOGS_DIRECTORY",
++        [EXEC_DIRECTORY_CONFIGURATION] = "CONFIGURATION_DIRECTORY",
++};
++
++DEFINE_PRIVATE_STRING_TABLE_LOOKUP_TO_STRING(exec_directory_env_name, ExecDirectoryType);
++
+ static const char* const exec_keyring_mode_table[_EXEC_KEYRING_MODE_MAX] = {
+         [EXEC_KEYRING_INHERIT] = "inherit",
+         [EXEC_KEYRING_PRIVATE] = "private",

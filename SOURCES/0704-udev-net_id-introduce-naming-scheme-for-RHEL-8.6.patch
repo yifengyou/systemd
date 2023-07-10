@@ -1,0 +1,50 @@
+From 7ee6542c64103205d6520c1165894b3b6a40f2c9 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Wed, 12 Jan 2022 15:38:38 +0100
+Subject: [PATCH] udev/net_id: introduce naming scheme for RHEL-8.6
+
+RHEL-only
+
+Related: #2039797
+---
+ man/systemd.net-naming-scheme.xml | 6 ++++++
+ src/udev/udev-builtin-net_id.c    | 2 ++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/man/systemd.net-naming-scheme.xml b/man/systemd.net-naming-scheme.xml
+index a65da5c6c1..fe1aa4b654 100644
+--- a/man/systemd.net-naming-scheme.xml
++++ b/man/systemd.net-naming-scheme.xml
+@@ -307,6 +307,12 @@
+           <para>Same as naming scheme <constant>rhel-8.4</constant>.</para>
+         </varlistentry>
+ 
++        <varlistentry>
++          <term><constant>rhel-8.6</constant></term>
++
++          <para>Same as naming scheme <constant>rhel-8.4</constant>.</para>
++        </varlistentry>
++
+         <para>Note that <constant>latest</constant> may be used to denote the latest scheme known to this
+         particular version of systemd.</para>
+     </variablelist>
+diff --git a/src/udev/udev-builtin-net_id.c b/src/udev/udev-builtin-net_id.c
+index 81139e666b..eafcbb64c5 100644
+--- a/src/udev/udev-builtin-net_id.c
++++ b/src/udev/udev-builtin-net_id.c
+@@ -135,6 +135,7 @@ typedef enum NamingSchemeFlags {
+         NAMING_RHEL_8_3 = NAMING_V239,
+         NAMING_RHEL_8_4 = NAMING_V239|NAMING_BRIDGE_NO_SLOT,
+         NAMING_RHEL_8_5 = NAMING_RHEL_8_4,
++        NAMING_RHEL_8_6 = NAMING_RHEL_8_4,
+ 
+         _NAMING_SCHEME_FLAGS_INVALID = -1,
+ } NamingSchemeFlags;
+@@ -153,6 +154,7 @@ static const NamingScheme naming_schemes[] = {
+         { "rhel-8.3", NAMING_RHEL_8_3 },
+         { "rhel-8.4", NAMING_RHEL_8_4 },
+         { "rhel-8.5", NAMING_RHEL_8_5 },
++        { "rhel-8.6", NAMING_RHEL_8_6 },
+         /* … add more schemes here, as the logic to name devices is updated … */
+ };
+ 

@@ -1,0 +1,37 @@
+From cfa7b3d0a1900b725e5489dfec2c39abb8569c29 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Wed, 28 Nov 2018 14:10:04 +0900
+Subject: [PATCH] hash-funcs: introduce macro to create typesafe hash_ops
+
+(cherry picked from commit d1005d1c0050d3dc3a24c054bac4c4916073cbba)
+
+Resolves: #2037807
+---
+ src/basic/hash-funcs.h | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/src/basic/hash-funcs.h b/src/basic/hash-funcs.h
+index 5e5989f021..2ff687e5f9 100644
+--- a/src/basic/hash-funcs.h
++++ b/src/basic/hash-funcs.h
+@@ -13,6 +13,20 @@ struct hash_ops {
+         compare_func_t compare;
+ };
+ 
++#define _DEFINE_HASH_OPS(uq, name, type, hash_func, compare_func, scope) \
++        _unused_ static void (* UNIQ_T(static_hash_wrapper, uq))(const type *, struct siphash *) = hash_func; \
++        _unused_ static int (* UNIQ_T(static_compare_wrapper, uq))(const type *, const type *) = compare_func; \
++        scope const struct hash_ops name = {                            \
++                .hash = (hash_func_t) hash_func,                        \
++                .compare = (compare_func_t) compare_func,               \
++        }
++
++#define DEFINE_HASH_OPS(name, type, hash_func, compare_func)            \
++        _DEFINE_HASH_OPS(UNIQ, name, type, hash_func, compare_func,)
++
++#define DEFINE_PRIVATE_HASH_OPS(name, type, hash_func, compare_func)    \
++        _DEFINE_HASH_OPS(UNIQ, name, type, hash_func, compare_func, static)
++
+ void string_hash_func(const void *p, struct siphash *state);
+ int string_compare_func(const void *a, const void *b) _pure_;
+ extern const struct hash_ops string_hash_ops;

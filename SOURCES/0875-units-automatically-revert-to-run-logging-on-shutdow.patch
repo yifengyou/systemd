@@ -1,0 +1,26 @@
+From ce6531045b337c3f793d1d74f1e5641e658805bb Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 5 Apr 2019 18:22:31 +0200
+Subject: [PATCH] units: automatically revert to /run logging on shutdown if
+ necessary
+
+Fixes: #867
+(cherry picked from commit 1e187d2dd52cbb4f0bb30e4d96acf7f72a145b91)
+
+Resolves: #1873540
+---
+ units/systemd-journal-flush.service.in | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/units/systemd-journal-flush.service.in b/units/systemd-journal-flush.service.in
+index 439f5f3f76..653dcebe0e 100644
+--- a/units/systemd-journal-flush.service.in
++++ b/units/systemd-journal-flush.service.in
+@@ -19,6 +19,7 @@ RequiresMountsFor=/var/log/journal
+ 
+ [Service]
+ ExecStart=@rootbindir@/journalctl --flush
++ExecStop=@rootbindir@/journalctl --smart-relinquish-var
+ Type=oneshot
+ RemainAfterExit=yes
+ TimeoutSec=90s

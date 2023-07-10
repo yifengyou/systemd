@@ -1,0 +1,53 @@
+From 1f408c8d9739b1038012eeec7bf0f918c8095bc4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Christian=20G=C3=B6ttsche?= <cgzones@googlemail.com>
+Date: Fri, 23 Sep 2022 19:00:22 +0200
+Subject: [PATCH] core: respect SELinuxContext= for socket creation
+
+On socket creation respect the SELinuxContext= setting of the associated
+service, such that the initial created socket has the same label as the
+future process accepting the connection (since w.r.t SELinux sockets
+normally have the same label as the owning process).
+
+Triggered by #24702
+
+(cherry picked from commit 599b384924bbef9f8f7fa5700c6fa35a404d9a98)
+
+Related: #2136738
+---
+ src/core/socket.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/socket.c b/src/core/socket.c
+index 9d47ca2616..d1ca0a07c5 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -1427,6 +1427,7 @@ fail:
+ static int socket_determine_selinux_label(Socket *s, char **ret) {
+         Service *service;
+         ExecCommand *c;
++        const char *exec_context;
+         _cleanup_free_ char *path = NULL;
+         int r;
+ 
+@@ -1448,8 +1449,20 @@ static int socket_determine_selinux_label(Socket *s, char **ret) {
+ 
+                 if (!UNIT_ISSET(s->service))
+                         goto no_label;
+-
+                 service = SERVICE(UNIT_DEREF(s->service));
++
++                exec_context = service->exec_context.selinux_context;
++                if (exec_context) {
++                        char *con;
++
++                        con = strdup(exec_context);
++                        if (!con)
++                                return -ENOMEM;
++
++                        *ret = TAKE_PTR(con);
++                        return 0;
++                }
++
+                 c = service->exec_command[SERVICE_EXEC_START];
+                 if (!c)
+                         goto no_label;

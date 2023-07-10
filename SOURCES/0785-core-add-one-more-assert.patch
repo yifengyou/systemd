@@ -1,0 +1,24 @@
+From 09b6ae4da2d8b60d3619dcd0e6712e1a106efba0 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 11 Sep 2018 13:18:33 +0900
+Subject: [PATCH] core: add one more assert()
+
+(cherry picked from commit 7c1cb6f1989074e144b1625607950fce80c951ec)
+
+Related: #2049788
+---
+ src/core/execute.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/core/execute.c b/src/core/execute.c
+index c842b14ce7..3ff1a51aa1 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -1624,6 +1624,7 @@ static int build_environment(
+ 
+         assert(u);
+         assert(c);
++        assert(p);
+         assert(ret);
+ 
+         our_env = new0(char*, 14);

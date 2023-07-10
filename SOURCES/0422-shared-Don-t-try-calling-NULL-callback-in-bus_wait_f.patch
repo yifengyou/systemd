@@ -1,0 +1,28 @@
+From e607286e070675498fcd5a7ab73bc3da533f9eea Mon Sep 17 00:00:00 2001
+From: Balint Reczey <balint.reczey@canonical.com>
+Date: Wed, 22 Apr 2020 09:51:53 +0200
+Subject: [PATCH] shared: Don't try calling NULL callback in
+ bus_wait_for_units_clear
+
+BugLink: https://bugs.launchpad.net/bugs/1870930
+(cherry picked from commit 9f656373082cb13542b877b4f5cb917ef5ff329c)
+
+Related: #1830861
+---
+ src/shared/bus-wait-for-units.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/shared/bus-wait-for-units.c b/src/shared/bus-wait-for-units.c
+index de15da1620..63ba3fd422 100644
+--- a/src/shared/bus-wait-for-units.c
++++ b/src/shared/bus-wait-for-units.c
+@@ -91,7 +91,8 @@ static void bus_wait_for_units_clear(BusWaitForUnits *d) {
+         while ((item = hashmap_first(d->items))) {
+                 d->current = item;
+ 
+-                item->unit_callback(d, item->bus_path, false, item->userdata);
++                if (item->unit_callback)
++                        item->unit_callback(d, item->bus_path, false, item->userdata);
+                 wait_for_item_free(item);
+         }
+ 

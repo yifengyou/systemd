@@ -1,0 +1,44 @@
+From 004130ae74688eb321aadc05192bab69fe5cbcbf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Fri, 22 Jul 2022 11:45:12 +0200
+Subject: [PATCH] manager: limit access to private dbus socket
+
+For the system manager, /run/systemd/private is publicly accessible, because
+/run/systemd is 0755, and /run/systemd/private is 0777. For the user manager,
+/run/user/<uid> is 0700, and /run/user/<uid>/systemd/private is 0777. This
+does not directly cause any security issue because we check the sender in
+bus_check_peercred (ucred.uid != 0 && ucred.uid != geteuid()).
+
+But it makes sense to limit access to the socket to avoid wasting time in PID1.
+Somebody could send messages there that'd we'd reject anyway. It also makes
+things more explicit.
+
+(cherry picked from commit df1cbd1adf26071aab41d96e054452a3d66103a4)
+
+Resolves: #2119405
+---
+ src/core/dbus.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/dbus.c b/src/core/dbus.c
+index 66d838cdb4..ec6c52cb85 100644
+--- a/src/core/dbus.c
++++ b/src/core/dbus.c
+@@ -42,6 +42,7 @@
+ #include "string-util.h"
+ #include "strv.h"
+ #include "strxcpyx.h"
++#include "umask-util.h"
+ #include "user-util.h"
+ 
+ #define CONNECTIONS_MAX 4096
+@@ -1019,7 +1020,8 @@ int bus_init_private(Manager *m) {
+         if (fd < 0)
+                 return log_error_errno(errno, "Failed to allocate private socket: %m");
+ 
+-        r = bind(fd, &sa.sa, salen);
++        RUN_WITH_UMASK(0077)
++                r = bind(fd, &sa.sa, salen);
+         if (r < 0)
+                 return log_error_errno(errno, "Failed to bind private socket: %m");
+ 

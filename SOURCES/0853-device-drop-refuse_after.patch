@@ -1,0 +1,37 @@
+From bb9d00035c00b8590c389e66b5d94334bbb7379d Mon Sep 17 00:00:00 2001
+From: Franck Bui <fbui@suse.com>
+Date: Mon, 30 Mar 2020 10:49:29 +0200
+Subject: [PATCH] device: drop refuse_after
+
+Scheduling devices after a given unit can be useful to start device *jobs* at a
+specific time in the transaction, see commit 4195077ab4c823c.
+
+This (hidden) change was introduced by commit eef85c4a3f8054d2.
+
+(cherry picked from commit b862c25716520d9381d5a841dba0f0c14e9c970a)
+
+[dtardon: This picks just the minimal relevant change from
+c80a9a33d04fb4381327a69ce929c94a9f1d0e6c and
+b862c25716520d9381d5a841dba0f0c14e9c970a]
+
+Resolves: #2043524
+---
+ src/core/unit.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/unit.c b/src/core/unit.c
+index dfe0c243ef..9be2a0c326 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -2841,8 +2841,9 @@ int unit_add_dependency(
+                 return 0;
+         }
+ 
+-        if ((d == UNIT_BEFORE && other->type == UNIT_DEVICE) ||
+-            (d == UNIT_AFTER && u->type == UNIT_DEVICE)) {
++        /* Note that ordering a device unit after a unit is permitted since it
++         * allows to start its job running timeout at a specific time. */
++        if (d == UNIT_BEFORE && other->type == UNIT_DEVICE) {
+                 log_unit_warning(u, "Dependency Before=%s ignored (.device units cannot be delayed)", other->id);
+                 return 0;
+         }

@@ -1,0 +1,43 @@
+From 5df63c2ddf93bab5e7f13e09dfb1f97a011b3451 Mon Sep 17 00:00:00 2001
+From: Taro Yamada <archer_ame@yahoo.co.jp>
+Date: Sun, 27 Jan 2019 13:50:04 +0900
+Subject: [PATCH] Add a warning about the difference in permissions between
+ existing directories and unit settings.
+
+To follows the intent of 30c81ce, this change does not execute chmod() and just add warnings.
+
+(cherry picked from commit 6cff72eb0a18d8547f005a481cd0622d3bc78483)
+
+Related: #1778384
+---
+ src/core/execute.c | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/src/core/execute.c b/src/core/execute.c
+index 8293c522bc..9ddba00421 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -2099,8 +2099,21 @@ static int setup_exec_directory(
+                         r = mkdir_label(p, context->directories[type].mode);
+                         if (r < 0 && r != -EEXIST)
+                                 goto fail;
+-                        if (r == -EEXIST && !context->dynamic_user)
+-                                continue;
++                        if (r == -EEXIST) {
++                                struct stat st;
++
++                                if (stat(p, &st) < 0) {
++                                        r = -errno;
++                                        goto fail;
++                                }
++                                if (((st.st_mode ^ context->directories[type].mode) & 07777) != 0)
++                                        log_warning("%s \'%s\' already exists but the mode is different. "
++                                                    "(filesystem: %o %sMode: %o)",
++                                                    exec_directory_type_to_string(type), *rt,
++                                                    st.st_mode & 07777, exec_directory_type_to_string(type), context->directories[type].mode & 07777);
++                                if (!context->dynamic_user)
++                                        continue;
++                        }
+                 }
+ 
+                 /* Don't change the owner of the configuration directory, as in the common case it is not written to by

@@ -1,0 +1,71 @@
+From 4c241b812ea79f3faa02c45f95834842c7847b76 Mon Sep 17 00:00:00 2001
+From: Jan Macku <jamacku@redhat.com>
+Date: Wed, 21 Sep 2022 15:14:26 +0200
+Subject: [PATCH] ci(mergify): Update policy - Drop LGTM checks
+
+rhel-only
+
+Related: #2122499
+---
+ .github/workflows/differential-shellcheck.yml |  1 +
+ .mergify.yml                                  | 28 ++++++-------------
+ 2 files changed, 9 insertions(+), 20 deletions(-)
+
+diff --git a/.github/workflows/differential-shellcheck.yml b/.github/workflows/differential-shellcheck.yml
+index fa94679b51..4399f0bc64 100644
+--- a/.github/workflows/differential-shellcheck.yml
++++ b/.github/workflows/differential-shellcheck.yml
+@@ -13,6 +13,7 @@ permissions:
+ 
+ jobs:
+   lint:
++    name: Differential ShellCheck
+     runs-on: ubuntu-latest
+ 
+     permissions:
+diff --git a/.mergify.yml b/.mergify.yml
+index 3afd04f18e..a5eed6a82a 100644
+--- a/.mergify.yml
++++ b/.mergify.yml
+@@ -11,16 +11,10 @@ pull_request_rules:
+         - -check-success=build (stream8, GCC_ASAN)
+         # CentOS Stream CI
+         - -check-success=CentOS CI (CentOS Stream 8)
+-        # LGTM
+-        - and:
+-          - "-check-success=LGTM analysis: JavaScript"
+-          - "-check-neutral=LGTM analysis: JavaScript"
+-        - and:
+-          - "-check-success=LGTM analysis: Python"
+-          - "-check-neutral=LGTM analysis: Python"
+-        - and:    
+-          - "-check-success=LGTM analysis: C/C++"
+-          - "-check-neutral=LGTM analysis: C/C++"
++        # CodeQL
++        - -check-success=CodeQL
++        # Other
++        - -check-success=Differential ShellCheck
+     actions:
+       label:
+         add:
+@@ -36,16 +30,10 @@ pull_request_rules:
+           - check-success=build (stream8, GCC_ASAN)
+           # CentOS Stream CI
+           - check-success=CentOS CI (CentOS Stream 8)
+-          # LGTM
+-          - or:
+-            - "check-success=LGTM analysis: JavaScript"
+-            - "check-neutral=LGTM analysis: JavaScript"
+-          - or:
+-            - "check-success=LGTM analysis: Python"
+-            - "check-neutral=LGTM analysis: Python"
+-          - or:    
+-            - "check-success=LGTM analysis: C/C++"
+-            - "check-neutral=LGTM analysis: C/C++"
++          # CodeQL
++          - check-success=CodeQL
++          # Other
++          - check-success=Differential ShellCheck
+     actions:
+       label:
+         remove:

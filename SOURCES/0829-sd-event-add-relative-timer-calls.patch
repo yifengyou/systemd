@@ -1,0 +1,123 @@
+From 30f5836253f820086caa24fc9283344615b8fc00 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 28 Jul 2020 11:17:00 +0200
+Subject: [PATCH] sd-event: add relative timer calls
+
+We frequently want to set a timer relative to the current time. Let's
+add an explicit API for this. This not only saves us a few lines of code
+everywhere and simplifies things, but also allows us to do correct
+overflow checking.
+
+(cherry picked from commit d6a83dc48ad1981665ff427858ae8e59d4cfd6cb)
+
+Related: #2122288
+---
+ src/libsystemd/libsystemd.sym      |  8 +++++-
+ src/libsystemd/sd-event/sd-event.c | 42 ++++++++++++++++++++++++++++++
+ src/systemd/sd-event.h             |  2 ++
+ 3 files changed, 51 insertions(+), 1 deletion(-)
+
+diff --git a/src/libsystemd/libsystemd.sym b/src/libsystemd/libsystemd.sym
+index 3b55fc6473..449918093c 100644
+--- a/src/libsystemd/libsystemd.sym
++++ b/src/libsystemd/libsystemd.sym
+@@ -578,12 +578,18 @@ LIBSYSTEMD_240 {
+         sd_bus_get_method_call_timeout;
+ } LIBSYSTEMD_239;
+ 
++LIBSYSTEMD_247 {
++global:
++        sd_event_add_time_relative;
++        sd_event_source_set_time_relative;
++} LIBSYSTEMD_240;
++
+ LIBSYSTEMD_248 {
+ global:
+         sd_event_source_set_ratelimit;
+         sd_event_source_get_ratelimit;
+         sd_event_source_is_ratelimited;
+-} LIBSYSTEMD_240;
++} LIBSYSTEMD_247;
+ 
+ LIBSYSTEMD_250 {
+ global:
+diff --git a/src/libsystemd/sd-event/sd-event.c b/src/libsystemd/sd-event/sd-event.c
+index 09d4584bf9..2c9d331bf2 100644
+--- a/src/libsystemd/sd-event/sd-event.c
++++ b/src/libsystemd/sd-event/sd-event.c
+@@ -1415,6 +1415,31 @@ fail:
+         return r;
+ }
+ 
++_public_ int sd_event_add_time_relative(
++                sd_event *e,
++                sd_event_source **ret,
++                clockid_t clock,
++                uint64_t usec,
++                uint64_t accuracy,
++                sd_event_time_handler_t callback,
++                void *userdata) {
++
++        usec_t t;
++        int r;
++
++        /* Same as sd_event_add_time() but operates relative to the event loop's current point in time, and
++         * checks for overflow. */
++
++        r = sd_event_now(e, clock, &t);
++        if (r < 0)
++                return r;
++
++        if (usec >= USEC_INFINITY - t)
++                return -EOVERFLOW;
++
++        return sd_event_add_time(e, ret, clock, t + usec, accuracy, callback, userdata);
++}
++
+ static int signal_exit_callback(sd_event_source *s, const struct signalfd_siginfo *si, void *userdata) {
+         assert(s);
+ 
+@@ -2578,6 +2603,23 @@ _public_ int sd_event_source_set_time(sd_event_source *s, uint64_t usec) {
+         return 0;
+ }
+ 
++_public_ int sd_event_source_set_time_relative(sd_event_source *s, uint64_t usec) {
++        usec_t t;
++        int r;
++
++        assert_return(s, -EINVAL);
++        assert_return(EVENT_SOURCE_IS_TIME(s->type), -EDOM);
++
++        r = sd_event_now(s->event, event_source_type_to_clock(s->type), &t);
++        if (r < 0)
++                return r;
++
++        if (usec >= USEC_INFINITY - t)
++                return -EOVERFLOW;
++
++        return sd_event_source_set_time(s, t + usec);
++}
++
+ _public_ int sd_event_source_get_time_accuracy(sd_event_source *s, uint64_t *usec) {
+         assert_return(s, -EINVAL);
+         assert_return(usec, -EINVAL);
+diff --git a/src/systemd/sd-event.h b/src/systemd/sd-event.h
+index c2e9c9614d..960bea1ac4 100644
+--- a/src/systemd/sd-event.h
++++ b/src/systemd/sd-event.h
+@@ -87,6 +87,7 @@ sd_event* sd_event_unref(sd_event *e);
+ 
+ int sd_event_add_io(sd_event *e, sd_event_source **s, int fd, uint32_t events, sd_event_io_handler_t callback, void *userdata);
+ int sd_event_add_time(sd_event *e, sd_event_source **s, clockid_t clock, uint64_t usec, uint64_t accuracy, sd_event_time_handler_t callback, void *userdata);
++int sd_event_add_time_relative(sd_event *e, sd_event_source **s, clockid_t clock, uint64_t usec, uint64_t accuracy, sd_event_time_handler_t callback, void *userdata);
+ int sd_event_add_signal(sd_event *e, sd_event_source **s, int sig, sd_event_signal_handler_t callback, void *userdata);
+ int sd_event_add_child(sd_event *e, sd_event_source **s, pid_t pid, int options, sd_event_child_handler_t callback, void *userdata);
+ int sd_event_add_inotify(sd_event *e, sd_event_source **s, const char *path, uint32_t mask, sd_event_inotify_handler_t callback, void *userdata);
+@@ -136,6 +137,7 @@ int sd_event_source_set_io_events(sd_event_source *s, uint32_t events);
+ int sd_event_source_get_io_revents(sd_event_source *s, uint32_t* revents);
+ int sd_event_source_get_time(sd_event_source *s, uint64_t *usec);
+ int sd_event_source_set_time(sd_event_source *s, uint64_t usec);
++int sd_event_source_set_time_relative(sd_event_source *s, uint64_t usec);
+ int sd_event_source_get_time_accuracy(sd_event_source *s, uint64_t *usec);
+ int sd_event_source_set_time_accuracy(sd_event_source *s, uint64_t usec);
+ int sd_event_source_get_time_clock(sd_event_source *s, clockid_t *clock);

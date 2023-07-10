@@ -1,0 +1,129 @@
+From e7e70f575840cd021f6429f264911ae0cbff9741 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Thu, 15 Nov 2018 17:52:57 +0100
+Subject: [PATCH] tests: add a fuzzer for dev_kmsg_record
+
+(cherry picked from commit 8857fb9beb9dcb95a6ce1be14dc94c4dc4cd3ea3)
+
+Resolves: #1764560
+---
+ src/fuzz/fuzz-journald-kmsg.c                 | 29 +++++++++++++++++++
+ src/fuzz/meson.build                          |  5 ++++
+ src/journal/journald-kmsg.c                   |  2 +-
+ src/journal/journald-kmsg.h                   |  2 ++
+ test/fuzz/fuzz-journald-kmsg/basic            |  1 +
+ test/fuzz/fuzz-journald-kmsg/dev-null         |  2 ++
+ test/fuzz/fuzz-journald-kmsg/loopback         |  2 ++
+ .../fuzz-journald-kmsg/subsystem-loopback     |  2 ++
+ 8 files changed, 44 insertions(+), 1 deletion(-)
+ create mode 100644 src/fuzz/fuzz-journald-kmsg.c
+ create mode 100644 test/fuzz/fuzz-journald-kmsg/basic
+ create mode 100644 test/fuzz/fuzz-journald-kmsg/dev-null
+ create mode 100644 test/fuzz/fuzz-journald-kmsg/loopback
+ create mode 100644 test/fuzz/fuzz-journald-kmsg/subsystem-loopback
+
+diff --git a/src/fuzz/fuzz-journald-kmsg.c b/src/fuzz/fuzz-journald-kmsg.c
+new file mode 100644
+index 0000000000..5d99d244b5
+--- /dev/null
++++ b/src/fuzz/fuzz-journald-kmsg.c
+@@ -0,0 +1,29 @@
++/* SPDX-License-Identifier: LGPL-2.1+ */
++
++#include "fuzz.h"
++#include "journald-kmsg.h"
++
++int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
++        Server s = {};
++        _cleanup_free_ char *buffer = NULL;
++
++        if (size == 0)
++                return 0;
++
++        s = (Server) {
++                .native_fd = -1,
++                .stdout_fd = -1,
++                .dev_kmsg_fd = -1,
++                .audit_fd = -1,
++                .hostname_fd = -1,
++                .notify_fd = -1,
++                .storage = STORAGE_NONE,
++        };
++        assert_se(sd_event_default(&s.event) >= 0);
++        buffer = memdup(data, size);
++        assert_se(buffer);
++        dev_kmsg_record(&s, buffer, size);
++        server_done(&s);
++
++        return 0;
++}
+diff --git a/src/fuzz/meson.build b/src/fuzz/meson.build
+index 1f8631bcc0..0520e448a9 100644
+--- a/src/fuzz/meson.build
++++ b/src/fuzz/meson.build
+@@ -33,6 +33,11 @@ fuzzers += [
+           libshared],
+          [libmount]],
+ 
++        [['src/fuzz/fuzz-journald-kmsg.c'],
++         [libjournal_core,
++          libshared],
++         [libselinux]],
++
+         [['src/fuzz/fuzz-journald-native.c',
+           'src/fuzz/fuzz-journald.c'],
+          [libjournal_core,
+diff --git a/src/journal/journald-kmsg.c b/src/journal/journald-kmsg.c
+index 7644bebfc8..0cdf1c4794 100644
+--- a/src/journal/journald-kmsg.c
++++ b/src/journal/journald-kmsg.c
+@@ -93,7 +93,7 @@ static bool is_us(const char *identifier, const char *pid) {
+                streq(identifier, program_invocation_short_name);
+ }
+ 
+-static void dev_kmsg_record(Server *s, char *p, size_t l) {
++void dev_kmsg_record(Server *s, char *p, size_t l) {
+ 
+         _cleanup_free_ char *message = NULL, *syslog_priority = NULL, *syslog_pid = NULL, *syslog_facility = NULL, *syslog_identifier = NULL, *source_time = NULL, *identifier = NULL, *pid = NULL;
+         struct iovec iovec[N_IOVEC_META_FIELDS + 7 + N_IOVEC_KERNEL_FIELDS + 2 + N_IOVEC_UDEV_FIELDS];
+diff --git a/src/journal/journald-kmsg.h b/src/journal/journald-kmsg.h
+index bff24ac310..2326bc8c93 100644
+--- a/src/journal/journald-kmsg.h
++++ b/src/journal/journald-kmsg.h
+@@ -9,3 +9,5 @@ int server_flush_dev_kmsg(Server *s);
+ void server_forward_kmsg(Server *s, int priority, const char *identifier, const char *message, const struct ucred *ucred);
+ 
+ int server_open_kernel_seqnum(Server *s);
++
++void dev_kmsg_record(Server *s, char *p, size_t l);
+diff --git a/test/fuzz/fuzz-journald-kmsg/basic b/test/fuzz/fuzz-journald-kmsg/basic
+new file mode 100644
+index 0000000000..1299cd0869
+--- /dev/null
++++ b/test/fuzz/fuzz-journald-kmsg/basic
+@@ -0,0 +1 @@
++29,456,292891883,-;systemd[1]: Reexecuting.
+diff --git a/test/fuzz/fuzz-journald-kmsg/dev-null b/test/fuzz/fuzz-journald-kmsg/dev-null
+new file mode 100644
+index 0000000000..de039588b5
+--- /dev/null
++++ b/test/fuzz/fuzz-journald-kmsg/dev-null
+@@ -0,0 +1,2 @@
++12,460,1322026586,-;hey
++ DEVICE=c1:3
+diff --git a/test/fuzz/fuzz-journald-kmsg/loopback b/test/fuzz/fuzz-journald-kmsg/loopback
+new file mode 100644
+index 0000000000..ca320177b7
+--- /dev/null
++++ b/test/fuzz/fuzz-journald-kmsg/loopback
+@@ -0,0 +1,2 @@
++12,460,1322026586,-;hey
++ DEVICE=n1
+diff --git a/test/fuzz/fuzz-journald-kmsg/subsystem-loopback b/test/fuzz/fuzz-journald-kmsg/subsystem-loopback
+new file mode 100644
+index 0000000000..af9c0d91e5
+--- /dev/null
++++ b/test/fuzz/fuzz-journald-kmsg/subsystem-loopback
+@@ -0,0 +1,2 @@
++12,460,1322026586,-;hey
++ DEVICE=+net:lo

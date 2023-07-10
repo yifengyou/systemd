@@ -1,0 +1,137 @@
+From e393372ad5ba67acb9b397f044efdb1c9a100644 Mon Sep 17 00:00:00 2001
+From: Daan De Meyer <daan.j.demeyer@gmail.com>
+Date: Tue, 24 Aug 2021 16:46:47 +0100
+Subject: [PATCH] core: Check unit start rate limiting earlier
+
+[dtardon: This adds the test that's been left out by commit
+471eda89a25a3ceac91a2d05e39a54aae78038ed]
+
+(cherry picked from commit 9727f2427ff6b2e1f4ab927cc57ad8e888f04e95)
+
+Related: #2114005
+---
+ test/TEST-10-ISSUE-2467/test.sh            |  3 ++
+ test/TEST-63-ISSUE-17433/Makefile          |  1 +
+ test/TEST-63-ISSUE-17433/test.sh           | 42 ++++++++++++++++++++++
+ test/TEST-63-ISSUE-17433/test63.path       |  2 ++
+ test/TEST-63-ISSUE-17433/test63.service    |  5 +++
+ test/TEST-63-ISSUE-17433/testsuite.service | 17 +++++++++
+ 6 files changed, 70 insertions(+)
+ create mode 120000 test/TEST-63-ISSUE-17433/Makefile
+ create mode 100755 test/TEST-63-ISSUE-17433/test.sh
+ create mode 100644 test/TEST-63-ISSUE-17433/test63.path
+ create mode 100644 test/TEST-63-ISSUE-17433/test63.service
+ create mode 100644 test/TEST-63-ISSUE-17433/testsuite.service
+
+diff --git a/test/TEST-10-ISSUE-2467/test.sh b/test/TEST-10-ISSUE-2467/test.sh
+index 0e61236686..a839ef79de 100755
+--- a/test/TEST-10-ISSUE-2467/test.sh
++++ b/test/TEST-10-ISSUE-2467/test.sh
+@@ -42,6 +42,9 @@ EOF
+ [Unit]
+ Requires=test.socket
+ ConditionPathExistsGlob=/tmp/nonexistent
++# Make sure we hit the socket trigger limit in the test and not the service start limit.
++StartLimitInterval=1000
++StartLimitBurst=1000
+ 
+ [Service]
+ ExecStart=/bin/true
+diff --git a/test/TEST-63-ISSUE-17433/Makefile b/test/TEST-63-ISSUE-17433/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-63-ISSUE-17433/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-63-ISSUE-17433/test.sh b/test/TEST-63-ISSUE-17433/test.sh
+new file mode 100755
+index 0000000000..406a1e214c
+--- /dev/null
++++ b/test/TEST-63-ISSUE-17433/test.sh
+@@ -0,0 +1,42 @@
++#!/usr/bin/env bash
++set -e
++
++TEST_DESCRIPTION="https://github.com/systemd/systemd/issues/17433"
++
++# shellcheck source=test/test-functions
++. "${TEST_BASE_DIR:?}/test-functions"
++
++test_setup() {
++    create_empty_image
++    mkdir -p $TESTDIR/root
++    mount ${LOOPDEV}p1 $TESTDIR/root
++
++    # Create what will eventually be our root filesystem onto an overlay
++    (
++        LOG_LEVEL=5
++        eval $(udevadm info --export --query=env --name=${LOOPDEV}p2)
++
++        setup_basic_environment
++
++        # setup the testsuite service
++        cp testsuite.service $initdir/etc/systemd/system/testsuite.service
++
++        cp test63.path $initdir/etc/systemd/system/test63.path
++        cp test63.service $initdir/etc/systemd/system/test63.service
++
++        setup_testsuite
++    ) || return 1
++    setup_nspawn_root
++
++    # mask some services that we do not want to run in these tests
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++    ln -s /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++
++    ddebug "umount $TESTDIR/root"
++    umount $TESTDIR/root
++}
++
++do_test "$@"
+diff --git a/test/TEST-63-ISSUE-17433/test63.path b/test/TEST-63-ISSUE-17433/test63.path
+new file mode 100644
+index 0000000000..a6573bda0a
+--- /dev/null
++++ b/test/TEST-63-ISSUE-17433/test63.path
+@@ -0,0 +1,2 @@
++[Path]
++PathExists=/tmp/test63
+diff --git a/test/TEST-63-ISSUE-17433/test63.service b/test/TEST-63-ISSUE-17433/test63.service
+new file mode 100644
+index 0000000000..c83801874d
+--- /dev/null
++++ b/test/TEST-63-ISSUE-17433/test63.service
+@@ -0,0 +1,5 @@
++[Unit]
++ConditionPathExists=!/tmp/nonexistent
++
++[Service]
++ExecStart=true
+diff --git a/test/TEST-63-ISSUE-17433/testsuite.service b/test/TEST-63-ISSUE-17433/testsuite.service
+new file mode 100644
+index 0000000000..d3ca5b002b
+--- /dev/null
++++ b/test/TEST-63-ISSUE-17433/testsuite.service
+@@ -0,0 +1,17 @@
++[Unit]
++Description=TEST-63-ISSUE-17433
++
++[Service]
++ExecStartPre=rm -f /failed /testok
++Type=oneshot
++ExecStart=rm -f /tmp/nonexistent
++ExecStart=systemctl start test63.path
++ExecStart=touch /tmp/test63
++# Make sure systemd has sufficient time to hit the start limit for test63.service.
++ExecStart=sleep 2
++ExecStart=sh -x -c 'test "$(systemctl show test63.service --value -p ActiveState)" = failed'
++ExecStart=sh -x -c 'test "$(systemctl show test63.service --value -p Result)" = start-limit-hit'
++# FIXME: The path remains active, which it should not
++# ExecStart=sh -x -c 'test "$(systemctl show test63.path --value -p ActiveState)" = failed'
++# ExecStart=sh -x -c 'test "$(systemctl show test63.path --value -p Result)" = unit-start-limit-hit'
++ExecStart=sh -x -c 'echo OK >/testok'

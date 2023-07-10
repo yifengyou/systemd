@@ -1,0 +1,43 @@
+From f0b11f5042489c85d5016eceff06647bb49d486a Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 17 Dec 2019 15:32:22 +0900
+Subject: [PATCH] udev: do not fail if kernel does not support alternative
+ names
+
+(cherry picked from commit bb181dd4a664ca8e82a8f7194261fd6531e861d8)
+
+Related: #2005008
+---
+ man/systemd.link.xml       | 3 ++-
+ src/udev/net/link-config.c | 4 +++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/man/systemd.link.xml b/man/systemd.link.xml
+index 0b0d83349d..c8ebb751ee 100644
+--- a/man/systemd.link.xml
++++ b/man/systemd.link.xml
+@@ -348,7 +348,8 @@
+         <listitem>
+           <para>The alternative interface name to use. This option can be specified multiple times.
+           If the empty string is assigned to this option, the list is reset, and all prior assignments
+-          have no effect.</para>
++          have no effect. If the kernel does not support the alternative names, then this setting will
++          be ignored.</para>
+         </listitem>
+       </varlistentry>
+       <varlistentry>
+diff --git a/src/udev/net/link-config.c b/src/udev/net/link-config.c
+index 4de8ee7d7e..8e88c8e5c4 100644
+--- a/src/udev/net/link-config.c
++++ b/src/udev/net/link-config.c
+@@ -474,7 +474,9 @@ int link_config_apply(link_config_ctx *ctx, link_config *config,
+                 return log_warning_errno(r, "Could not set Alias=, MACAddress= or MTU= on %s: %m", old_name);
+ 
+         r = rtnl_set_link_alternative_names(&ctx->rtnl, ifindex, config->alternative_names);
+-        if (r < 0)
++        if (r == -EOPNOTSUPP)
++                log_debug_errno(r, "Could not set AlternativeName= on %s, ignoring: %m", old_name);
++        else if (r < 0)
+                 return log_warning_errno(r, "Could not set AlternativeName= on %s: %m", old_name);
+ 
+         *name = new_name;

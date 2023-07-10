@@ -1,0 +1,260 @@
+From aa93c2acd6c9ed4eb0152be9002f59ecd9cc277e Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Fri, 24 Jun 2022 09:13:42 +0200
+Subject: [PATCH] =?UTF-8?q?tree-wide:=20allow=20ASCII=20fallback=20for=20?=
+ =?UTF-8?q?=E2=86=92=20in=20logs?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+(cherry picked from commit e2341b6bc325932b3f9f10874956952cbdbd6361)
+
+Resolves: #2093479
+---
+ src/basic/mount-util.c           |  5 +++--
+ src/core/dbus.c                  |  4 +++-
+ src/core/namespace.c             |  7 +++++--
+ src/core/socket.c                |  4 +++-
+ src/libsystemd/sd-bus/sd-bus.c   |  4 +++-
+ src/login/logind-acl.c           |  5 +++--
+ src/resolve/resolved-dns-query.c | 11 +++++++++--
+ src/shared/dns-domain.c          |  9 ++++++---
+ src/tmpfiles/tmpfiles.c          |  4 +++-
+ 9 files changed, 38 insertions(+), 15 deletions(-)
+
+diff --git a/src/basic/mount-util.c b/src/basic/mount-util.c
+index 0c709001be..e7f9e514c2 100644
+--- a/src/basic/mount-util.c
++++ b/src/basic/mount-util.c
+@@ -18,6 +18,7 @@
+ #include "fileio.h"
+ #include "fs-util.h"
+ #include "hashmap.h"
++#include "locale-util.h"
+ #include "mount-util.h"
+ #include "parse-util.h"
+ #include "path-util.h"
+@@ -844,8 +845,8 @@ int mount_verbose(
+                 log_debug("Bind-mounting %s on %s (%s \"%s\")...",
+                           what, where, strnull(fl), strempty(o));
+         else if (f & MS_MOVE)
+-                log_debug("Moving mount %s → %s (%s \"%s\")...",
+-                          what, where, strnull(fl), strempty(o));
++                log_debug("Moving mount %s %s %s (%s \"%s\")...",
++                          what, special_glyph(ARROW), where, strnull(fl), strempty(o));
+         else
+                 log_debug("Mounting %s on %s (%s \"%s\")...",
+                           strna(type), where, strnull(fl), strempty(o));
+diff --git a/src/core/dbus.c b/src/core/dbus.c
+index 584a8a1b01..66d838cdb4 100644
+--- a/src/core/dbus.c
++++ b/src/core/dbus.c
+@@ -31,6 +31,7 @@
+ #include "dbus.h"
+ #include "fd-util.h"
+ #include "fs-util.h"
++#include "locale-util.h"
+ #include "log.h"
+ #include "missing.h"
+ #include "mkdir.h"
+@@ -751,7 +752,8 @@ static int manager_dispatch_sync_bus_names(sd_event_source *es, void *userdata)
+                 assert(s);
+ 
+                 if (!streq_ptr(s->bus_name, name)) {
+-                        log_unit_warning(u, "Bus name has changed from %s → %s, ignoring.", s->bus_name, name);
++                        log_unit_warning(u, "Bus name has changed from %s %s %s, ignoring.",
++                                         s->bus_name, special_glyph(ARROW), name);
+                         continue;
+                 }
+ 
+diff --git a/src/core/namespace.c b/src/core/namespace.c
+index e4930db15c..3566795d46 100644
+--- a/src/core/namespace.c
++++ b/src/core/namespace.c
+@@ -15,6 +15,7 @@
+ #include "fd-util.h"
+ #include "fs-util.h"
+ #include "label.h"
++#include "locale-util.h"
+ #include "loop-util.h"
+ #include "loopback-setup.h"
+ #include "missing.h"
+@@ -841,7 +842,8 @@ static int follow_symlink(
+                 return -ELOOP;
+         }
+ 
+-        log_debug("Followed mount entry path symlink %s → %s.", mount_entry_path(m), target);
++        log_debug("Followed mount entry path symlink %s %s %s.",
++                  mount_entry_path(m), special_glyph(ARROW), target);
+ 
+         free_and_replace(m->path_malloc, target);
+         m->has_prefix = true;
+@@ -920,7 +922,8 @@ static int apply_mount(
+                 if (r < 0)
+                         return log_debug_errno(r, "Failed to follow symlinks on %s: %m", mount_entry_source(m));
+ 
+-                log_debug("Followed source symlinks %s → %s.", mount_entry_source(m), chased);
++                log_debug("Followed source symlinks %s %s %s.",
++                          mount_entry_source(m), special_glyph(ARROW), chased);
+ 
+                 free_and_replace(m->source_malloc, chased);
+ 
+diff --git a/src/core/socket.c b/src/core/socket.c
+index 6f9a0f7575..bdfeb43a70 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -25,6 +25,7 @@
+ #include "in-addr-util.h"
+ #include "io-util.h"
+ #include "label.h"
++#include "locale-util.h"
+ #include "log.h"
+ #include "missing.h"
+ #include "mkdir.h"
+@@ -1355,7 +1356,8 @@ static int socket_symlink(Socket *s) {
+                 }
+ 
+                 if (r < 0)
+-                        log_unit_warning_errno(UNIT(s), r, "Failed to create symlink %s → %s, ignoring: %m", p, *i);
++                        log_unit_warning_errno(UNIT(s), r, "Failed to create symlink %s %s %s, ignoring: %m",
++                                               p, special_glyph(ARROW), *i);
+         }
+ 
+         return 0;
+diff --git a/src/libsystemd/sd-bus/sd-bus.c b/src/libsystemd/sd-bus/sd-bus.c
+index 803f3f50d6..21e54591f7 100644
+--- a/src/libsystemd/sd-bus/sd-bus.c
++++ b/src/libsystemd/sd-bus/sd-bus.c
+@@ -31,6 +31,7 @@
+ #include "cgroup-util.h"
+ #include "def.h"
+ #include "fd-util.h"
++#include "locale-util.h"
+ #include "hexdecoct.h"
+ #include "hostname-util.h"
+ #include "macro.h"
+@@ -518,7 +519,8 @@ void bus_set_state(sd_bus *bus, enum bus_state state) {
+         if (state == bus->state)
+                 return;
+ 
+-        log_debug("Bus %s: changing state %s → %s", strna(bus->description), table[bus->state], table[state]);
++        log_debug("Bus %s: changing state %s %s %s", strna(bus->description),
++                  table[bus->state], special_glyph(ARROW), table[state]);
+         bus->state = state;
+ }
+ 
+diff --git a/src/login/logind-acl.c b/src/login/logind-acl.c
+index cafeb8822f..fe17eac0e6 100644
+--- a/src/login/logind-acl.c
++++ b/src/login/logind-acl.c
+@@ -9,6 +9,7 @@
+ #include "escape.h"
+ #include "fd-util.h"
+ #include "format-util.h"
++#include "locale-util.h"
+ #include "logind-acl.h"
+ #include "set.h"
+ #include "string-util.h"
+@@ -260,8 +261,8 @@ int devnode_acl_all(struct udev *udev,
+         SET_FOREACH(n, nodes, i) {
+                 int k;
+ 
+-                log_debug("Changing ACLs at %s for seat %s (uid "UID_FMT"→"UID_FMT"%s%s)",
+-                          n, seat, old_uid, new_uid,
++                log_debug("Changing ACLs at %s for seat %s (uid "UID_FMT"%s"UID_FMT"%s%s)",
++                          n, seat, old_uid, special_glyph(ARROW), new_uid,
+                           del ? " del" : "", add ? " add" : "");
+ 
+                 k = devnode_acl(n, flush, del, old_uid, add, new_uid);
+diff --git a/src/resolve/resolved-dns-query.c b/src/resolve/resolved-dns-query.c
+index c921fe841f..573e27d662 100644
+--- a/src/resolve/resolved-dns-query.c
++++ b/src/resolve/resolved-dns-query.c
+@@ -3,6 +3,7 @@
+ #include "alloc-util.h"
+ #include "dns-domain.h"
+ #include "dns-type.h"
++#include "locale-util.h"
+ #include "hostname-util.h"
+ #include "local-addresses.h"
+ #include "resolved-dns-query.h"
+@@ -942,7 +943,10 @@ static int dns_query_cname_redirect(DnsQuery *q, const DnsResourceRecord *cname)
+         if (r < 0)
+                 return r;
+         else if (r > 0)
+-                log_debug("Following CNAME/DNAME %s → %s.", dns_question_first_name(q->question_idna), dns_question_first_name(nq_idna));
++                log_debug("Following CNAME/DNAME %s %s %s.",
++                          dns_question_first_name(q->question_idna),
++                          special_glyph(ARROW),
++                          dns_question_first_name(nq_idna));
+ 
+         k = dns_question_is_equal(q->question_idna, q->question_utf8);
+         if (k < 0)
+@@ -956,7 +960,10 @@ static int dns_query_cname_redirect(DnsQuery *q, const DnsResourceRecord *cname)
+                 if (k < 0)
+                         return k;
+                 else if (k > 0)
+-                        log_debug("Following UTF8 CNAME/DNAME %s → %s.", dns_question_first_name(q->question_utf8), dns_question_first_name(nq_utf8));
++                        log_debug("Following UTF8 CNAME/DNAME %s %s %s.",
++                                  dns_question_first_name(q->question_utf8),
++                                  special_glyph(ARROW),
++                                  dns_question_first_name(nq_utf8));
+         }
+ 
+         if (r == 0 && k == 0) /* No actual cname happened? */
+diff --git a/src/shared/dns-domain.c b/src/shared/dns-domain.c
+index de2fcca8b2..59799dec56 100644
+--- a/src/shared/dns-domain.c
++++ b/src/shared/dns-domain.c
+@@ -17,6 +17,7 @@
+ 
+ #include "alloc-util.h"
+ #include "dns-domain.h"
++#include "locale-util.h"
+ #include "hashmap.h"
+ #include "hexdecoct.h"
+ #include "in-addr-util.h"
+@@ -1260,7 +1261,7 @@ int dns_name_apply_idna(const char *name, char **ret) {
+ 
+         r = idn2_lookup_u8((uint8_t*) name, (uint8_t**) &t,
+                            IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
+-        log_debug("idn2_lookup_u8: %s → %s", name, t);
++        log_debug("idn2_lookup_u8: %s %s %s", name, special_glyph(ARROW), t);
+         if (r == IDN2_OK) {
+                 if (!startswith(name, "xn--")) {
+                         _cleanup_free_ char *s = NULL;
+@@ -1273,8 +1274,10 @@ int dns_name_apply_idna(const char *name, char **ret) {
+                         }
+ 
+                         if (!streq_ptr(name, s)) {
+-                                log_debug("idn2 roundtrip failed: \"%s\" → \"%s\" → \"%s\", ignoring.",
+-                                          name, t, s);
++                                log_debug("idn2 roundtrip failed: \"%s\" %s \"%s\" %s \"%s\", ignoring.",
++                                          name, special_glyph(ARROW), t,
++                                          special_glyph(ARROW), s);
++                                *ret = NULL;
+                                 return 0;
+                         }
+                 }
+diff --git a/src/tmpfiles/tmpfiles.c b/src/tmpfiles/tmpfiles.c
+index 50fada99dd..b3c2aac746 100644
+--- a/src/tmpfiles/tmpfiles.c
++++ b/src/tmpfiles/tmpfiles.c
+@@ -36,6 +36,7 @@
+ #include "fs-util.h"
+ #include "glob-util.h"
+ #include "io-util.h"
++#include "locale-util.h"
+ #include "label.h"
+ #include "log.h"
+ #include "macro.h"
+@@ -2143,7 +2144,8 @@ static int patch_var_run(const char *fname, unsigned line, char **path) {
+          * there's no immediate need for action by the user. However, in the interest of making things less confusing
+          * to the user, let's still inform the user that these snippets should really be updated. */
+ 
+-        log_notice("[%s:%u] Line references path below legacy directory /var/run/, updating %s → %s; please update the tmpfiles.d/ drop-in file accordingly.", fname, line, *path, n);
++        log_notice("[%s:%u] Line references path below legacy directory /var/run/, updating %s %s %s; please update the tmpfiles.d/ drop-in file accordingly.",
++                   fname, line, *path, special_glyph(ARROW), n);
+ 
+         free(*path);
+         *path = n;

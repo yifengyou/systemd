@@ -1,0 +1,48 @@
+From 6a6f108b59e47581d93cbc6bdc604ee84f1bb791 Mon Sep 17 00:00:00 2001
+From: Nick Rosbrook <nick.rosbrook@canonical.com>
+Date: Wed, 7 Sep 2022 13:25:13 -0400
+Subject: [PATCH] pstore: do not try to load all known pstore modules
+
+Commit 70e74a5997 ("pstore: Run after modules are loaded") added After=
+and Wants= entries for all known kernel modules providing a pstore.
+
+While adding these dependencies on systems where one of the modules is
+not present, or not configured, should not have a real affect on the
+system, it can produce annoying error messages in the kernel log. E.g.
+"mtd device must be supplied (device name is empty)" when the mtdpstore
+module is not configured correctly.
+
+Since dependencies cannot be removed with drop-ins, if a distro wants to
+remove some of these modules from systemd-pstore.service, they need to
+patch units/systemd-pstore.service.in. On the other hand, if they want
+to append to the dependencies this can be done by shipping a drop-in.
+
+Since the original intent of the previous commit was to fix [1], which
+only requires the efi_pstore module, remove all other kernel module
+dependencies from systemd-pstore.service, and let distros ship drop-ins
+to add dependencies if needed.
+
+[1] https://github.com/systemd/systemd/issues/18540
+
+(cherry picked from commit 8b8bd621e1d16808678fc3afed257df1fa03a281)
+
+Related: #2158832
+---
+ units/systemd-pstore.service.in | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/units/systemd-pstore.service.in b/units/systemd-pstore.service.in
+index 1983a9738f..19ffa8d4e8 100644
+--- a/units/systemd-pstore.service.in
++++ b/units/systemd-pstore.service.in
+@@ -16,8 +16,8 @@ DefaultDependencies=no
+ After=systemd-remount-fs.service
+ Conflicts=shutdown.target
+ Before=sysinit.target shutdown.target
+-After=modprobe@efi_pstore.service modprobe@mtdpstore.service modprobe@chromeos_pstore.service modprobe@ramoops.service modprobe@pstore_zone.service modprobe@pstore_blk.service
+-Wants=modprobe@efi_pstore.service modprobe@mtdpstore.service modprobe@chromeos_pstore.service modprobe@ramoops.service modprobe@pstore_zone.service modprobe@pstore_blk.service
++After=modprobe@efi_pstore.service
++Wants=modprobe@efi_pstore.service
+ 
+ [Service]
+ Type=oneshot

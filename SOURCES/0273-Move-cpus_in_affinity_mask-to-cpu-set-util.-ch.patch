@@ -1,0 +1,125 @@
+From 42032749e61076b3d9e5004432073c2a5ea737ce Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 28 May 2019 21:28:31 +0200
+Subject: [PATCH] Move cpus_in_affinity_mask() to cpu-set-util.[ch]
+
+It just seems to fit better there and it's always better to have things
+in shared/ rather than basic/.
+
+(cherry picked from commit f44b3035d4a698aa0ce08a552199b54d43de3d85)
+
+Related: #1734787
+---
+ src/basic/cpu-set-util.c  | 34 ++++++++++++++++++++++++++++++++++
+ src/basic/cpu-set-util.h  |  2 ++
+ src/basic/process-util.c  |  5 ++---
+ src/shared/condition.c    |  1 +
+ src/test/test-condition.c |  1 +
+ 5 files changed, 40 insertions(+), 3 deletions(-)
+
+diff --git a/src/basic/cpu-set-util.c b/src/basic/cpu-set-util.c
+index fe440f6381..1803539ac6 100644
+--- a/src/basic/cpu-set-util.c
++++ b/src/basic/cpu-set-util.c
+@@ -204,3 +204,37 @@ int parse_cpu_set_extend(
+ 
+         return cpu_set_add_all(old, &cpuset);
+ }
++
++int cpus_in_affinity_mask(void) {
++        size_t n = 16;
++        int r;
++
++        for (;;) {
++                cpu_set_t *c;
++
++                c = CPU_ALLOC(n);
++                if (!c)
++                        return -ENOMEM;
++
++                if (sched_getaffinity(0, CPU_ALLOC_SIZE(n), c) >= 0) {
++                        int k;
++
++                        k = CPU_COUNT_S(CPU_ALLOC_SIZE(n), c);
++                        CPU_FREE(c);
++
++                        if (k <= 0)
++                                return -EINVAL;
++
++                        return k;
++                }
++
++                r = -errno;
++                CPU_FREE(c);
++
++                if (r != -EINVAL)
++                        return r;
++                if (n > SIZE_MAX/2)
++                        return -ENOMEM;
++                n *= 2;
++        }
++}
+diff --git a/src/basic/cpu-set-util.h b/src/basic/cpu-set-util.h
+index eb31b362fe..9b026aca09 100644
+--- a/src/basic/cpu-set-util.h
++++ b/src/basic/cpu-set-util.h
+@@ -49,3 +49,5 @@ int parse_cpu_set_extend(
+ static inline int parse_cpu_set(const char *rvalue, CPUSet *cpu_set){
+         return parse_cpu_set_full(rvalue, cpu_set, false, NULL, NULL, 0, NULL);
+ }
++
++int cpus_in_affinity_mask(void);
+diff --git a/src/basic/process-util.c b/src/basic/process-util.c
+index 6dbeee9dda..0a4a747ba4 100644
+--- a/src/basic/process-util.c
++++ b/src/basic/process-util.c
+@@ -4,7 +4,6 @@
+ #include <errno.h>
+ #include <limits.h>
+ #include <linux/oom.h>
+-#include <sched.h>
+ #include <signal.h>
+ #include <stdbool.h>
+ #include <stdio.h>
+@@ -1474,7 +1473,7 @@ static const char *const ioprio_class_table[] = {
+         [IOPRIO_CLASS_NONE] = "none",
+         [IOPRIO_CLASS_RT] = "realtime",
+         [IOPRIO_CLASS_BE] = "best-effort",
+-        [IOPRIO_CLASS_IDLE] = "idle"
++        [IOPRIO_CLASS_IDLE] = "idle",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP_WITH_FALLBACK(ioprio_class, int, IOPRIO_N_CLASSES);
+@@ -1495,7 +1494,7 @@ static const char* const sched_policy_table[] = {
+         [SCHED_BATCH] = "batch",
+         [SCHED_IDLE] = "idle",
+         [SCHED_FIFO] = "fifo",
+-        [SCHED_RR] = "rr"
++        [SCHED_RR] = "rr",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP_WITH_FALLBACK(sched_policy, int, INT_MAX);
+diff --git a/src/shared/condition.c b/src/shared/condition.c
+index 2969a89b4e..b829f0528c 100644
+--- a/src/shared/condition.c
++++ b/src/shared/condition.c
+@@ -21,6 +21,7 @@
+ #include "cap-list.h"
+ #include "cgroup-util.h"
+ #include "condition.h"
++#include "cpu-set-util.h"
+ #include "efivars.h"
+ #include "extract-word.h"
+ #include "fd-util.h"
+diff --git a/src/test/test-condition.c b/src/test/test-condition.c
+index 7ce6ee80ea..24395dafc6 100644
+--- a/src/test/test-condition.c
++++ b/src/test/test-condition.c
+@@ -13,6 +13,7 @@
+ #include "audit-util.h"
+ #include "cgroup-util.h"
+ #include "condition.h"
++#include "cpu-set-util.h"
+ #include "efivars.h"
+ #include "hostname-util.h"
+ #include "id128-util.h"

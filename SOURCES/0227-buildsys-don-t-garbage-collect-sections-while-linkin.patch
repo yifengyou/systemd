@@ -1,0 +1,29 @@
+From 9f259b46b760b2aa08ac1fe76fe61df514e2768f Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Tue, 3 Sep 2019 10:05:42 +0200
+Subject: [PATCH] buildsys: don't garbage collect sections while linking
+
+gc-sections is actually very aggressive and garbage collects ELF
+sections used by annobin gcc plugin and annocheck then reports gaps in
+coverage. Let's drop that linker flag.
+
+RHEL-only
+
+Resolves: #1748258
+---
+ meson.build | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 04b461dcd4..613a5133b6 100644
+--- a/meson.build
++++ b/meson.build
+@@ -357,8 +357,6 @@ if get_option('buildtype') != 'debug'
+                 '-ffunction-sections',
+                 '-fdata-sections',
+         ]
+-
+-        possible_link_flags += '-Wl,--gc-sections'
+ endif
+ 
+ add_project_arguments(cc.get_supported_arguments(possible_cc_flags), language : 'c')

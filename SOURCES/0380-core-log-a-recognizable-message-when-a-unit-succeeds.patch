@@ -1,0 +1,210 @@
+From 40c2b0a20ff133f2050642dc7230424ddcb2987b Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 13 Nov 2018 23:28:09 +0100
+Subject: [PATCH] core: log a recognizable message when a unit succeeds, too
+
+We already are doing it on failure, let's do it on success, too.
+
+Fixes: #10265
+(cherry picked from commit 523ee2d41471bfb738f52d59de9b469301842644)
+
+Related: #1737283
+---
+ catalog/systemd.catalog.in |  7 +++++++
+ src/core/automount.c       |  4 +++-
+ src/core/mount.c           |  4 +++-
+ src/core/path.c            |  4 +++-
+ src/core/scope.c           |  4 +++-
+ src/core/service.c         |  4 +++-
+ src/core/socket.c          |  4 +++-
+ src/core/swap.c            |  4 +++-
+ src/core/timer.c           |  4 +++-
+ src/core/unit.c            | 10 ++++++++++
+ src/core/unit.h            |  1 +
+ src/systemd/sd-messages.h  |  2 ++
+ 12 files changed, 44 insertions(+), 8 deletions(-)
+
+diff --git a/catalog/systemd.catalog.in b/catalog/systemd.catalog.in
+index 54a0f46921..2492ad2028 100644
+--- a/catalog/systemd.catalog.in
++++ b/catalog/systemd.catalog.in
+@@ -344,6 +344,13 @@ Support: %SUPPORT_URL%
+ 
+ The unit @UNIT@ completed and consumed the indicated resources.
+ 
++-- 7ad2d189f7e94e70a38c781354912448
++Subject: Unit succeeded
++Defined-By: systemd
++Support: %SUPPORT_URL%
++
++The unit @UNIT@ has successfully entered the 'dead' state.
++
+ -- d9b373ed55a64feb8242e02dbe79a49c
+ Subject: Unit failed
+ Defined-By: systemd
+diff --git a/src/core/automount.c b/src/core/automount.c
+index c78562c549..b1a155d8d4 100644
+--- a/src/core/automount.c
++++ b/src/core/automount.c
+@@ -314,7 +314,9 @@ static void automount_enter_dead(Automount *a, AutomountResult f) {
+         if (a->result == AUTOMOUNT_SUCCESS)
+                 a->result = f;
+ 
+-        if (a->result != AUTOMOUNT_SUCCESS)
++        if (a->result == AUTOMOUNT_SUCCESS)
++                unit_log_success(UNIT(a));
++        else
+                 unit_log_failure(UNIT(a), automount_result_to_string(a->result));
+ 
+         automount_set_state(a, a->result != AUTOMOUNT_SUCCESS ? AUTOMOUNT_FAILED : AUTOMOUNT_DEAD);
+diff --git a/src/core/mount.c b/src/core/mount.c
+index 3cd0e479e9..30aaf5ae55 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -796,7 +796,9 @@ static void mount_enter_dead(Mount *m, MountResult f) {
+         if (m->result == MOUNT_SUCCESS)
+                 m->result = f;
+ 
+-        if (m->result != MOUNT_SUCCESS)
++        if (m->result == MOUNT_SUCCESS)
++                unit_log_success(UNIT(m));
++        else
+                 unit_log_failure(UNIT(m), mount_result_to_string(m->result));
+ 
+         mount_set_state(m, m->result != MOUNT_SUCCESS ? MOUNT_FAILED : MOUNT_DEAD);
+diff --git a/src/core/path.c b/src/core/path.c
+index f8b69e7804..dda4a3036b 100644
+--- a/src/core/path.c
++++ b/src/core/path.c
+@@ -448,7 +448,9 @@ static void path_enter_dead(Path *p, PathResult f) {
+         if (p->result == PATH_SUCCESS)
+                 p->result = f;
+ 
+-        if (p->result != PATH_SUCCESS)
++        if (p->result == PATH_SUCCESS)
++                unit_log_success(UNIT(p));
++        else
+                 unit_log_failure(UNIT(p), path_result_to_string(p->result));
+ 
+         path_set_state(p, p->result != PATH_SUCCESS ? PATH_FAILED : PATH_DEAD);
+diff --git a/src/core/scope.c b/src/core/scope.c
+index 79ecfd992f..a1a5363244 100644
+--- a/src/core/scope.c
++++ b/src/core/scope.c
+@@ -239,7 +239,9 @@ static void scope_enter_dead(Scope *s, ScopeResult f) {
+         if (s->result == SCOPE_SUCCESS)
+                 s->result = f;
+ 
+-        if (s->result != SCOPE_SUCCESS)
++        if (s->result == SCOPE_SUCCESS)
++                unit_log_success(UNIT(s));
++        else
+                 unit_log_failure(UNIT(s), scope_result_to_string(s->result));
+ 
+         scope_set_state(s, s->result != SCOPE_SUCCESS ? SCOPE_FAILED : SCOPE_DEAD);
+diff --git a/src/core/service.c b/src/core/service.c
+index efceb0614c..2c31e70ef6 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -1679,7 +1679,9 @@ static void service_enter_dead(Service *s, ServiceResult f, bool allow_restart)
+         if (s->result == SERVICE_SUCCESS)
+                 s->result = f;
+ 
+-        if (s->result != SERVICE_SUCCESS)
++        if (s->result == SERVICE_SUCCESS)
++                unit_log_success(UNIT(s));
++        else
+                 unit_log_failure(UNIT(s), service_result_to_string(s->result));
+ 
+         if (allow_restart && service_shall_restart(s))
+diff --git a/src/core/socket.c b/src/core/socket.c
+index 160f11765c..7c6d3dfad1 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -1990,7 +1990,9 @@ static void socket_enter_dead(Socket *s, SocketResult f) {
+         if (s->result == SOCKET_SUCCESS)
+                 s->result = f;
+ 
+-        if (s->result != SOCKET_SUCCESS)
++        if (s->result == SOCKET_SUCCESS)
++                unit_log_success(UNIT(s));
++        else
+                 unit_log_failure(UNIT(s), socket_result_to_string(s->result));
+ 
+         socket_set_state(s, s->result != SOCKET_SUCCESS ? SOCKET_FAILED : SOCKET_DEAD);
+diff --git a/src/core/swap.c b/src/core/swap.c
+index b5926d8644..a8f127f660 100644
+--- a/src/core/swap.c
++++ b/src/core/swap.c
+@@ -656,7 +656,9 @@ static void swap_enter_dead(Swap *s, SwapResult f) {
+         if (s->result == SWAP_SUCCESS)
+                 s->result = f;
+ 
+-        if (s->result != SWAP_SUCCESS)
++        if (s->result == SWAP_SUCCESS)
++                unit_log_success(UNIT(s));
++        else
+                 unit_log_failure(UNIT(s), swap_result_to_string(s->result));
+ 
+         swap_set_state(s, s->result != SWAP_SUCCESS ? SWAP_FAILED : SWAP_DEAD);
+diff --git a/src/core/timer.c b/src/core/timer.c
+index 6ac310cbe0..2876d54a59 100644
+--- a/src/core/timer.c
++++ b/src/core/timer.c
+@@ -287,7 +287,9 @@ static void timer_enter_dead(Timer *t, TimerResult f) {
+         if (t->result == TIMER_SUCCESS)
+                 t->result = f;
+ 
+-        if (t->result != TIMER_SUCCESS)
++        if (t->result == TIMER_SUCCESS)
++                unit_log_success(UNIT(t));
++        else
+                 unit_log_failure(UNIT(t), timer_result_to_string(t->result));
+ 
+         timer_set_state(t, t->result != TIMER_SUCCESS ? TIMER_FAILED : TIMER_DEAD);
+diff --git a/src/core/unit.c b/src/core/unit.c
+index f55bddc00f..ccb0106719 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -5462,6 +5462,16 @@ int unit_pid_attachable(Unit *u, pid_t pid, sd_bus_error *error) {
+         return 0;
+ }
+ 
++void unit_log_success(Unit *u) {
++        assert(u);
++
++        log_struct(LOG_INFO,
++                   "MESSAGE_ID=" SD_MESSAGE_UNIT_SUCCESS_STR,
++                   LOG_UNIT_ID(u),
++                   LOG_UNIT_INVOCATION_ID(u),
++                   LOG_UNIT_MESSAGE(u, "Succeeded."));
++}
++
+ void unit_log_failure(Unit *u, const char *result) {
+         assert(u);
+         assert(result);
+diff --git a/src/core/unit.h b/src/core/unit.h
+index 9d226fb3e0..4ae1b38624 100644
+--- a/src/core/unit.h
++++ b/src/core/unit.h
+@@ -804,6 +804,7 @@ const char *unit_label_path(Unit *u);
+ 
+ int unit_pid_attachable(Unit *unit, pid_t pid, sd_bus_error *error);
+ 
++void unit_log_success(Unit *u);
+ void unit_log_failure(Unit *u, const char *result);
+ 
+ /* Macros which append UNIT= or USER_UNIT= to the message */
+diff --git a/src/systemd/sd-messages.h b/src/systemd/sd-messages.h
+index 846b28fc2b..e7ef81b597 100644
+--- a/src/systemd/sd-messages.h
++++ b/src/systemd/sd-messages.h
+@@ -106,6 +106,8 @@ _SD_BEGIN_DECLARATIONS;
+ #define SD_MESSAGE_UNIT_RESOURCES         SD_ID128_MAKE(ae,8f,7b,86,6b,03,47,b9,af,31,fe,1c,80,b1,27,c0)
+ #define SD_MESSAGE_UNIT_RESOURCES_STR     SD_ID128_MAKE_STR(ae,8f,7b,86,6b,03,47,b9,af,31,fe,1c,80,b1,27,c0)
+ 
++#define SD_MESSAGE_UNIT_SUCCESS           SD_ID128_MAKE(7a,d2,d1,89,f7,e9,4e,70,a3,8c,78,13,54,91,24,48)
++#define SD_MESSAGE_UNIT_SUCCESS_STR       SD_ID128_MAKE_STR(7a,d2,d1,89,f7,e9,4e,70,a3,8c,78,13,54,91,24,48)
+ #define SD_MESSAGE_UNIT_FAILURE_RESULT    SD_ID128_MAKE(d9,b3,73,ed,55,a6,4f,eb,82,42,e0,2d,be,79,a4,9c)
+ #define SD_MESSAGE_UNIT_FAILURE_RESULT_STR \
+                                           SD_ID128_MAKE_STR(d9,b3,73,ed,55,a6,4f,eb,82,42,e0,2d,be,79,a4,9c)

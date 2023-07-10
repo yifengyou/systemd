@@ -1,0 +1,318 @@
+From ca634baa10e2249d4a706d59b67be764867e5f32 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Mon, 30 Nov 2020 10:37:06 +0100
+Subject: [PATCH] shared/mount-util: convert to libmount
+
+It seems better to use just a single parsing algorithm for /proc/self/mountinfo.
+
+Also, unify the naming of variables in all places that use mnt_table_next_fs().
+It makes it easier to compare the different call sites.
+
+(cherry picked from commit 13dcfe4661b467131c943620d0f44711798bfd54)
+
+Related: #1885143
+---
+ src/basic/mount-util.c | 133 ++++++++++++++++++-----------------------
+ src/core/mount.c       |  22 +++----
+ src/core/umount.c      |  14 ++---
+ 3 files changed, 76 insertions(+), 93 deletions(-)
+
+diff --git a/src/basic/mount-util.c b/src/basic/mount-util.c
+index 5b04e21f34..bac1a25cc8 100644
+--- a/src/basic/mount-util.c
++++ b/src/basic/mount-util.c
+@@ -13,7 +13,6 @@
+ #include <libmount.h>
+ 
+ #include "alloc-util.h"
+-#include "escape.h"
+ #include "extract-word.h"
+ #include "fd-util.h"
+ #include "fileio.h"
+@@ -27,6 +26,9 @@
+ #include "string-util.h"
+ #include "strv.h"
+ 
++DEFINE_TRIVIAL_CLEANUP_FUNC(struct libmnt_table*, mnt_free_table);
++DEFINE_TRIVIAL_CLEANUP_FUNC(struct libmnt_iter*, mnt_free_iter);
++
+ /* This is the original MAX_HANDLE_SZ definition from the kernel, when the API was introduced. We use that in place of
+  * any more currently defined value to future-proof things: if the size is increased in the API headers, and our code
+  * is recompiled then it would cease working on old kernels, as those refuse any sizes larger than this value with
+@@ -313,55 +315,43 @@ int umount_recursive(const char *prefix, int flags) {
+          * unmounting them until they are gone. */
+ 
+         do {
+-                _cleanup_fclose_ FILE *proc_self_mountinfo = NULL;
++                _cleanup_(mnt_free_tablep) struct libmnt_table *table = NULL;
++                _cleanup_(mnt_free_iterp) struct libmnt_iter *iter = NULL;
+ 
+                 again = false;
+-                r = 0;
+ 
+-                proc_self_mountinfo = fopen("/proc/self/mountinfo", "re");
+-                if (!proc_self_mountinfo)
+-                        return -errno;
++                table = mnt_new_table();
++                iter = mnt_new_iter(MNT_ITER_FORWARD);
++                if (!table || !iter)
++                        return -ENOMEM;
+ 
+-                (void) __fsetlocking(proc_self_mountinfo, FSETLOCKING_BYCALLER);
++                r = mnt_table_parse_mtab(table, NULL);
++                if (r < 0)
++                        return log_debug_errno(r, "Failed to parse /proc/self/mountinfo: %m");
+ 
+                 for (;;) {
+-                        _cleanup_free_ char *path = NULL, *p = NULL;
+-                        int k;
+-
+-                        k = fscanf(proc_self_mountinfo,
+-                                   "%*s "       /* (1) mount id */
+-                                   "%*s "       /* (2) parent id */
+-                                   "%*s "       /* (3) major:minor */
+-                                   "%*s "       /* (4) root */
+-                                   "%ms "       /* (5) mount point */
+-                                   "%*s"        /* (6) mount options */
+-                                   "%*[^-]"     /* (7) optional fields */
+-                                   "- "         /* (8) separator */
+-                                   "%*s "       /* (9) file system type */
+-                                   "%*s"        /* (10) mount source */
+-                                   "%*s"        /* (11) mount options 2 */
+-                                   "%*[^\n]",   /* some rubbish at the end */
+-                                   &path);
+-                        if (k != 1) {
+-                                if (k == EOF)
+-                                        break;
++                        struct libmnt_fs *fs;
++                        const char *path;
+ 
+-                                continue;
+-                        }
+-
+-                        r = cunescape(path, UNESCAPE_RELAX, &p);
++                        r = mnt_table_next_fs(table, iter, &fs);
++                        if (r == 1)
++                                break;
+                         if (r < 0)
+-                                return r;
++                                return log_debug_errno(r, "Failed to get next entry from /proc/self/mountinfo: %m");
+ 
+-                        if (!path_startswith(p, prefix))
++                        path = mnt_fs_get_target(fs);
++                        if (!path)
+                                 continue;
+ 
+-                        if (umount2(p, flags) < 0) {
+-                                r = log_debug_errno(errno, "Failed to umount %s: %m", p);
++                        if (!path_startswith(path, prefix))
++                                continue;
++
++                        if (umount2(path, flags) < 0) {
++                                r = log_debug_errno(errno, "Failed to umount %s: %m", path);
+                                 continue;
+                         }
+ 
+-                        log_debug("Successfully unmounted %s", p);
++                        log_debug("Successfully unmounted %s", path);
+ 
+                         again = true;
+                         n++;
+@@ -416,6 +406,8 @@ int bind_remount_recursive_with_mountinfo(const char *prefix, bool ro, char **bl
+ 
+         for (;;) {
+                 _cleanup_set_free_free_ Set *todo = NULL;
++                _cleanup_(mnt_free_tablep) struct libmnt_table *table = NULL;
++                _cleanup_(mnt_free_iterp) struct libmnt_iter *iter = NULL;
+                 bool top_autofs = false;
+                 char *x;
+                 unsigned long orig_flags;
+@@ -424,58 +416,52 @@ int bind_remount_recursive_with_mountinfo(const char *prefix, bool ro, char **bl
+                 if (!todo)
+                         return -ENOMEM;
+ 
++                table = mnt_new_table();
++                iter = mnt_new_iter(MNT_ITER_FORWARD);
++                if (!table || !iter)
++                        return -ENOMEM;
++
+                 rewind(proc_self_mountinfo);
+ 
+-                for (;;) {
+-                        _cleanup_free_ char *path = NULL, *p = NULL, *type = NULL;
+-                        int k;
+-
+-                        k = fscanf(proc_self_mountinfo,
+-                                   "%*s "       /* (1) mount id */
+-                                   "%*s "       /* (2) parent id */
+-                                   "%*s "       /* (3) major:minor */
+-                                   "%*s "       /* (4) root */
+-                                   "%ms "       /* (5) mount point */
+-                                   "%*s"        /* (6) mount options (superblock) */
+-                                   "%*[^-]"     /* (7) optional fields */
+-                                   "- "         /* (8) separator */
+-                                   "%ms "       /* (9) file system type */
+-                                   "%*s"        /* (10) mount source */
+-                                   "%*s"        /* (11) mount options (bind mount) */
+-                                   "%*[^\n]",   /* some rubbish at the end */
+-                                   &path,
+-                                   &type);
+-                        if (k != 2) {
+-                                if (k == EOF)
+-                                        break;
++                r = mnt_table_parse_stream(table, proc_self_mountinfo, "/proc/self/mountinfo");
++                if (r < 0)
++                        return log_debug_errno(r, "Failed to parse /proc/self/mountinfo: %m");
+ 
+-                                continue;
+-                        }
++                for (;;) {
++                        struct libmnt_fs *fs;
++                        const char *path, *type;
+ 
+-                        r = cunescape(path, UNESCAPE_RELAX, &p);
++                        r = mnt_table_next_fs(table, iter, &fs);
++                        if (r == 1)
++                                break;
+                         if (r < 0)
+-                                return r;
++                                return log_debug_errno(r, "Failed to get next entry from /proc/self/mountinfo: %m");
++
++                        path = mnt_fs_get_target(fs);
++                        type = mnt_fs_get_fstype(fs);
++                        if (!path || !type)
++                                continue;
+ 
+-                        if (!path_startswith(p, cleaned))
++                        if (!path_startswith(path, cleaned))
+                                 continue;
+ 
+-                        /* Ignore this mount if it is blacklisted, but only if it isn't the top-level mount we shall
+-                         * operate on. */
+-                        if (!path_equal(cleaned, p)) {
++                        /* Ignore this mount if it is blacklisted, but only if it isn't the top-level mount
++                         * we shall operate on. */
++                        if (!path_equal(path, cleaned)) {
+                                 bool blacklisted = false;
+                                 char **i;
+ 
+                                 STRV_FOREACH(i, blacklist) {
+-
+                                         if (path_equal(*i, cleaned))
+                                                 continue;
+ 
+                                         if (!path_startswith(*i, cleaned))
+                                                 continue;
+ 
+-                                        if (path_startswith(p, *i)) {
++                                        if (path_startswith(path, *i)) {
+                                                 blacklisted = true;
+-                                                log_debug("Not remounting %s, because blacklisted by %s, called for %s", p, *i, cleaned);
++                                                log_debug("Not remounting %s blacklisted by %s, called for %s",
++                                                          path, *i, cleaned);
+                                                 break;
+                                         }
+                                 }
+@@ -490,15 +476,12 @@ int bind_remount_recursive_with_mountinfo(const char *prefix, bool ro, char **bl
+                          * already triggered, then we will find
+                          * another entry for this. */
+                         if (streq(type, "autofs")) {
+-                                top_autofs = top_autofs || path_equal(cleaned, p);
++                                top_autofs = top_autofs || path_equal(path, cleaned);
+                                 continue;
+                         }
+ 
+-                        if (!set_contains(done, p)) {
+-                                r = set_consume(todo, p);
+-                                p = NULL;
+-                                if (r == -EEXIST)
+-                                        continue;
++                        if (!set_contains(done, path)) {
++                                r = set_put_strdup(todo, path);
+                                 if (r < 0)
+                                         return r;
+                         }
+diff --git a/src/core/mount.c b/src/core/mount.c
+index 076dfd06a3..7e80a0c974 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -1606,18 +1606,18 @@ fail:
+ }
+ 
+ static int mount_load_proc_self_mountinfo(Manager *m, bool set_flags) {
+-        _cleanup_(mnt_free_tablep) struct libmnt_table *t = NULL;
+-        _cleanup_(mnt_free_iterp) struct libmnt_iter *i = NULL;
+-        int r = 0;
++        _cleanup_(mnt_free_tablep) struct libmnt_table *table = NULL;
++        _cleanup_(mnt_free_iterp) struct libmnt_iter *iter = NULL;
++        int r;
+ 
+         assert(m);
+ 
+-        t = mnt_new_table();
+-        i = mnt_new_iter(MNT_ITER_FORWARD);
+-        if (!t || !i)
++        table = mnt_new_table();
++        iter = mnt_new_iter(MNT_ITER_FORWARD);
++        if (!table || !iter)
+                 return log_oom();
+ 
+-        r = mnt_table_parse_mtab(t, NULL);
++        r = mnt_table_parse_mtab(table, NULL);
+         if (r < 0)
+                 return log_error_errno(r, "Failed to parse /proc/self/mountinfo: %m");
+ 
+@@ -1628,11 +1628,11 @@ static int mount_load_proc_self_mountinfo(Manager *m, bool set_flags) {
+                 _cleanup_free_ char *d = NULL, *p = NULL;
+                 int k;
+ 
+-                k = mnt_table_next_fs(t, i, &fs);
+-                if (k == 1)
++                r = mnt_table_next_fs(table, iter, &fs);
++                if (r == 1)
+                         break;
+-                if (k < 0)
+-                        return log_error_errno(k, "Failed to get next entry from /proc/self/mountinfo: %m");
++                if (r < 0)
++                        return log_error_errno(r, "Failed to get next entry from /proc/self/mountinfo: %m");
+ 
+                 device = mnt_fs_get_source(fs);
+                 path = mnt_fs_get_target(fs);
+diff --git a/src/core/umount.c b/src/core/umount.c
+index 241fe6fc62..3f02bf141a 100644
+--- a/src/core/umount.c
++++ b/src/core/umount.c
+@@ -55,18 +55,18 @@ void mount_points_list_free(MountPoint **head) {
+ }
+ 
+ int mount_points_list_get(const char *mountinfo, MountPoint **head) {
+-        _cleanup_(mnt_free_tablep) struct libmnt_table *t = NULL;
+-        _cleanup_(mnt_free_iterp) struct libmnt_iter *i = NULL;
++        _cleanup_(mnt_free_tablep) struct libmnt_table *table = NULL;
++        _cleanup_(mnt_free_iterp) struct libmnt_iter *iter = NULL;
+         int r;
+ 
+         assert(head);
+ 
+-        t = mnt_new_table();
+-        i = mnt_new_iter(MNT_ITER_FORWARD);
+-        if (!t || !i)
++        table = mnt_new_table();
++        iter = mnt_new_iter(MNT_ITER_FORWARD);
++        if (!table || !iter)
+                 return log_oom();
+ 
+-        r = mnt_table_parse_mtab(t, mountinfo);
++        r = mnt_table_parse_mtab(table, mountinfo);
+         if (r < 0)
+                 return log_error_errno(r, "Failed to parse %s: %m", mountinfo);
+ 
+@@ -79,7 +79,7 @@ int mount_points_list_get(const char *mountinfo, MountPoint **head) {
+                 bool try_remount_ro;
+                 MountPoint *m;
+ 
+-                r = mnt_table_next_fs(t, i, &fs);
++                r = mnt_table_next_fs(table, iter, &fs);
+                 if (r == 1)
+                         break;
+                 if (r < 0)

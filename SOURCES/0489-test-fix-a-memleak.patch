@@ -1,0 +1,28 @@
+From 7444c6ed3628484dfed2f204c5b78a06a50f4bd8 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Wed, 29 Aug 2018 23:27:42 +0900
+Subject: [PATCH] test: fix a memleak
+
+Follow-up for #9901.
+
+Fixes #9968.
+
+(cherry picked from commit efa146369398fdb73f1cd177eb2522822ebf559c)
+
+Related: #1812972
+---
+ src/test/test-install-root.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/test/test-install-root.c b/src/test/test-install-root.c
+index dbbcfe4297..fe1ca5b16f 100644
+--- a/src/test/test-install-root.c
++++ b/src/test/test-install-root.c
+@@ -1037,6 +1037,7 @@ static void test_preset_multiple_instances(const char *root) {
+         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bar1.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
+         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bartest.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
+ 
++        unit_file_changes_free(changes, n_changes);
+ }
+ 
+ int main(int argc, char *argv[]) {

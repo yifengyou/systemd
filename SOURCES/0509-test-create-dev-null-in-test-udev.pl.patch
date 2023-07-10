@@ -1,0 +1,32 @@
+From 6a908a38135d050b7c271fdea9c061d7e7ad8ef7 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 23 Oct 2018 07:23:01 +0900
+Subject: [PATCH] test: create /dev/null in test-udev.pl
+
+(cherry picked from commit a41ff38b0999fb83464309a29b8f39450b8d4b85)
+
+Related: #1642728
+---
+ test/udev-test.pl | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 0433629c7c..a1c24f49b4 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1537,13 +1537,14 @@ sub udev_setup {
+         system("umount", $udev_tmpfs);
+         rmdir($udev_tmpfs);
+         mkdir($udev_tmpfs) || die "unable to create udev_tmpfs: $udev_tmpfs\n";
+-        system("mount", "-o", "rw,mode=755,nosuid,noexec,nodev", "-t", "tmpfs", "tmpfs", $udev_tmpfs) && die "unable to mount tmpfs";
++        system("mount", "-o", "rw,mode=755,nosuid,noexec", "-t", "tmpfs", "tmpfs", $udev_tmpfs) && die "unable to mount tmpfs";
+ 
+         mkdir($udev_dev) || die "unable to create udev_dev: $udev_dev\n";
+         # setting group and mode of udev_dev ensures the tests work
+         # even if the parent directory has setgid bit enabled.
+         chown (0, 0, $udev_dev) || die "unable to chown $udev_dev\n";
+         chmod (0755, $udev_dev) || die "unable to chmod $udev_dev\n";
++        system("mknod", $udev_dev . "/null", "c", "1", "3") && "unable to create $udev_dev/null";
+ 
+         system("cp", "-r", "test/sys/", $udev_sys) && die "unable to copy test/sys";
+ 

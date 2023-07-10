@@ -1,0 +1,24 @@
+From fb58a56c6c1c2749ba634abd9ad76f4e718269a1 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Tue, 5 Jan 2021 12:30:15 +0100
+Subject: [PATCH] udev/net_id: give RHEL-8.4 naming scheme a name
+
+Follow-up for bb6114af097da0cd9c5081e42db718559130687f
+
+Related: #1827462
+---
+ src/udev/udev-builtin-net_id.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/udev/udev-builtin-net_id.c b/src/udev/udev-builtin-net_id.c
+index d8c56b62bb..7c153f0aef 100644
+--- a/src/udev/udev-builtin-net_id.c
++++ b/src/udev/udev-builtin-net_id.c
+@@ -150,6 +150,7 @@ static const NamingScheme naming_schemes[] = {
+         { "rhel-8.1", NAMING_RHEL_8_1 },
+         { "rhel-8.2", NAMING_RHEL_8_2 },
+         { "rhel-8.3", NAMING_RHEL_8_3 },
++        { "rhel-8.4", NAMING_RHEL_8_4 },
+         /* … add more schemes here, as the logic to name devices is updated … */
+ };
+ 

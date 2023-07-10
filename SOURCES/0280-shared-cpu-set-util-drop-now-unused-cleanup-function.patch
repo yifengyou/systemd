@@ -1,0 +1,26 @@
+From 7aa32093c3dfc4bf7298f02be553e95c40d7c211 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 28 May 2019 21:40:10 +0200
+Subject: [PATCH] shared/cpu-set-util: drop now-unused cleanup function
+
+(cherry picked from commit cb0d3acf55ef335001cac5dd9c335ec5e75e9b56)
+
+Related: #1734787
+---
+ src/basic/cpu-set-util.h | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/src/basic/cpu-set-util.h b/src/basic/cpu-set-util.h
+index b54e737110..68a73bf9f7 100644
+--- a/src/basic/cpu-set-util.h
++++ b/src/basic/cpu-set-util.h
+@@ -9,9 +9,6 @@
+ 
+ #include "macro.h"
+ 
+-DEFINE_TRIVIAL_CLEANUP_FUNC(cpu_set_t*, CPU_FREE);
+-#define _cleanup_cpu_free_ _cleanup_(CPU_FREEp)
+-
+ /* This wraps the libc interface with a variable to keep the allocated size. */
+ typedef struct CPUSet {
+         cpu_set_t *set;

@@ -1,0 +1,932 @@
+From 61e5aed87f1b82a51c6ea8ccde96805cb63e5b15 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 21 May 2019 08:45:19 +0200
+Subject: [PATCH] Rework cpu affinity parsing
+
+The CPU_SET_S api is pretty bad. In particular, it has a parameter for the size
+of the array, but operations which take two (CPU_EQUAL_S) or even three arrays
+(CPU_{AND,OR,XOR}_S) still take just one size. This means that all arrays must
+be of the same size, or buffer overruns will occur. This is exactly what our
+code would do, if it received an array of unexpected size over the network.
+("Unexpected" here means anything different from what cpu_set_malloc() detects
+as the "right" size.)
+
+Let's rework this, and store the size in bytes of the allocated storage area.
+
+The code will now parse any number up to 8191, independently of what the current
+kernel supports. This matches the kernel maximum setting for any architecture,
+to make things more portable.
+
+Fixes #12605.
+
+(cherry picked from commit 0985c7c4e22c8dbbea4398cf3453da45ebf63800)
+
+Related: #1734787
+---
+ src/basic/cpu-set-util.c     | 133 +++++++++++++++++++++-----
+ src/basic/cpu-set-util.h     |  47 ++++++---
+ src/core/dbus-execute.c      |  35 ++-----
+ src/core/execute.c           |  12 +--
+ src/core/execute.h           |   4 +-
+ src/core/load-fragment.c     |  31 +-----
+ src/core/main.c              |  14 +--
+ src/nspawn/nspawn-settings.c |  33 +------
+ src/nspawn/nspawn-settings.h |   4 +-
+ src/nspawn/nspawn.c          |  29 +++---
+ src/shared/bus-unit-util.c   |   4 +-
+ src/test/test-cpu-set-util.c | 179 +++++++++++++++++++----------------
+ src/test/test-sizeof.c       |   3 +
+ 13 files changed, 286 insertions(+), 242 deletions(-)
+
+diff --git a/src/basic/cpu-set-util.c b/src/basic/cpu-set-util.c
+index 8f24a2601a..fe440f6381 100644
+--- a/src/basic/cpu-set-util.c
++++ b/src/basic/cpu-set-util.c
+@@ -15,14 +15,15 @@
+ #include "macro.h"
+ #include "parse-util.h"
+ #include "string-util.h"
++#include "util.h"
+ 
+-char* cpu_set_to_string(const cpu_set_t *set, size_t setsize) {
++char* cpu_set_to_string(const CPUSet *a) {
+         _cleanup_free_ char *str = NULL;
+         size_t allocated = 0, len = 0;
+         int i, r;
+ 
+-        for (i = 0; (size_t) i < setsize * 8; i++) {
+-                if (!CPU_ISSET_S(i, setsize, set))
++        for (i = 0; (size_t) i < a->allocated * 8; i++) {
++                if (!CPU_ISSET_S(i, a->allocated, a->set))
+                         continue;
+ 
+                 if (!GREEDY_REALLOC(str, allocated, len + 1 + DECIMAL_STR_MAX(int)))
+@@ -65,24 +66,74 @@ cpu_set_t* cpu_set_malloc(unsigned *ncpus) {
+         }
+ }
+ 
+-int parse_cpu_set_internal(
++static int cpu_set_realloc(CPUSet *cpu_set, unsigned ncpus) {
++        size_t need;
++
++        assert(cpu_set);
++
++        need = CPU_ALLOC_SIZE(ncpus);
++        if (need > cpu_set->allocated) {
++                cpu_set_t *t;
++
++                t = realloc(cpu_set->set, need);
++                if (!t)
++                        return -ENOMEM;
++
++                memzero((uint8_t*) t + cpu_set->allocated, need - cpu_set->allocated);
++
++                cpu_set->set = t;
++                cpu_set->allocated = need;
++        }
++
++        return 0;
++}
++
++static int cpu_set_add(CPUSet *cpu_set, unsigned cpu) {
++        int r;
++
++        if (cpu >= 8192)
++                /* As of kernel 5.1, CONFIG_NR_CPUS can be set to 8192 on PowerPC */
++                return -ERANGE;
++
++        r = cpu_set_realloc(cpu_set, cpu + 1);
++        if (r < 0)
++                return r;
++
++        CPU_SET_S(cpu, cpu_set->allocated, cpu_set->set);
++        return 0;
++}
++
++int cpu_set_add_all(CPUSet *a, const CPUSet *b) {
++        int r;
++
++        /* Do this backwards, so if we fail, we fail before changing anything. */
++        for (unsigned cpu_p1 = b->allocated * 8; cpu_p1 > 0; cpu_p1--)
++                if (CPU_ISSET_S(cpu_p1 - 1, b->allocated, b->set)) {
++                        r = cpu_set_add(a, cpu_p1 - 1);
++                        if (r < 0)
++                                return r;
++                }
++
++        return 0;
++}
++
++int parse_cpu_set_full(
+                 const char *rvalue,
+-                cpu_set_t **cpu_set,
++                CPUSet *cpu_set,
+                 bool warn,
+                 const char *unit,
+                 const char *filename,
+                 unsigned line,
+                 const char *lvalue) {
+ 
+-        _cleanup_cpu_free_ cpu_set_t *c = NULL;
++        _cleanup_(cpu_set_reset) CPUSet c = {};
+         const char *p = rvalue;
+-        unsigned ncpus = 0;
+ 
+-        assert(rvalue);
++        assert(p);
+ 
+         for (;;) {
+                 _cleanup_free_ char *word = NULL;
+-                unsigned cpu, cpu_lower, cpu_upper;
++                unsigned cpu_lower, cpu_upper;
+                 int r;
+ 
+                 r = extract_first_word(&p, &word, WHITESPACE ",", EXTRACT_QUOTES);
+@@ -93,31 +144,63 @@ int parse_cpu_set_internal(
+                 if (r == 0)
+                         break;
+ 
+-                if (!c) {
+-                        c = cpu_set_malloc(&ncpus);
+-                        if (!c)
+-                                return warn ? log_oom() : -ENOMEM;
+-                }
+-
+                 r = parse_range(word, &cpu_lower, &cpu_upper);
+                 if (r < 0)
+                         return warn ? log_syntax(unit, LOG_ERR, filename, line, r, "Failed to parse CPU affinity '%s'", word) : r;
+-                if (cpu_lower >= ncpus || cpu_upper >= ncpus)
+-                        return warn ? log_syntax(unit, LOG_ERR, filename, line, EINVAL, "CPU out of range '%s' ncpus is %u", word, ncpus) : -EINVAL;
+ 
+                 if (cpu_lower > cpu_upper) {
+                         if (warn)
+-                                log_syntax(unit, LOG_WARNING, filename, line, 0, "Range '%s' is invalid, %u > %u, ignoring", word, cpu_lower, cpu_upper);
+-                        continue;
++                                log_syntax(unit, LOG_WARNING, filename, line, 0, "Range '%s' is invalid, %u > %u, ignoring.",
++                                           word, cpu_lower, cpu_upper);
++
++                        /* Make sure something is allocated, to distinguish this from the empty case */
++                        r = cpu_set_realloc(&c, 1);
++                        if (r < 0)
++                                return r;
+                 }
+ 
+-                for (cpu = cpu_lower; cpu <= cpu_upper; cpu++)
+-                        CPU_SET_S(cpu, CPU_ALLOC_SIZE(ncpus), c);
++                for (unsigned cpu_p1 = MIN(cpu_upper, UINT_MAX-1) + 1; cpu_p1 > cpu_lower; cpu_p1--) {
++                        r = cpu_set_add(&c, cpu_p1 - 1);
++                        if (r < 0)
++                                return warn ? log_syntax(unit, LOG_ERR, filename, line, r,
++                                                         "Cannot add CPU %u to set: %m", cpu_p1 - 1) : r;
++                }
+         }
+ 
+-        /* On success, sets *cpu_set and returns ncpus for the system. */
+-        if (c)
+-                *cpu_set = TAKE_PTR(c);
++        /* On success, transfer ownership to the output variable */
++        *cpu_set = c;
++        c = (CPUSet) {};
++
++        return 0;
++}
++
++int parse_cpu_set_extend(
++                const char *rvalue,
++                CPUSet *old,
++                bool warn,
++                const char *unit,
++                const char *filename,
++                unsigned line,
++                const char *lvalue) {
++
++        _cleanup_(cpu_set_reset) CPUSet cpuset = {};
++        int r;
++
++        r = parse_cpu_set_full(rvalue, &cpuset, true, unit, filename, line, lvalue);
++        if (r < 0)
++                return r;
++
++        if (!cpuset.set) {
++                /* An empty assignment resets the CPU list */
++                cpu_set_reset(old);
++                return 0;
++        }
++
++        if (!old->set) {
++                *old = cpuset;
++                cpuset = (CPUSet) {};
++                return 0;
++        }
+ 
+-        return (int) ncpus;
++        return cpu_set_add_all(old, &cpuset);
+ }
+diff --git a/src/basic/cpu-set-util.h b/src/basic/cpu-set-util.h
+index 20612a8876..eb31b362fe 100644
+--- a/src/basic/cpu-set-util.h
++++ b/src/basic/cpu-set-util.h
+@@ -12,23 +12,40 @@
+ DEFINE_TRIVIAL_CLEANUP_FUNC(cpu_set_t*, CPU_FREE);
+ #define _cleanup_cpu_free_ _cleanup_(CPU_FREEp)
+ 
+-static inline cpu_set_t* cpu_set_mfree(cpu_set_t *p) {
+-        if (p)
+-                CPU_FREE(p);
+-        return NULL;
+-}
+-
+ cpu_set_t* cpu_set_malloc(unsigned *ncpus);
+ 
+-char* cpu_set_to_string(const cpu_set_t *set, size_t setsize);
+-int parse_cpu_set_internal(const char *rvalue, cpu_set_t **cpu_set, bool warn, const char *unit, const char *filename, unsigned line, const char *lvalue);
+-
+-static inline int parse_cpu_set_and_warn(const char *rvalue, cpu_set_t **cpu_set, const char *unit, const char *filename, unsigned line, const char *lvalue) {
+-        assert(lvalue);
+-
+-        return parse_cpu_set_internal(rvalue, cpu_set, true, unit, filename, line, lvalue);
++/* This wraps the libc interface with a variable to keep the allocated size. */
++typedef struct CPUSet {
++        cpu_set_t *set;
++        size_t allocated; /* in bytes */
++} CPUSet;
++
++static inline void cpu_set_reset(CPUSet *a) {
++        assert((a->allocated > 0) == !!a->set);
++        if (a->set)
++                CPU_FREE(a->set);
++        *a = (CPUSet) {};
+ }
+ 
+-static inline int parse_cpu_set(const char *rvalue, cpu_set_t **cpu_set){
+-        return parse_cpu_set_internal(rvalue, cpu_set, false, NULL, NULL, 0, NULL);
++int cpu_set_add_all(CPUSet *a, const CPUSet *b);
++
++char* cpu_set_to_string(const CPUSet *a);
++int parse_cpu_set_full(
++                const char *rvalue,
++                CPUSet *cpu_set,
++                bool warn,
++                const char *unit,
++                const char *filename, unsigned line,
++                const char *lvalue);
++int parse_cpu_set_extend(
++                const char *rvalue,
++                CPUSet *old,
++                bool warn,
++                const char *unit,
++                const char *filename,
++                unsigned line,
++                const char *lvalue);
++
++static inline int parse_cpu_set(const char *rvalue, CPUSet *cpu_set){
++        return parse_cpu_set_full(rvalue, cpu_set, false, NULL, NULL, 0, NULL);
+ }
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index d9f4445745..08946627e3 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -220,7 +220,7 @@ static int property_get_cpu_affinity(
+         assert(reply);
+         assert(c);
+ 
+-        return sd_bus_message_append_array(reply, 'y', c->cpuset, CPU_ALLOC_SIZE(c->cpuset_ncpus));
++        return sd_bus_message_append_array(reply, 'y', c->cpu_set.set, c->cpu_set.allocated);
+ }
+ 
+ static int property_get_timer_slack_nsec(
+@@ -1560,37 +1560,22 @@ int bus_exec_context_set_transient_property(
+ 
+                 if (!UNIT_WRITE_FLAGS_NOOP(flags)) {
+                         if (n == 0) {
+-                                c->cpuset = cpu_set_mfree(c->cpuset);
+-                                c->cpuset_ncpus = 0;
++                                cpu_set_reset(&c->cpu_set);
+                                 unit_write_settingf(u, flags, name, "%s=", name);
+                         } else {
+                                 _cleanup_free_ char *str = NULL;
+-                                size_t ncpus;
++                                const CPUSet set = {(cpu_set_t*) a, n};
+ 
+-                                str = cpu_set_to_string(a, n);
++                                str = cpu_set_to_string(&set);
+                                 if (!str)
+                                         return -ENOMEM;
+ 
+-                                ncpus = CPU_SIZE_TO_NUM(n);
+-
+-                                if (!c->cpuset || c->cpuset_ncpus < ncpus) {
+-                                        cpu_set_t *cpuset;
+-
+-                                        cpuset = CPU_ALLOC(ncpus);
+-                                        if (!cpuset)
+-                                                return -ENOMEM;
+-
+-                                        CPU_ZERO_S(n, cpuset);
+-                                        if (c->cpuset) {
+-                                                CPU_OR_S(CPU_ALLOC_SIZE(c->cpuset_ncpus), cpuset, c->cpuset, (cpu_set_t*) a);
+-                                                CPU_FREE(c->cpuset);
+-                                        } else
+-                                                CPU_OR_S(n, cpuset, cpuset, (cpu_set_t*) a);
+-
+-                                        c->cpuset = cpuset;
+-                                        c->cpuset_ncpus = ncpus;
+-                                } else
+-                                        CPU_OR_S(n, c->cpuset, c->cpuset, (cpu_set_t*) a);
++                                /* We forego any optimizations here, and always create the structure using
++                                 * cpu_set_add_all(), because we don't want to care if the existing size we
++                                 * got over dbus is appropriate. */
++                                r = cpu_set_add_all(&c->cpu_set, &set);
++                                if (r < 0)
++                                        return r;
+ 
+                                 unit_write_settingf(u, flags, name, "%s=%s", name, str);
+                         }
+diff --git a/src/core/execute.c b/src/core/execute.c
+index c42300a41e..22e5825905 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -2991,8 +2991,8 @@ static int exec_child(
+                 }
+         }
+ 
+-        if (context->cpuset)
+-                if (sched_setaffinity(0, CPU_ALLOC_SIZE(context->cpuset_ncpus), context->cpuset) < 0) {
++        if (context->cpu_set.set)
++                if (sched_setaffinity(0, context->cpu_set.allocated, context->cpu_set.set) < 0) {
+                         *exit_status = EXIT_CPUAFFINITY;
+                         return log_unit_error_errno(unit, errno, "Failed to set up CPU affinity: %m");
+                 }
+@@ -3694,7 +3694,7 @@ void exec_context_done(ExecContext *c) {
+         c->temporary_filesystems = NULL;
+         c->n_temporary_filesystems = 0;
+ 
+-        c->cpuset = cpu_set_mfree(c->cpuset);
++        cpu_set_reset(&c->cpu_set);
+ 
+         c->utmp_id = mfree(c->utmp_id);
+         c->selinux_context = mfree(c->selinux_context);
+@@ -4097,10 +4097,10 @@ void exec_context_dump(const ExecContext *c, FILE* f, const char *prefix) {
+                         prefix, yes_no(c->cpu_sched_reset_on_fork));
+         }
+ 
+-        if (c->cpuset) {
++        if (c->cpu_set.set) {
+                 fprintf(f, "%sCPUAffinity:", prefix);
+-                for (i = 0; i < c->cpuset_ncpus; i++)
+-                        if (CPU_ISSET_S(i, CPU_ALLOC_SIZE(c->cpuset_ncpus), c->cpuset))
++                for (i = 0; i < c->cpu_set.allocated * 8; i++)
++                        if (CPU_ISSET_S(i, c->cpu_set.allocated, c->cpu_set.set))
+                                 fprintf(f, " %u", i);
+                 fputs("\n", f);
+         }
+diff --git a/src/core/execute.h b/src/core/execute.h
+index 8c91636adc..e1e7a494cd 100644
+--- a/src/core/execute.h
++++ b/src/core/execute.h
+@@ -14,6 +14,7 @@ typedef struct Manager Manager;
+ #include <sys/capability.h>
+ 
+ #include "cgroup-util.h"
++#include "cpu-set-util.h"
+ #include "fdset.h"
+ #include "list.h"
+ #include "missing.h"
+@@ -148,8 +149,7 @@ struct ExecContext {
+         int cpu_sched_policy;
+         int cpu_sched_priority;
+ 
+-        cpu_set_t *cpuset;
+-        unsigned cpuset_ncpus;
++        CPUSet cpu_set;
+ 
+         ExecInput std_input;
+         ExecOutput std_output;
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index d9a5094aa0..34ae834188 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -1211,42 +1211,13 @@ int config_parse_exec_cpu_affinity(const char *unit,
+                                    void *userdata) {
+ 
+         ExecContext *c = data;
+-        _cleanup_cpu_free_ cpu_set_t *cpuset = NULL;
+-        int ncpus;
+ 
+         assert(filename);
+         assert(lvalue);
+         assert(rvalue);
+         assert(data);
+ 
+-        ncpus = parse_cpu_set_and_warn(rvalue, &cpuset, unit, filename, line, lvalue);
+-        if (ncpus < 0)
+-                return ncpus;
+-
+-        if (ncpus == 0) {
+-                /* An empty assignment resets the CPU list */
+-                c->cpuset = cpu_set_mfree(c->cpuset);
+-                c->cpuset_ncpus = 0;
+-                return 0;
+-        }
+-
+-        if (!c->cpuset) {
+-                c->cpuset = TAKE_PTR(cpuset);
+-                c->cpuset_ncpus = (unsigned) ncpus;
+-                return 0;
+-        }
+-
+-        if (c->cpuset_ncpus < (unsigned) ncpus) {
+-                CPU_OR_S(CPU_ALLOC_SIZE(c->cpuset_ncpus), cpuset, c->cpuset, cpuset);
+-                CPU_FREE(c->cpuset);
+-                c->cpuset = TAKE_PTR(cpuset);
+-                c->cpuset_ncpus = (unsigned) ncpus;
+-                return 0;
+-        }
+-
+-        CPU_OR_S(CPU_ALLOC_SIZE((unsigned) ncpus), c->cpuset, c->cpuset, cpuset);
+-
+-        return 0;
++        return parse_cpu_set_extend(rvalue, &c->cpu_set, true, unit, filename, line, lvalue);
+ }
+ 
+ int config_parse_capability_set(
+diff --git a/src/core/main.c b/src/core/main.c
+index af7b26d6f1..e62b2756ee 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -537,16 +537,18 @@ static int config_parse_cpu_affinity2(
+                 void *data,
+                 void *userdata) {
+ 
+-        _cleanup_cpu_free_ cpu_set_t *c = NULL;
+-        int ncpus;
++        _cleanup_(cpu_set_reset) CPUSet c = {};
++        int r;
+ 
+-        ncpus = parse_cpu_set_and_warn(rvalue, &c, unit, filename, line, lvalue);
+-        if (ncpus < 0)
+-                return ncpus;
++        r = parse_cpu_set_full(rvalue, &c, true, unit, filename, line, lvalue);
++        if (r < 0)
++                return r;
+ 
+-        if (sched_setaffinity(0, CPU_ALLOC_SIZE(ncpus), c) < 0)
++        if (sched_setaffinity(0, c.allocated, c.set) < 0)
+                 log_warning_errno(errno, "Failed to set CPU affinity: %m");
+ 
++        // FIXME: parsing and execution should be seperated.
++
+         return 0;
+ }
+ 
+diff --git a/src/nspawn/nspawn-settings.c b/src/nspawn/nspawn-settings.c
+index 62a3486952..21c24a1111 100644
+--- a/src/nspawn/nspawn-settings.c
++++ b/src/nspawn/nspawn-settings.c
+@@ -85,7 +85,7 @@ Settings* settings_free(Settings *s) {
+         strv_free(s->syscall_blacklist);
+         rlimit_free_all(s->rlimit);
+         free(s->hostname);
+-        s->cpuset = cpu_set_mfree(s->cpuset);
++        cpu_set_reset(&s->cpu_set);
+ 
+         strv_free(s->network_interfaces);
+         strv_free(s->network_macvlan);
+@@ -687,41 +687,12 @@ int config_parse_cpu_affinity(
+                 void *data,
+                 void *userdata) {
+ 
+-        _cleanup_cpu_free_ cpu_set_t *cpuset = NULL;
+         Settings *settings = data;
+-        int ncpus;
+ 
+         assert(rvalue);
+         assert(settings);
+ 
+-        ncpus = parse_cpu_set_and_warn(rvalue, &cpuset, unit, filename, line, lvalue);
+-        if (ncpus < 0)
+-                return ncpus;
+-
+-        if (ncpus == 0) {
+-                /* An empty assignment resets the CPU list */
+-                settings->cpuset = cpu_set_mfree(settings->cpuset);
+-                settings->cpuset_ncpus = 0;
+-                return 0;
+-        }
+-
+-        if (!settings->cpuset) {
+-                settings->cpuset = TAKE_PTR(cpuset);
+-                settings->cpuset_ncpus = (unsigned) ncpus;
+-                return 0;
+-        }
+-
+-        if (settings->cpuset_ncpus < (unsigned) ncpus) {
+-                CPU_OR_S(CPU_ALLOC_SIZE(settings->cpuset_ncpus), cpuset, settings->cpuset, cpuset);
+-                CPU_FREE(settings->cpuset);
+-                settings->cpuset = TAKE_PTR(cpuset);
+-                settings->cpuset_ncpus = (unsigned) ncpus;
+-                return 0;
+-        }
+-
+-        CPU_OR_S(CPU_ALLOC_SIZE((unsigned) ncpus), settings->cpuset, settings->cpuset, cpuset);
+-
+-        return 0;
++        return parse_cpu_set_extend(rvalue, &settings->cpu_set, true, unit, filename, line, lvalue);
+ }
+ 
+ DEFINE_CONFIG_PARSE_ENUM(config_parse_resolv_conf, resolv_conf_mode, ResolvConfMode, "Failed to parse resolv.conf mode");
+diff --git a/src/nspawn/nspawn-settings.h b/src/nspawn/nspawn-settings.h
+index d522f3cb36..da863ef11c 100644
+--- a/src/nspawn/nspawn-settings.h
++++ b/src/nspawn/nspawn-settings.h
+@@ -7,6 +7,7 @@
+ #include "sd-id128.h"
+ 
+ #include "conf-parser.h"
++#include "cpu-set-util.h"
+ #include "macro.h"
+ #include "nspawn-expose-ports.h"
+ #include "nspawn-mount.h"
+@@ -123,8 +124,7 @@ typedef struct Settings {
+         int no_new_privileges;
+         int oom_score_adjust;
+         bool oom_score_adjust_set;
+-        cpu_set_t *cpuset;
+-        unsigned cpuset_ncpus;
++        CPUSet cpu_set;
+         ResolvConfMode resolv_conf;
+         LinkJournal link_journal;
+         bool link_journal_try;
+diff --git a/src/nspawn/nspawn.c b/src/nspawn/nspawn.c
+index b40411dcd0..08255b5724 100644
+--- a/src/nspawn/nspawn.c
++++ b/src/nspawn/nspawn.c
+@@ -199,8 +199,7 @@ static struct rlimit *arg_rlimit[_RLIMIT_MAX] = {};
+ static bool arg_no_new_privileges = false;
+ static int arg_oom_score_adjust = 0;
+ static bool arg_oom_score_adjust_set = false;
+-static cpu_set_t *arg_cpuset = NULL;
+-static unsigned arg_cpuset_ncpus = 0;
++static CPUSet arg_cpu_set = {};
+ static ResolvConfMode arg_resolv_conf = RESOLV_CONF_AUTO;
+ static TimezoneMode arg_timezone = TIMEZONE_AUTO;
+ 
+@@ -1186,17 +1185,14 @@ static int parse_argv(int argc, char *argv[]) {
+                         break;
+ 
+                 case ARG_CPU_AFFINITY: {
+-                        _cleanup_cpu_free_ cpu_set_t *cpuset = NULL;
++                        CPUSet cpuset;
+ 
+                         r = parse_cpu_set(optarg, &cpuset);
+                         if (r < 0)
+-                                return log_error_errno(r, "Failed to parse CPU affinity mask: %s", optarg);
++                                return log_error_errno(r, "Failed to parse CPU affinity mask %s: %m", optarg);
+ 
+-                        if (arg_cpuset)
+-                                CPU_FREE(arg_cpuset);
+-
+-                        arg_cpuset = TAKE_PTR(cpuset);
+-                        arg_cpuset_ncpus = r;
++                        cpu_set_reset(&arg_cpu_set);
++                        arg_cpu_set = cpuset;
+                         arg_settings_mask |= SETTING_CPU_AFFINITY;
+                         break;
+                 }
+@@ -2631,8 +2627,8 @@ static int inner_child(
+                         return log_error_errno(r, "Failed to adjust OOM score: %m");
+         }
+ 
+-        if (arg_cpuset)
+-                if (sched_setaffinity(0, CPU_ALLOC_SIZE(arg_cpuset_ncpus), arg_cpuset) < 0)
++        if (arg_cpu_set.set)
++                if (sched_setaffinity(0, arg_cpu_set.allocated, arg_cpu_set.set) < 0)
+                         return log_error_errno(errno, "Failed to set CPU affinity: %m");
+ 
+         r = drop_capabilities();
+@@ -3494,15 +3490,14 @@ static int merge_settings(Settings *settings, const char *path) {
+         }
+ 
+         if ((arg_settings_mask & SETTING_CPU_AFFINITY) == 0 &&
+-            settings->cpuset) {
++            settings->cpu_set.set) {
+ 
+                 if (!arg_settings_trusted)
+                         log_warning("Ignoring CPUAffinity= setting, file '%s' is not trusted.", path);
+                 else {
+-                        if (arg_cpuset)
+-                                CPU_FREE(arg_cpuset);
+-                        arg_cpuset = TAKE_PTR(settings->cpuset);
+-                        arg_cpuset_ncpus = settings->cpuset_ncpus;
++                        cpu_set_reset(&arg_cpu_set);
++                        arg_cpu_set = settings->cpu_set;
++                        settings->cpu_set = (CPUSet) {};
+                 }
+         }
+ 
+@@ -4600,7 +4595,7 @@ finish:
+         rlimit_free_all(arg_rlimit);
+         strv_free(arg_syscall_whitelist);
+         strv_free(arg_syscall_blacklist);
+-        arg_cpuset = cpu_set_mfree(arg_cpuset);
++        cpu_set_reset(&arg_cpu_set);
+ 
+         return r < 0 ? EXIT_FAILURE : ret;
+ }
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index 271cc054da..75b4aace84 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -932,13 +932,13 @@ static int bus_append_execute_property(sd_bus_message *m, const char *field, con
+         }
+ 
+         if (streq(field, "CPUAffinity")) {
+-                _cleanup_cpu_free_ cpu_set_t *cpuset = NULL;
++                _cleanup_(cpu_set_reset) CPUSet cpuset = {};
+ 
+                 r = parse_cpu_set(eq, &cpuset);
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to parse %s value: %s", field, eq);
+ 
+-                return bus_append_byte_array(m, field, cpuset, CPU_ALLOC_SIZE(r));
++                return bus_append_byte_array(m, field, cpuset.set, cpuset.allocated);
+         }
+ 
+         if (STR_IN_SET(field, "RestrictAddressFamilies", "SystemCallFilter")) {
+diff --git a/src/test/test-cpu-set-util.c b/src/test/test-cpu-set-util.c
+index ff5edb2a69..b9ec29af66 100644
+--- a/src/test/test-cpu-set-util.c
++++ b/src/test/test-cpu-set-util.c
+@@ -1,154 +1,171 @@
+ /* SPDX-License-Identifier: LGPL-2.1+ */
+ 
++#include <errno.h>
++
+ #include "alloc-util.h"
+ #include "cpu-set-util.h"
+ #include "macro.h"
+ 
+ static void test_parse_cpu_set(void) {
+-        cpu_set_t *c = NULL;
++        CPUSet c = {};
+         _cleanup_free_ char *str = NULL;
+-        int ncpus;
+         int cpu;
+ 
+         /* Simple range (from CPUAffinity example) */
+-        ncpus = parse_cpu_set_and_warn("1 2", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_ISSET_S(1, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(CPU_ISSET_S(2, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 2);
+-
+-        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++        assert_se(parse_cpu_set_full("1 2", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.set);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_ISSET_S(1, c.allocated, c.set));
++        assert_se(CPU_ISSET_S(2, c.allocated, c.set));
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 2);
++
++        assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+-        c = cpu_set_mfree(c);
++        cpu_set_reset(&c);
+ 
+         /* A more interesting range */
+-        ncpus = parse_cpu_set_and_warn("0 1 2 3 8 9 10 11", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 8);
++        assert_se(parse_cpu_set_full("0 1 2 3 8 9 10 11", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 8);
+         for (cpu = 0; cpu < 4; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
+         for (cpu = 8; cpu < 12; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
++        assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+-        c = cpu_set_mfree(c);
++        cpu_set_reset(&c);
+ 
+         /* Quoted strings */
+-        ncpus = parse_cpu_set_and_warn("8 '9' 10 \"11\"", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 4);
++        assert_se(parse_cpu_set_full("8 '9' 10 \"11\"", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 4);
+         for (cpu = 8; cpu < 12; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
++        assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+-        c = cpu_set_mfree(c);
++        cpu_set_reset(&c);
+ 
+         /* Use commas as separators */
+-        ncpus = parse_cpu_set_and_warn("0,1,2,3 8,9,10,11", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 8);
++        assert_se(parse_cpu_set_full("0,1,2,3 8,9,10,11", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 8);
+         for (cpu = 0; cpu < 4; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
+         for (cpu = 8; cpu < 12; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
++        assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+-        c = cpu_set_mfree(c);
++        cpu_set_reset(&c);
+ 
+         /* Commas with spaces (and trailing comma, space) */
+-        ncpus = parse_cpu_set_and_warn("0, 1, 2, 3, 4, 5, 6, 7, ", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 8);
++        assert_se(parse_cpu_set_full("0, 1, 2, 3, 4, 5, 6, 7, ", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 8);
+         for (cpu = 0; cpu < 8; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
++        assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+-        c = cpu_set_mfree(c);
++        cpu_set_reset(&c);
+ 
+         /* Ranges */
+-        ncpus = parse_cpu_set_and_warn("0-3,8-11", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 8);
++        assert_se(parse_cpu_set_full("0-3,8-11", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 8);
+         for (cpu = 0; cpu < 4; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
+         for (cpu = 8; cpu < 12; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
++        assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+-        c = cpu_set_mfree(c);
++        cpu_set_reset(&c);
+ 
+         /* Ranges with trailing comma, space */
+-        ncpus = parse_cpu_set_and_warn("0-3  8-11, ", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 8);
++        assert_se(parse_cpu_set_full("0-3  8-11, ", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 8);
+         for (cpu = 0; cpu < 4; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
+         for (cpu = 8; cpu < 12; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
++        assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+-        c = cpu_set_mfree(c);
++        cpu_set_reset(&c);
+ 
+         /* Negative range (returns empty cpu_set) */
+-        ncpus = parse_cpu_set_and_warn("3-0", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 0);
+-        c = cpu_set_mfree(c);
++        assert_se(parse_cpu_set_full("3-0", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 0);
++        cpu_set_reset(&c);
+ 
+         /* Overlapping ranges */
+-        ncpus = parse_cpu_set_and_warn("0-7 4-11", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 12);
++        assert_se(parse_cpu_set_full("0-7 4-11", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 12);
+         for (cpu = 0; cpu < 12; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
++        assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+-        c = cpu_set_mfree(c);
++        cpu_set_reset(&c);
+ 
+         /* Mix ranges and individual CPUs */
+-        ncpus = parse_cpu_set_and_warn("0,1 4-11", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus >= 1024);
+-        assert_se(CPU_COUNT_S(CPU_ALLOC_SIZE(ncpus), c) == 10);
+-        assert_se(CPU_ISSET_S(0, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(CPU_ISSET_S(1, CPU_ALLOC_SIZE(ncpus), c));
++        assert_se(parse_cpu_set_full("0,1 4-11", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 10);
++        assert_se(CPU_ISSET_S(0, c.allocated, c.set));
++        assert_se(CPU_ISSET_S(1, c.allocated, c.set));
+         for (cpu = 4; cpu < 12; cpu++)
+-                assert_se(CPU_ISSET_S(cpu, CPU_ALLOC_SIZE(ncpus), c));
+-        assert_se(str = cpu_set_to_string(c, CPU_ALLOC_SIZE(ncpus)));
++                assert_se(CPU_ISSET_S(cpu, c.allocated, c.set));
++        assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+-        c = cpu_set_mfree(c);
++        cpu_set_reset(&c);
+ 
+         /* Garbage */
+-        ncpus = parse_cpu_set_and_warn("0 1 2 3 garbage", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus < 0);
+-        assert_se(!c);
++        assert_se(parse_cpu_set_full("0 1 2 3 garbage", &c, true, NULL, "fake", 1, "CPUAffinity") == -EINVAL);
++        assert_se(!c.set);
++        assert_se(c.allocated == 0);
+ 
+         /* Range with garbage */
+-        ncpus = parse_cpu_set_and_warn("0-3 8-garbage", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus < 0);
+-        assert_se(!c);
++        assert_se(parse_cpu_set_full("0-3 8-garbage", &c, true, NULL, "fake", 1, "CPUAffinity") == -EINVAL);
++        assert_se(!c.set);
++        assert_se(c.allocated == 0);
+ 
+         /* Empty string */
+-        c = NULL;
+-        ncpus = parse_cpu_set_and_warn("", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus == 0);  /* empty string returns 0 */
+-        assert_se(!c);
++        assert_se(parse_cpu_set_full("", &c, true, NULL, "fake", 1, "CPUAffinity") == 0);
++        assert_se(!c.set);                /* empty string returns NULL */
++        assert_se(c.allocated == 0);
+ 
+         /* Runaway quoted string */
+-        ncpus = parse_cpu_set_and_warn("0 1 2 3 \"4 5 6 7 ", &c, NULL, "fake", 1, "CPUAffinity");
+-        assert_se(ncpus < 0);
+-        assert_se(!c);
++        assert_se(parse_cpu_set_full("0 1 2 3 \"4 5 6 7 ", &c, true, NULL, "fake", 1, "CPUAffinity") == -EINVAL);
++        assert_se(!c.set);
++        assert_se(c.allocated == 0);
++
++        /* Maximum allocation */
++        assert_se(parse_cpu_set_full("8000-8191", &c, true, NULL, "fake", 1, "CPUAffinity") == 0);
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 192);
++        assert_se(str = cpu_set_to_string(&c));
++        log_info("cpu_set_to_string: %s", str);
++        str = mfree(str);
++        cpu_set_reset(&c);
+ }
+ 
+ int main(int argc, char *argv[]) {
++        log_info("CPU_ALLOC_SIZE(1) = %zu", CPU_ALLOC_SIZE(1));
++        log_info("CPU_ALLOC_SIZE(9) = %zu", CPU_ALLOC_SIZE(9));
++        log_info("CPU_ALLOC_SIZE(64) = %zu", CPU_ALLOC_SIZE(64));
++        log_info("CPU_ALLOC_SIZE(65) = %zu", CPU_ALLOC_SIZE(65));
++        log_info("CPU_ALLOC_SIZE(1024) = %zu", CPU_ALLOC_SIZE(1024));
++        log_info("CPU_ALLOC_SIZE(1025) = %zu", CPU_ALLOC_SIZE(1025));
++        log_info("CPU_ALLOC_SIZE(8191) = %zu", CPU_ALLOC_SIZE(8191));
++
+         test_parse_cpu_set();
+ 
+         return 0;
+diff --git a/src/test/test-sizeof.c b/src/test/test-sizeof.c
+index 7a1e496ed2..396e68f35f 100644
+--- a/src/test/test-sizeof.c
++++ b/src/test/test-sizeof.c
+@@ -1,5 +1,6 @@
+ /* SPDX-License-Identifier: LGPL-2.1+ */
+ 
++#include <sched.h>
+ #include <stdio.h>
+ #include <string.h>
+ 
+@@ -64,6 +65,8 @@ int main(void) {
+         info(uid_t);
+         info(gid_t);
+ 
++        info(__cpu_mask);
++
+         info(enum Enum);
+         info(enum BigEnum);
+         info(enum BigEnum2);

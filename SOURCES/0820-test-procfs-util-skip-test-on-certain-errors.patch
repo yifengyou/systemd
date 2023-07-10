@@ -1,0 +1,75 @@
+From 33305c6801c10b741b11a3f329dc339d2e8c5514 Mon Sep 17 00:00:00 2001
+From: Lukas Nykryn <lnykryn@redhat.com>
+Date: Thu, 18 Aug 2022 16:35:23 +0200
+Subject: [PATCH] test-procfs-util: skip test on certain errors
+
+Inspired by upstream bf47f71c1c
+
+RHEL-only
+Related: #2087152
+---
+ src/shared/tests.c          | 12 ++++++++++++
+ src/shared/tests.h          |  2 ++
+ src/test/test-procfs-util.c |  6 ++++--
+ 3 files changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/src/shared/tests.c b/src/shared/tests.c
+index 1da80d653f..b1c71b992f 100644
+--- a/src/shared/tests.c
++++ b/src/shared/tests.c
+@@ -78,6 +78,18 @@ void test_setup_logging(int level) {
+         log_open();
+ }
+ 
++int log_tests_skipped(const char *message) {
++        log_notice("%s: %s, skipping tests.",
++                   program_invocation_short_name, message);
++        return EXIT_TEST_SKIP;
++}
++
++int log_tests_skipped_errno(int r, const char *message) {
++        log_notice_errno(r, "%s: %s, skipping tests: %m",
++                         program_invocation_short_name, message);
++        return EXIT_TEST_SKIP;
++}
++
+ const char *ci_environment(void) {
+         /* We return a string because we might want to provide multiple bits of information later on: not
+          * just the general CI environment type, but also whether we're sanitizing or not, etc. The caller is
+diff --git a/src/shared/tests.h b/src/shared/tests.h
+index 4f8f349097..d50711338c 100644
+--- a/src/shared/tests.h
++++ b/src/shared/tests.h
+@@ -5,6 +5,8 @@ char* setup_fake_runtime_dir(void);
+ bool test_is_running_from_builddir(char **exedir);
+ const char* get_testdata_dir(void);
+ void test_setup_logging(int level);
++int log_tests_skipped(const char *message);
++int log_tests_skipped_errno(int r, const char *message);
+ 
+ /* Provide a convenient way to check if we're running in CI. */
+ const char *ci_environment(void);
+diff --git a/src/test/test-procfs-util.c b/src/test/test-procfs-util.c
+index d656c4df4f..aba5692e54 100644
+--- a/src/test/test-procfs-util.c
++++ b/src/test/test-procfs-util.c
+@@ -7,6 +7,7 @@
+ #include "procfs-util.h"
+ #include "process-util.h"
+ #include "util.h"
++#include "tests.h"
+ 
+ int main(int argc, char *argv[]) {
+         char buf[CONST_MAX(FORMAT_TIMESPAN_MAX, FORMAT_BYTES_MAX)];
+@@ -52,8 +53,9 @@ int main(int argc, char *argv[]) {
+                 log_info("Reducing limit by one to %"PRIu64"…", v-1);
+ 
+                 r = procfs_tasks_set_limit(v-1);
+-                log_info_errno(r, "procfs_tasks_set_limit: %m");
+-                assert_se(r >= 0 || ERRNO_IS_PRIVILEGE(r) || r == -EROFS);
++                if (IN_SET(r, -ENOENT, -EROFS) || ERRNO_IS_PRIVILEGE(r))
++                        return log_tests_skipped_errno(r, "can't set tasks limit");
++                assert_se(r >= 0);
+ 
+                 assert_se(procfs_get_threads_max(&w) >= 0);
+                 assert_se(r >= 0 ? w == v - 1 : w == v);

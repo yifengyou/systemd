@@ -1,0 +1,45 @@
+From 3521217c88b364e2c5b10a1e35d3c036b1ecba64 Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Fri, 10 Aug 2018 12:55:09 +0000
+Subject: [PATCH] journald: take leading spaces into account in
+ syslog_parse_identifier
+
+This is a kind of follow-up to e88baee88fad8bc59d3 which should finally fix
+the issue which that commit was supposed to fix.
+
+(cherry picked from commit 937b1171378bc1000a34fcdfe9534d898227e35f)
+
+Resolves: #1764560
+---
+ src/journal/journald-syslog.c     | 3 ++-
+ src/journal/test-journal-syslog.c | 2 ++
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/journal/journald-syslog.c b/src/journal/journald-syslog.c
+index e0b55cc566..ae966763a0 100644
+--- a/src/journal/journald-syslog.c
++++ b/src/journal/journald-syslog.c
+@@ -223,8 +223,9 @@ size_t syslog_parse_identifier(const char **buf, char **identifier, char **pid)
+         if (p[e] != '\0' && strchr(WHITESPACE, p[e]))
+                 e++;
+ 
++        l = (p - *buf) + e;
+         *buf = p + e;
+-        return e;
++        return l;
+ }
+ 
+ static void syslog_skip_date(char **buf) {
+diff --git a/src/journal/test-journal-syslog.c b/src/journal/test-journal-syslog.c
+index 120477cc9f..415b9d23ca 100644
+--- a/src/journal/test-journal-syslog.c
++++ b/src/journal/test-journal-syslog.c
+@@ -41,6 +41,8 @@ int main(void) {
+         test_syslog_parse_identifier("  ", NULL, NULL, "  ", 0);
+         test_syslog_parse_identifier(":", "", NULL, "", 1);
+         test_syslog_parse_identifier(":  ", "", NULL, " ", 2);
++        test_syslog_parse_identifier(" :", "", NULL, "", 2);
++        test_syslog_parse_identifier("   pidu:", "pidu", NULL, "", 8);
+         test_syslog_parse_identifier("pidu:", "pidu", NULL, "", 5);
+         test_syslog_parse_identifier("pidu: ", "pidu", NULL, "", 6);
+         test_syslog_parse_identifier("pidu : ", NULL, NULL, "pidu : ", 0);

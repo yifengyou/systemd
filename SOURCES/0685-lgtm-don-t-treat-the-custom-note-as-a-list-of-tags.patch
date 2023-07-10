@@ -1,0 +1,40 @@
+From 6eeaef95566e6d85e714280c412e5df347838e34 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Thu, 2 Dec 2021 16:55:17 +0100
+Subject: [PATCH] lgtm: don't treat the custom note as a list of tags
+
+Just a cosmetic change.
+
+(cherry picked from commit c7d70210fa45c3210b8b1eda51bc0f6d68bd8392)
+
+Related: #2017033
+---
+ .lgtm/cpp-queries/PotentiallyDangerousFunction.ql | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql b/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
+index 865330430d..39e8dddd13 100644
+--- a/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
++++ b/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
+@@ -1,15 +1,17 @@
+ /**
++ * vi: sw=2 ts=2 et syntax=ql:
++ *
++ * Borrowed from
++ * https://github.com/Semmle/ql/blob/master/cpp/ql/src/Security/CWE/CWE-676/PotentiallyDangerousFunction.ql
++ *
+  * @name Use of potentially dangerous function
+  * @description Certain standard library functions are dangerous to call.
++ * @id cpp/potentially-dangerous-function
+  * @kind problem
+  * @problem.severity error
+  * @precision high
+- * @id cpp/potentially-dangerous-function
+  * @tags reliability
+  *       security
+- *
+- * Borrowed from
+- * https://github.com/Semmle/ql/blob/master/cpp/ql/src/Security/CWE/CWE-676/PotentiallyDangerousFunction.ql
+  */
+ import cpp
+ 

@@ -1,0 +1,142 @@
+From 6ffd3de2ccc5901974f292c9694829e25441060d Mon Sep 17 00:00:00 2001
+From: Bertrand Jacquin <bertrand@jacquin.bzh>
+Date: Sun, 11 Oct 2020 21:25:00 +0100
+Subject: [PATCH] virt: detect Amazon EC2 Nitro instance
+
+Amazon EC2 Nitro hypervisor is technically based on KVM[1], which
+systemd-detect-virt identify propely from CPUID. However the lack of
+CPUID on aarch64 (A1, T4 instance type) prevents a correct
+identification, impacting hostnamectl and systemd-random-seed. Instead
+it's possible to identify virtualization from DMI vendor ID.
+
+Prior to this commit:
+  # hostnamectl
+     Static hostname: n/a
+  Transient hostname: ip-10-97-8-12
+           Icon name: computer
+          Machine ID: 8e3772fbcfa3dd6f330a12ff5df5a63b
+             Boot ID: b7b7e2fe0079448db664839df59f9817
+    Operating System: Gentoo/Linux
+              Kernel: Linux 5.4.69-longterm
+        Architecture: arm64
+
+After this commit:
+  # hostnamectl
+     Static hostname: n/a
+  Transient hostname: ip-10-97-8-12
+           Icon name: computer-vm
+             Chassis: vm
+          Machine ID: 8e3772fbcfa3dd6f330a12ff5df5a63b
+             Boot ID: bd04da57084e41078f20541101867113
+      Virtualization: amazon
+    Operating System: Gentoo/Linux
+              Kernel: Linux 5.4.69-longterm
+        Architecture: arm64
+
+[1] https://aws.amazon.com/ec2/faqs/
+
+(cherry picked from commit b6eca3731dd92b009b182f188936e1c2544574da)
+
+Resolves: #2117948
+---
+ man/systemd-detect-virt.xml | 7 ++++++-
+ man/systemd.unit.xml        | 1 +
+ src/basic/virt.c            | 8 +++++---
+ src/basic/virt.h            | 1 +
+ src/test/test-condition.c   | 1 +
+ 5 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/man/systemd-detect-virt.xml b/man/systemd-detect-virt.xml
+index 6beb2c2aa1..61c210e24d 100644
+--- a/man/systemd-detect-virt.xml
++++ b/man/systemd-detect-virt.xml
+@@ -72,7 +72,12 @@
+ 
+           <row>
+             <entry><varname>kvm</varname></entry>
+-            <entry>Linux KVM kernel virtual machine, with whatever software, except Oracle Virtualbox</entry>
++            <entry>Linux KVM kernel virtual machine, in combination with QEMU. Not used for other virtualizers using the KVM interfaces, such as Oracle VirtualBox or Amazon EC2 Nitro, see below.</entry>
++          </row>
++
++          <row>
++            <entry><varname>amazon</varname></entry>
++            <entry>Amazon EC2 Nitro using Linux KVM</entry>
+           </row>
+ 
+           <row>
+diff --git a/man/systemd.unit.xml b/man/systemd.unit.xml
+index 6f213ccd56..5207a5bb3c 100644
+--- a/man/systemd.unit.xml
++++ b/man/systemd.unit.xml
+@@ -1068,6 +1068,7 @@
+         virtualization solution, or one of
+         <varname>qemu</varname>,
+         <varname>kvm</varname>,
++        <literal>amazon</literal>,
+         <varname>zvm</varname>,
+         <varname>vmware</varname>,
+         <varname>microsoft</varname>,
+diff --git a/src/basic/virt.c b/src/basic/virt.c
+index 8d862b6d67..78c68d66e0 100644
+--- a/src/basic/virt.c
++++ b/src/basic/virt.c
+@@ -147,6 +147,7 @@ static int detect_vm_dmi(void) {
+                 int id;
+         } dmi_vendor_table[] = {
+                 { "KVM",           VIRTUALIZATION_KVM       },
++                { "Amazon EC2",          VIRTUALIZATION_AMAZON    },
+                 { "QEMU",          VIRTUALIZATION_QEMU      },
+                 /* http://kb.vmware.com/selfservice/microsites/search.do?language=en_US&cmd=displayKC&externalId=1009458 */
+                 { "VMware",        VIRTUALIZATION_VMWARE    },
+@@ -339,8 +340,8 @@ int detect_vm(void) {
+ 
+         /* We have to use the correct order here:
+          *
+-         * → First, try to detect Oracle Virtualbox, even if it uses KVM, as well as Xen even if it cloaks as Microsoft
+-         *   Hyper-V.
++         * → First, try to detect Oracle Virtualbox and Amazon EC2 Nitro, even if they use KVM, as well as Xen even if
++         *   it cloaks as Microsoft Hyper-V.
+          *
+          * → Second, try to detect from CPUID, this will report KVM for whatever software is used even if info in DMI is
+          *   overwritten.
+@@ -348,7 +349,7 @@ int detect_vm(void) {
+          * → Third, try to detect from DMI. */
+ 
+         dmi = detect_vm_dmi();
+-        if (IN_SET(dmi, VIRTUALIZATION_ORACLE, VIRTUALIZATION_XEN)) {
++        if (IN_SET(dmi, VIRTUALIZATION_ORACLE, VIRTUALIZATION_XEN, VIRTUALIZATION_AMAZON)) {
+                 r = dmi;
+                 goto finish;
+         }
+@@ -631,6 +632,7 @@ int running_in_chroot(void) {
+ static const char *const virtualization_table[_VIRTUALIZATION_MAX] = {
+         [VIRTUALIZATION_NONE] = "none",
+         [VIRTUALIZATION_KVM] = "kvm",
++        [VIRTUALIZATION_AMAZON] = "amazon",
+         [VIRTUALIZATION_QEMU] = "qemu",
+         [VIRTUALIZATION_BOCHS] = "bochs",
+         [VIRTUALIZATION_XEN] = "xen",
+diff --git a/src/basic/virt.h b/src/basic/virt.h
+index 640b3ed779..ed4ff063e0 100644
+--- a/src/basic/virt.h
++++ b/src/basic/virt.h
+@@ -10,6 +10,7 @@ enum {
+ 
+         VIRTUALIZATION_VM_FIRST,
+         VIRTUALIZATION_KVM = VIRTUALIZATION_VM_FIRST,
++        VIRTUALIZATION_AMAZON,
+         VIRTUALIZATION_QEMU,
+         VIRTUALIZATION_BOCHS,
+         VIRTUALIZATION_XEN,
+diff --git a/src/test/test-condition.c b/src/test/test-condition.c
+index 24395dafc6..29ea63c4ff 100644
+--- a/src/test/test-condition.c
++++ b/src/test/test-condition.c
+@@ -510,6 +510,7 @@ static void test_condition_test_virtualization(void) {
+ 
+         NULSTR_FOREACH(virt,
+                        "kvm\0"
++                       "amazon\0"
+                        "qemu\0"
+                        "bochs\0"
+                        "xen\0"

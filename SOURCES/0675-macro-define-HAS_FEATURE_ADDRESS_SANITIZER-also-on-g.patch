@@ -1,0 +1,29 @@
+From 01da36fadd365329cfd9e2c97eb419c63404b25f Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 3 Dec 2018 17:30:19 +0100
+Subject: [PATCH] macro: define HAS_FEATURE_ADDRESS_SANITIZER also on gcc
+
+Let's make differences between compilers more minimal.
+
+(cherry picked from commit be5f77b26e22a806179c7b03e03d424682ed325c)
+
+Related: #2017033
+---
+ src/basic/macro.h | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/basic/macro.h b/src/basic/macro.h
+index 62f2359633..e87026882f 100644
+--- a/src/basic/macro.h
++++ b/src/basic/macro.h
+@@ -56,7 +56,9 @@
+ #endif
+ 
+ #if !defined(HAS_FEATURE_ADDRESS_SANITIZER)
+-#  if defined(__has_feature)
++#  ifdef __SANITIZE_ADDRESS__
++#      define HAS_FEATURE_ADDRESS_SANITIZER 1
++#  elif defined(__has_feature)
+ #    if __has_feature(address_sanitizer)
+ #      define HAS_FEATURE_ADDRESS_SANITIZER 1
+ #    endif

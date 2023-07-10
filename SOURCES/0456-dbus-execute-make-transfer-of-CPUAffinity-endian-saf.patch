@@ -1,0 +1,39 @@
+From 1730f7bb306e13689a7684fd93ae5b8383a28d2f Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekletar@users.noreply.github.com>
+Date: Fri, 31 May 2019 15:23:23 +0200
+Subject: [PATCH] dbus-execute: make transfer of CPUAffinity endian safe
+ (#12711)
+
+We store the affinity mask in the native endian. However, over D-Bus we
+must transfer the mask in little endian byte order.
+
+This is the second part of c367f996f5f091a63f812f0140b304c649be77fc.
+
+(cherry picked from commit 75e40119a471454516ad0acc96f6f4094e7fb652)
+
+Related: #1740657
+---
+ src/core/dbus-execute.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index f9527e56b2..d5acca384f 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -215,12 +215,15 @@ static int property_get_cpu_affinity(
+                 sd_bus_error *error) {
+ 
+         ExecContext *c = userdata;
++        _cleanup_free_ uint8_t *array = NULL;
++        size_t allocated;
+ 
+         assert(bus);
+         assert(reply);
+         assert(c);
+ 
+-        return sd_bus_message_append_array(reply, 'y', c->cpu_set.set, c->cpu_set.allocated);
++        (void) cpu_set_to_dbus(&c->cpu_set, &array, &allocated);
++        return sd_bus_message_append_array(reply, 'y', array, allocated);
+ }
+ 
+ static int property_get_numa_mask(

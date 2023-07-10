@@ -1,0 +1,21 @@
+From ffd20a699280a4732d0fe4cddafe12ee8010ddb6 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Wed, 13 Oct 2021 10:01:59 +0200
+Subject: [PATCH] Disable iptables for CI
+
+---
+ .github/workflows/unit_tests.sh | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/.github/workflows/unit_tests.sh b/.github/workflows/unit_tests.sh
+index def38bffe2..814870e7a0 100755
+--- a/.github/workflows/unit_tests.sh
++++ b/.github/workflows/unit_tests.sh
+@@ -92,7 +92,6 @@ SYSTEMD_BUILD_DEPS=(
+         gnutls-devel
+         gobject-introspection-devel
+         gperf
+-        iptables-devel
+         kmod-devel
+         libacl-devel
+         libblkid-devel

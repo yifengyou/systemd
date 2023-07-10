@@ -1,0 +1,258 @@
+From 2820f1706275acd787c72d9a57892200566f0bbe Mon Sep 17 00:00:00 2001
+From: Daan De Meyer <daan.j.demeyer@gmail.com>
+Date: Mon, 18 Oct 2021 14:17:02 +0200
+Subject: [PATCH] core: Propagate condition failed state to triggering units.
+
+Alternative to https://github.com/systemd/systemd/pull/20531.
+
+Whenever a service triggered by another unit fails condition checks,
+stop the triggering unit to prevent systemd busy looping trying to
+start the triggered unit.
+
+(cherry picked from commit 12ab94a1e4961a39c32efb60b71866ab588d3ea2)
+
+Resolves: #2065322
+---
+ src/core/automount.c | 14 ++++++++++----
+ src/core/automount.h |  1 +
+ src/core/path.c      | 16 +++++++++++-----
+ src/core/path.h      |  1 +
+ src/core/socket.c    | 28 +++++++++++++++++++---------
+ src/core/socket.h    |  1 +
+ src/core/timer.c     | 12 +++++++++---
+ src/core/timer.h     |  1 +
+ src/core/unit.c      | 10 ++++++++++
+ src/core/unit.h      |  2 ++
+ 10 files changed, 65 insertions(+), 21 deletions(-)
+
+diff --git a/src/core/automount.c b/src/core/automount.c
+index c1c513d4a5..bac3b2fab7 100644
+--- a/src/core/automount.c
++++ b/src/core/automount.c
+@@ -776,6 +776,11 @@ static void automount_enter_running(Automount *a) {
+                 goto fail;
+         }
+ 
++        if (unit_has_failed_condition_or_assert(trigger)) {
++                automount_enter_dead(a, AUTOMOUNT_FAILURE_MOUNT_CONDITION_FAILED);
++                return;
++        }
++
+         r = manager_add_job(UNIT(a)->manager, JOB_START, trigger, JOB_REPLACE, NULL, &error, NULL);
+         if (r < 0) {
+                 log_unit_warning(UNIT(a), "Failed to queue mount startup job: %s", bus_error_message(&error, r));
+@@ -1087,10 +1092,11 @@ static int automount_can_start(Unit *u) {
+ }
+ 
+ static const char* const automount_result_table[_AUTOMOUNT_RESULT_MAX] = {
+-        [AUTOMOUNT_SUCCESS] = "success",
+-        [AUTOMOUNT_FAILURE_RESOURCES] = "resources",
+-        [AUTOMOUNT_FAILURE_START_LIMIT_HIT] = "start-limit-hit",
+-        [AUTOMOUNT_FAILURE_MOUNT_START_LIMIT_HIT] = "mount-start-limit-hit",
++        [AUTOMOUNT_SUCCESS]                        = "success",
++        [AUTOMOUNT_FAILURE_RESOURCES]              = "resources",
++        [AUTOMOUNT_FAILURE_START_LIMIT_HIT]        = "start-limit-hit",
++        [AUTOMOUNT_FAILURE_MOUNT_START_LIMIT_HIT]  = "mount-start-limit-hit",
++        [AUTOMOUNT_FAILURE_MOUNT_CONDITION_FAILED] = "mount-condition-failed",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP(automount_result, AutomountResult);
+diff --git a/src/core/automount.h b/src/core/automount.h
+index 21dd1c0774..a7417d195c 100644
+--- a/src/core/automount.h
++++ b/src/core/automount.h
+@@ -10,6 +10,7 @@ typedef enum AutomountResult {
+         AUTOMOUNT_FAILURE_RESOURCES,
+         AUTOMOUNT_FAILURE_START_LIMIT_HIT,
+         AUTOMOUNT_FAILURE_MOUNT_START_LIMIT_HIT,
++        AUTOMOUNT_FAILURE_MOUNT_CONDITION_FAILED,
+         _AUTOMOUNT_RESULT_MAX,
+         _AUTOMOUNT_RESULT_INVALID = -1
+ } AutomountResult;
+diff --git a/src/core/path.c b/src/core/path.c
+index c2facf0b16..bf7e1bf3c2 100644
+--- a/src/core/path.c
++++ b/src/core/path.c
+@@ -453,7 +453,7 @@ static void path_enter_dead(Path *p, PathResult f) {
+         else
+                 unit_log_failure(UNIT(p), path_result_to_string(p->result));
+ 
+-        path_set_state(p, p->result != PATH_SUCCESS ? PATH_FAILED : PATH_DEAD);
++        path_set_state(p, p->result == PATH_SUCCESS ? PATH_DEAD : PATH_FAILED);
+ }
+ 
+ static void path_enter_running(Path *p) {
+@@ -711,6 +711,11 @@ static void path_trigger_notify(Unit *u, Unit *other) {
+                 return;
+         }
+ 
++        if (unit_has_failed_condition_or_assert(other)) {
++                path_enter_dead(p, PATH_FAILURE_UNIT_CONDITION_FAILED);
++                return;
++        }
++
+         /* Don't propagate anything if there's still a job queued */
+         if (other->job)
+                 return;
+@@ -763,10 +768,11 @@ static const char* const path_type_table[_PATH_TYPE_MAX] = {
+ DEFINE_STRING_TABLE_LOOKUP(path_type, PathType);
+ 
+ static const char* const path_result_table[_PATH_RESULT_MAX] = {
+-        [PATH_SUCCESS] = "success",
+-        [PATH_FAILURE_RESOURCES] = "resources",
+-        [PATH_FAILURE_START_LIMIT_HIT] = "start-limit-hit",
+-        [PATH_FAILURE_UNIT_START_LIMIT_HIT] = "unit-start-limit-hit",
++        [PATH_SUCCESS]                       = "success",
++        [PATH_FAILURE_RESOURCES]             = "resources",
++        [PATH_FAILURE_START_LIMIT_HIT]       = "start-limit-hit",
++        [PATH_FAILURE_UNIT_START_LIMIT_HIT]  = "unit-start-limit-hit",
++        [PATH_FAILURE_UNIT_CONDITION_FAILED] = "unit-condition-failed",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP(path_result, PathResult);
+diff --git a/src/core/path.h b/src/core/path.h
+index 8a69f06c13..0ad6bd12c6 100644
+--- a/src/core/path.h
++++ b/src/core/path.h
+@@ -46,6 +46,7 @@ typedef enum PathResult {
+         PATH_FAILURE_RESOURCES,
+         PATH_FAILURE_START_LIMIT_HIT,
+         PATH_FAILURE_UNIT_START_LIMIT_HIT,
++        PATH_FAILURE_UNIT_CONDITION_FAILED,
+         _PATH_RESULT_MAX,
+         _PATH_RESULT_INVALID = -1
+ } PathResult;
+diff --git a/src/core/socket.c b/src/core/socket.c
+index 74c1cc70cb..6f9a0f7575 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -2272,6 +2272,15 @@ static void socket_enter_running(Socket *s, int cfd) {
+                 goto refuse;
+         }
+ 
++        if (UNIT_ISSET(s->service) && cfd < 0) {
++                Unit *service = UNIT_DEREF(s->service);
++
++                if (unit_has_failed_condition_or_assert(service)) {
++                        socket_enter_dead(s, SOCKET_FAILURE_SERVICE_CONDITION_FAILED);
++                        return;
++                }
++        }
++
+         if (cfd < 0) {
+                 bool pending = false;
+                 Unit *other;
+@@ -3287,15 +3296,16 @@ static const char* const socket_exec_command_table[_SOCKET_EXEC_COMMAND_MAX] = {
+ DEFINE_STRING_TABLE_LOOKUP(socket_exec_command, SocketExecCommand);
+ 
+ static const char* const socket_result_table[_SOCKET_RESULT_MAX] = {
+-        [SOCKET_SUCCESS] = "success",
+-        [SOCKET_FAILURE_RESOURCES] = "resources",
+-        [SOCKET_FAILURE_TIMEOUT] = "timeout",
+-        [SOCKET_FAILURE_EXIT_CODE] = "exit-code",
+-        [SOCKET_FAILURE_SIGNAL] = "signal",
+-        [SOCKET_FAILURE_CORE_DUMP] = "core-dump",
+-        [SOCKET_FAILURE_START_LIMIT_HIT] = "start-limit-hit",
+-        [SOCKET_FAILURE_TRIGGER_LIMIT_HIT] = "trigger-limit-hit",
+-        [SOCKET_FAILURE_SERVICE_START_LIMIT_HIT] = "service-start-limit-hit"
++        [SOCKET_SUCCESS]                          = "success",
++        [SOCKET_FAILURE_RESOURCES]                = "resources",
++        [SOCKET_FAILURE_TIMEOUT]                  = "timeout",
++        [SOCKET_FAILURE_EXIT_CODE]                = "exit-code",
++        [SOCKET_FAILURE_SIGNAL]                   = "signal",
++        [SOCKET_FAILURE_CORE_DUMP]                = "core-dump",
++        [SOCKET_FAILURE_START_LIMIT_HIT]          = "start-limit-hit",
++        [SOCKET_FAILURE_TRIGGER_LIMIT_HIT]        = "trigger-limit-hit",
++        [SOCKET_FAILURE_SERVICE_START_LIMIT_HIT]  = "service-start-limit-hit",
++        [SOCKET_FAILURE_SERVICE_CONDITION_FAILED] = "service-condition-failed",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP(socket_result, SocketResult);
+diff --git a/src/core/socket.h b/src/core/socket.h
+index 2409dbf2a0..b171b94316 100644
+--- a/src/core/socket.h
++++ b/src/core/socket.h
+@@ -39,6 +39,7 @@ typedef enum SocketResult {
+         SOCKET_FAILURE_START_LIMIT_HIT,
+         SOCKET_FAILURE_TRIGGER_LIMIT_HIT,
+         SOCKET_FAILURE_SERVICE_START_LIMIT_HIT,
++        SOCKET_FAILURE_SERVICE_CONDITION_FAILED,
+         _SOCKET_RESULT_MAX,
+         _SOCKET_RESULT_INVALID = -1
+ } SocketResult;
+diff --git a/src/core/timer.c b/src/core/timer.c
+index 990f05fee4..3c8d89771d 100644
+--- a/src/core/timer.c
++++ b/src/core/timer.c
+@@ -567,6 +567,11 @@ static void timer_enter_running(Timer *t) {
+                 return;
+         }
+ 
++        if (unit_has_failed_condition_or_assert(trigger)) {
++                timer_enter_dead(t, TIMER_FAILURE_UNIT_CONDITION_FAILED);
++                return;
++        }
++
+         r = manager_add_job(UNIT(t)->manager, JOB_START, trigger, JOB_REPLACE, NULL, &error, NULL);
+         if (r < 0)
+                 goto fail;
+@@ -850,9 +855,10 @@ static const char* const timer_base_table[_TIMER_BASE_MAX] = {
+ DEFINE_STRING_TABLE_LOOKUP(timer_base, TimerBase);
+ 
+ static const char* const timer_result_table[_TIMER_RESULT_MAX] = {
+-        [TIMER_SUCCESS] = "success",
+-        [TIMER_FAILURE_RESOURCES] = "resources",
+-        [TIMER_FAILURE_START_LIMIT_HIT] = "start-limit-hit",
++        [TIMER_SUCCESS]                       = "success",
++        [TIMER_FAILURE_RESOURCES]             = "resources",
++        [TIMER_FAILURE_START_LIMIT_HIT]       = "start-limit-hit",
++        [TIMER_FAILURE_UNIT_CONDITION_FAILED] = "unit-condition-failed",
+ };
+ 
+ DEFINE_STRING_TABLE_LOOKUP(timer_result, TimerResult);
+diff --git a/src/core/timer.h b/src/core/timer.h
+index 833aadb0b8..d23e19d622 100644
+--- a/src/core/timer.h
++++ b/src/core/timer.h
+@@ -32,6 +32,7 @@ typedef enum TimerResult {
+         TIMER_SUCCESS,
+         TIMER_FAILURE_RESOURCES,
+         TIMER_FAILURE_START_LIMIT_HIT,
++        TIMER_FAILURE_UNIT_CONDITION_FAILED,
+         _TIMER_RESULT_MAX,
+         _TIMER_RESULT_INVALID = -1
+ } TimerResult;
+diff --git a/src/core/unit.c b/src/core/unit.c
+index b825e2418c..c00d30e837 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -5657,6 +5657,16 @@ int unit_thaw_vtable_common(Unit *u) {
+         return unit_cgroup_freezer_action(u, FREEZER_THAW);
+ }
+ 
++bool unit_has_failed_condition_or_assert(Unit *u) {
++        if (dual_timestamp_is_set(&u->condition_timestamp) && !u->condition_result)
++                return true;
++
++        if (dual_timestamp_is_set(&u->assert_timestamp) && !u->assert_result)
++                return true;
++
++        return false;
++}
++
+ static const char* const collect_mode_table[_COLLECT_MODE_MAX] = {
+         [COLLECT_INACTIVE] = "inactive",
+         [COLLECT_INACTIVE_OR_FAILED] = "inactive-or-failed",
+diff --git a/src/core/unit.h b/src/core/unit.h
+index b8b914711f..a924bd2e83 100644
+--- a/src/core/unit.h
++++ b/src/core/unit.h
+@@ -847,6 +847,8 @@ void unit_thawed(Unit *u);
+ int unit_freeze_vtable_common(Unit *u);
+ int unit_thaw_vtable_common(Unit *u);
+ 
++bool unit_has_failed_condition_or_assert(Unit *u);
++
+ /* Macros which append UNIT= or USER_UNIT= to the message */
+ 
+ #define log_unit_full(unit, level, error, ...)                          \

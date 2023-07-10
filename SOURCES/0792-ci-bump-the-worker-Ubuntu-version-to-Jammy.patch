@@ -1,0 +1,24 @@
+From 3a35fcaad4bb3831808280854eb84f68975279a1 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Tue, 19 Jul 2022 22:44:07 +0200
+Subject: [PATCH] ci: bump the worker Ubuntu version to Jammy
+
+rhel-only
+Related: #2087152
+---
+ .github/workflows/unit_tests.yml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/.github/workflows/unit_tests.yml b/.github/workflows/unit_tests.yml
+index 87b162fa71..f397e8ed6e 100644
+--- a/.github/workflows/unit_tests.yml
++++ b/.github/workflows/unit_tests.yml
+@@ -6,7 +6,7 @@ on: [pull_request]
+ 
+ jobs:
+   build:
+-    runs-on: ubuntu-20.04
++    runs-on: ubuntu-22.04
+     strategy:
+       fail-fast: false
+       matrix:

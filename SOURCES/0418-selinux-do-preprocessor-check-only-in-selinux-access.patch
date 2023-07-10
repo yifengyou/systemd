@@ -1,0 +1,39 @@
+From 7301b170b266225f091e95ff52b3a95ff9776d13 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Fri, 3 Apr 2020 09:13:59 +0200
+Subject: [PATCH] selinux: do preprocessor check only in selinux-access.c
+
+This has the advantage that mac_selinux_access_check() can be used as a
+function in all contexts. For example, parameters passed to it won't be
+reported as unused if the "function" call is replaced with 0 on SELinux
+disabled builds.
+
+(cherry picked from commit 08deac6e3e9119aeb966375f94695e4aa14ffb1c)
+
+Related: #1830861
+---
+ src/core/selinux-access.h | 9 ---------
+ 1 file changed, 9 deletions(-)
+
+diff --git a/src/core/selinux-access.h b/src/core/selinux-access.h
+index 59f2e60c77..46a657a4b4 100644
+--- a/src/core/selinux-access.h
++++ b/src/core/selinux-access.h
+@@ -12,17 +12,8 @@
+ 
+ int mac_selinux_generic_access_check(sd_bus_message *message, const char *path, const char *permission, sd_bus_error *error);
+ 
+-#if HAVE_SELINUX
+-
+ #define mac_selinux_access_check(message, permission, error) \
+         mac_selinux_generic_access_check((message), NULL, (permission), (error))
+ 
+ #define mac_selinux_unit_access_check(unit, message, permission, error) \
+         mac_selinux_generic_access_check((message), unit_label_path(unit), (permission), (error))
+-
+-#else
+-
+-#define mac_selinux_access_check(message, permission, error) 0
+-#define mac_selinux_unit_access_check(unit, message, permission, error) 0
+-
+-#endif

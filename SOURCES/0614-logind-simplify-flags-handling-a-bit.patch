@@ -1,0 +1,72 @@
+From 6751217a032dd1a8e8ee324332f29786265f0ebe Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 2 Feb 2021 15:27:30 +0100
+Subject: [PATCH] logind: simplify flags handling a bit
+
+Let's split out the two codepaths a bit, and emphasize which ones it the
+new-style and which the old-style codepath, and let's clearly convert
+the params of the old-stye into the new style for further processing, so
+that the old style path is brief and isolated.
+
+No change in behaviour.
+
+Follow-up for: 8885fed4e3a52cf1bf105e42043203c485ed9d92
+
+(cherry picked from commit d3e99bc0c7f785dcf4e73cfed12f74002e73be5f)
+
+Related: #1269726
+---
+ src/login/logind-dbus.c | 30 ++++++++++++++++++------------
+ 1 file changed, 18 insertions(+), 12 deletions(-)
+
+diff --git a/src/login/logind-dbus.c b/src/login/logind-dbus.c
+index 0c43fbb3e0..ae9abc9bce 100644
+--- a/src/login/logind-dbus.c
++++ b/src/login/logind-dbus.c
+@@ -1776,8 +1776,8 @@ static int method_do_shutdown_or_sleep(
+                 bool with_flags,
+                 sd_bus_error *error) {
+ 
+-        int interactive = false, r;
+-        uint64_t flags = 0;
++        uint64_t flags;
++        int r;
+ 
+         assert(m);
+         assert(message);
+@@ -1785,19 +1785,25 @@ static int method_do_shutdown_or_sleep(
+         assert(w >= 0);
+         assert(w <= _INHIBIT_WHAT_MAX);
+ 
+-        if (with_flags)
++        if (with_flags) {
++                /* New style method: with flags parameter (and interactive bool in the bus message header) */
+                 r = sd_bus_message_read(message, "t", &flags);
+-        else
+-                r = sd_bus_message_read(message, "b", &interactive);
+-
+-        if (r < 0)
+-                return r;
++                if (r < 0)
++                        return r;
++                if ((flags & ~SD_LOGIND_SHUTDOWN_AND_SLEEP_FLAGS_PUBLIC) != 0)
++                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "Invalid flags parameter");
++        } else {
++                /* Old style method: no flags parameter, but interactive bool passed as boolean in
++                 * payload. Let's convert this argument to the new-style flags parameter for our internal
++                 * use. */
++                int interactive;
+ 
+-        if (with_flags && (flags & ~SD_LOGIND_SHUTDOWN_AND_SLEEP_FLAGS_PUBLIC))
+-                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS,
+-                                         "Invalid flags parameter");
++                r = sd_bus_message_read(message, "b", &interactive);
++                if (r < 0)
++                        return r;
+ 
+-        SET_FLAG(flags, SD_LOGIND_INTERACTIVE, interactive);
++                flags = interactive ? SD_LOGIND_INTERACTIVE : 0;
++        }
+ 
+         /* Don't allow multiple jobs being executed at the same time */
+         if (m->action_what)

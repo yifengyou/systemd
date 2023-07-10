@@ -1,0 +1,779 @@
+From a735699a8287c19e043b7d2fe9a387a3938e1e2f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Mon, 18 Nov 2019 12:50:11 +0100
+Subject: [PATCH] core: introduce NUMAPolicy and NUMAMask options
+
+Make possible to set NUMA allocation policy for manager. Manager's
+policy is by default inherited to all forked off processes. However, it
+is possible to override the policy on per-service basis. Currently we
+support, these policies: default, prefer, bind, interleave, local.
+See man 2 set_mempolicy for details on each policy.
+
+Overall NUMA policy actually consists of two parts. Policy itself and
+bitmask representing NUMA nodes where is policy effective. Node mask can
+be specified using related option, NUMAMask. Default mask can be
+overwritten on per-service level.
+
+(cherry-picked from commit fe9c54b2188e6cd23262a319f96b13215f2c5e9c)
+
+Resolves: #1734787
+---
+ man/systemd-system.conf.xml           | 19 ++++++
+ man/systemd.exec.xml                  | 28 +++++++++
+ meson.build                           |  4 ++
+ src/basic/cpu-set-util.c              | 91 +++++++++++++++++++++++++++
+ src/basic/cpu-set-util.h              | 28 +++++++++
+ src/basic/exit-status.c               |  3 +
+ src/basic/exit-status.h               |  1 +
+ src/basic/missing_syscall.h           | 43 +++++++++++++
+ src/core/dbus-execute.c               | 65 ++++++++++++++++++-
+ src/core/execute.c                    | 20 ++++++
+ src/core/execute.h                    |  1 +
+ src/core/load-fragment-gperf.gperf.m4 |  2 +
+ src/core/load-fragment.c              | 28 +++++++++
+ src/core/load-fragment.h              |  2 +
+ src/core/main.c                       | 27 ++++++++
+ src/core/system.conf.in               |  2 +
+ src/shared/bus-unit-util.c            | 28 +++++++++
+ src/systemctl/systemctl.c             | 18 +++++-
+ 18 files changed, 405 insertions(+), 5 deletions(-)
+
+diff --git a/man/systemd-system.conf.xml b/man/systemd-system.conf.xml
+index ab23779ec0..988c4e7665 100644
+--- a/man/systemd-system.conf.xml
++++ b/man/systemd-system.conf.xml
+@@ -132,6 +132,25 @@
+         anymore.</para></listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>NUMAPolicy=</varname></term>
++
++        <listitem><para>Configures the NUMA memory policy for the service manager and the default NUMA memory policy
++        for all forked off processes. Individual services may override the default policy with the
++        <varname>NUMAPolicy=</varname> setting in unit files, see
++        <citerefentry><refentrytitle>systemd.exec</refentrytitle><manvolnum>5</manvolnum></citerefentry>.</para></listitem>
++      </varlistentry>
++
++      <varlistentry>
++        <term><varname>NUMAMask=</varname></term>
++
++        <listitem><para>Configures the NUMA node mask that will be associated with the selected NUMA policy. Note that
++        <option>default</option> and <option>local</option> NUMA policies don't require explicit NUMA node mask and
++        value of the option can be empty. Similarly to <varname>NUMAPolicy=</varname>, value can be overriden
++        by individual services in unit files, see
++        <citerefentry><refentrytitle>systemd.exec</refentrytitle><manvolnum>5</manvolnum></citerefentry>.</para></listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>RuntimeWatchdogSec=</varname></term>
+         <term><varname>ShutdownWatchdogSec=</varname></term>
+diff --git a/man/systemd.exec.xml b/man/systemd.exec.xml
+index 342b8385bc..87fb8b34f4 100644
+--- a/man/systemd.exec.xml
++++ b/man/systemd.exec.xml
+@@ -710,6 +710,28 @@ CapabilityBoundingSet=~CAP_B CAP_C</programlisting>
+         details.</para></listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>NUMAPolicy=</varname></term>
++
++        <listitem><para>Controls the NUMA memory policy of the executed processes. Takes a policy type, one of:
++        <option>default</option>, <option>preferred</option>, <option>bind</option>, <option>interleave</option> and
++        <option>local</option>. A list of NUMA nodes that should be associated with the policy must be specified
++        in <varname>NUMAMask=</varname>. For more details on each policy please see,
++        <citerefentry><refentrytitle>set_mempolicy</refentrytitle><manvolnum>2</manvolnum></citerefentry>. For overall
++        overview of NUMA support in Linux see,
++        <citerefentry><refentrytitle>numa</refentrytitle><manvolnum>7</manvolnum></citerefentry>
++        </para></listitem>
++      </varlistentry>
++
++      <varlistentry>
++        <term><varname>NUMAMask=</varname></term>
++
++        <listitem><para>Controls the NUMA node list which will be applied alongside with selected NUMA policy.
++        Takes a list of NUMA nodes and has the same syntax as a list of CPUs for <varname>CPUAffinity=</varname>
++        option. Note that the list of NUMA nodes is not required for <option>default</option> and <option>local</option>
++        policies and for <option>preferred</option> policy we expect a single NUMA node.</para></listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>IOSchedulingClass=</varname></term>
+ 
+@@ -2709,6 +2731,12 @@ StandardInputData=SWNrIHNpdHplIGRhIHVuJyBlc3NlIEtsb3BzLAp1ZmYgZWVtYWwga2xvcHAncy
+             <entry><constant>EXIT_CONFIGURATION_DIRECTORY</constant></entry>
+             <entry>Failed to set up unit's configuration directory. See <varname>ConfigurationDirectory=</varname> above.</entry>
+           </row>
++          <row>
++            <entry>242</entry>
++            <entry><constant>EXIT_NUMA_POLICY</constant></entry>
++            <entry>Failed to set up unit's NUMA memory policy. See <varname>NUMAPolicy=</varname> and <varname>NUMAMask=</varname>above.</entry>
++          </row>
++
+         </tbody>
+       </tgroup>
+     </table>
+diff --git a/meson.build b/meson.build
+index 613a5133b6..fe82ca4ac2 100644
+--- a/meson.build
++++ b/meson.build
+@@ -501,6 +501,10 @@ foreach ident : [
+                                  #include <unistd.h>'''],
+         ['explicit_bzero' ,   '''#include <string.h>'''],
+         ['reallocarray',      '''#include <malloc.h>'''],
++        ['set_mempolicy',     '''#include <stdlib.h>
++                                 #include <unistd.h>'''],
++        ['get_mempolicy',     '''#include <stdlib.h>
++                                 #include <unistd.h>'''],
+ ]
+ 
+         have = cc.has_function(ident[0], prefix : ident[1], args : '-D_GNU_SOURCE')
+diff --git a/src/basic/cpu-set-util.c b/src/basic/cpu-set-util.c
+index 103b9703b3..36cb017ae7 100644
+--- a/src/basic/cpu-set-util.c
++++ b/src/basic/cpu-set-util.c
+@@ -10,11 +10,17 @@
+ 
+ #include "alloc-util.h"
+ #include "cpu-set-util.h"
++#include "dirent-util.h"
+ #include "extract-word.h"
++#include "fd-util.h"
+ #include "log.h"
+ #include "macro.h"
++#include "missing.h"
+ #include "parse-util.h"
++#include "stat-util.h"
+ #include "string-util.h"
++#include "string-table.h"
++#include "strv.h"
+ #include "util.h"
+ 
+ char* cpu_set_to_string(const CPUSet *a) {
+@@ -290,3 +296,88 @@ int cpu_set_from_dbus(const uint8_t *bits, size_t size, CPUSet *set) {
+         s = (CPUSet) {};
+         return 0;
+ }
++
++bool numa_policy_is_valid(const NUMAPolicy *policy) {
++        assert(policy);
++
++        if (!mpol_is_valid(numa_policy_get_type(policy)))
++                return false;
++
++        if (!policy->nodes.set &&
++            !IN_SET(numa_policy_get_type(policy), MPOL_DEFAULT, MPOL_LOCAL, MPOL_PREFERRED))
++                return false;
++
++        if (policy->nodes.set &&
++            numa_policy_get_type(policy) == MPOL_PREFERRED &&
++            CPU_COUNT_S(policy->nodes.allocated, policy->nodes.set) != 1)
++                return false;
++
++        return true;
++}
++
++static int numa_policy_to_mempolicy(const NUMAPolicy *policy, unsigned long *ret_maxnode, unsigned long **ret_nodes) {
++        unsigned node, bits = 0, ulong_bits;
++        _cleanup_free_ unsigned long *out = NULL;
++
++        assert(policy);
++        assert(ret_maxnode);
++        assert(ret_nodes);
++
++        if (IN_SET(numa_policy_get_type(policy), MPOL_DEFAULT, MPOL_LOCAL) ||
++            (numa_policy_get_type(policy) == MPOL_PREFERRED && !policy->nodes.set)) {
++                *ret_nodes = NULL;
++                *ret_maxnode = 0;
++                return 0;
++        }
++
++        bits = policy->nodes.allocated * 8;
++        ulong_bits = sizeof(unsigned long) * 8;
++
++        out = new0(unsigned long, DIV_ROUND_UP(policy->nodes.allocated, sizeof(unsigned long)));
++        if (!out)
++                return -ENOMEM;
++
++        /* We don't make any assumptions about internal type libc is using to store NUMA node mask.
++           Hence we need to convert the node mask to the representation expected by set_mempolicy() */
++        for (node = 0; node < bits; node++)
++                if (CPU_ISSET_S(node, policy->nodes.allocated, policy->nodes.set))
++                        out[node / ulong_bits] |= 1ul << (node % ulong_bits);
++
++        *ret_nodes = TAKE_PTR(out);
++        *ret_maxnode = bits + 1;
++        return 0;
++}
++
++int apply_numa_policy(const NUMAPolicy *policy) {
++        int r;
++        _cleanup_free_ unsigned long *nodes = NULL;
++        unsigned long maxnode;
++
++        assert(policy);
++
++        if (get_mempolicy(NULL, NULL, 0, 0, 0) < 0 && errno == ENOSYS)
++                return -EOPNOTSUPP;
++
++        if (!numa_policy_is_valid(policy))
++                return -EINVAL;
++
++        r = numa_policy_to_mempolicy(policy, &maxnode, &nodes);
++        if (r < 0)
++                return r;
++
++        r = set_mempolicy(numa_policy_get_type(policy), nodes, maxnode);
++        if (r < 0)
++                return -errno;
++
++        return 0;
++}
++
++static const char* const mpol_table[] = {
++        [MPOL_DEFAULT]    = "default",
++        [MPOL_PREFERRED]  = "preferred",
++        [MPOL_BIND]       = "bind",
++        [MPOL_INTERLEAVE] = "interleave",
++        [MPOL_LOCAL]      = "local",
++};
++
++DEFINE_STRING_TABLE_LOOKUP(mpol, int);
+diff --git a/src/basic/cpu-set-util.h b/src/basic/cpu-set-util.h
+index ec640b2ec9..295028cb54 100644
+--- a/src/basic/cpu-set-util.h
++++ b/src/basic/cpu-set-util.h
+@@ -8,6 +8,7 @@
+ #include <sched.h>
+ 
+ #include "macro.h"
++#include "missing.h"
+ 
+ /* This wraps the libc interface with a variable to keep the allocated size. */
+ typedef struct CPUSet {
+@@ -52,3 +53,30 @@ int cpu_set_to_dbus(const CPUSet *set, uint8_t **ret, size_t *allocated);
+ int cpu_set_from_dbus(const uint8_t *bits, size_t size, CPUSet *set);
+ 
+ int cpus_in_affinity_mask(void);
++
++static inline bool mpol_is_valid(int t) {
++        return t >= MPOL_DEFAULT && t <= MPOL_LOCAL;
++}
++
++typedef struct NUMAPolicy {
++        /* Always use numa_policy_get_type() to read the value */
++        int type;
++        CPUSet nodes;
++} NUMAPolicy;
++
++bool numa_policy_is_valid(const NUMAPolicy *p);
++
++static inline int numa_policy_get_type(const NUMAPolicy *p) {
++        return p->type < 0 ? (p->nodes.set ? MPOL_PREFERRED : -1) : p->type;
++}
++
++static inline void numa_policy_reset(NUMAPolicy *p) {
++        assert(p);
++        cpu_set_reset(&p->nodes);
++        p->type = -1;
++}
++
++int apply_numa_policy(const NUMAPolicy *policy);
++
++const char* mpol_to_string(int i) _const_;
++int mpol_from_string(const char *s) _pure_;
+diff --git a/src/basic/exit-status.c b/src/basic/exit-status.c
+index 21af8c4c71..0a7a53b73d 100644
+--- a/src/basic/exit-status.c
++++ b/src/basic/exit-status.c
+@@ -155,6 +155,9 @@ const char* exit_status_to_string(int status, ExitStatusLevel level) {
+ 
+                 case EXIT_CONFIGURATION_DIRECTORY:
+                         return "CONFIGURATION_DIRECTORY";
++
++                case EXIT_NUMA_POLICY:
++                        return "NUMA_POLICY";
+                 }
+         }
+ 
+diff --git a/src/basic/exit-status.h b/src/basic/exit-status.h
+index c41e8b82c3..dc284aacb1 100644
+--- a/src/basic/exit-status.h
++++ b/src/basic/exit-status.h
+@@ -69,6 +69,7 @@ enum {
+         EXIT_CACHE_DIRECTORY,
+         EXIT_LOGS_DIRECTORY, /* 240 */
+         EXIT_CONFIGURATION_DIRECTORY,
++        EXIT_NUMA_POLICY,
+ };
+ 
+ typedef enum ExitStatusLevel {
+diff --git a/src/basic/missing_syscall.h b/src/basic/missing_syscall.h
+index 93c60458bf..014dd2b326 100644
+--- a/src/basic/missing_syscall.h
++++ b/src/basic/missing_syscall.h
+@@ -428,3 +428,46 @@ static inline ssize_t missing_statx(int dfd, const char *filename, unsigned flag
+ 
+ #  define statx missing_statx
+ #endif
++
++#if !HAVE_SET_MEMPOLICY
++
++enum {
++        MPOL_DEFAULT,
++        MPOL_PREFERRED,
++        MPOL_BIND,
++        MPOL_INTERLEAVE,
++        MPOL_LOCAL,
++};
++
++static inline long missing_set_mempolicy(int mode, const unsigned long *nodemask,
++                           unsigned long maxnode) {
++        long i;
++#  ifdef __NR_set_mempolicy
++        i = syscall(__NR_set_mempolicy, mode, nodemask, maxnode);
++#  else
++        errno = ENOSYS;
++        i = -1;
++#  endif
++        return i;
++}
++
++#  define set_mempolicy missing_set_mempolicy
++#endif
++
++
++#if !HAVE_GET_MEMPOLICY
++static inline long missing_get_mempolicy(int *mode, unsigned long *nodemask,
++                           unsigned long maxnode, void *addr,
++                           unsigned long flags) {
++        long i;
++#  ifdef __NR_get_mempolicy
++        i = syscall(__NR_get_mempolicy, mode, nodemask, maxnode, addr, flags);
++#  else
++        errno = ENOSYS;
++        i = -1;
++#  endif
++        return i;
++}
++
++#define get_mempolicy missing_get_mempolicy
++#endif
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index 50ea71a281..198f149210 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -223,6 +223,48 @@ static int property_get_cpu_affinity(
+         return sd_bus_message_append_array(reply, 'y', c->cpu_set.set, c->cpu_set.allocated);
+ }
+ 
++static int property_get_numa_mask(
++                sd_bus *bus,
++                const char *path,
++                const char *interface,
++                const char *property,
++                sd_bus_message *reply,
++                void *userdata,
++                sd_bus_error *error) {
++
++        ExecContext *c = userdata;
++        _cleanup_free_ uint8_t *array = NULL;
++        size_t allocated;
++
++        assert(bus);
++        assert(reply);
++        assert(c);
++
++        (void) cpu_set_to_dbus(&c->numa_policy.nodes, &array, &allocated);
++
++        return sd_bus_message_append_array(reply, 'y', array, allocated);
++}
++
++static int property_get_numa_policy(
++                sd_bus *bus,
++                const char *path,
++                const char *interface,
++                const char *property,
++                sd_bus_message *reply,
++                void *userdata,
++                sd_bus_error *error) {
++        ExecContext *c = userdata;
++        int32_t policy;
++
++        assert(bus);
++        assert(reply);
++        assert(c);
++
++        policy = numa_policy_get_type(&c->numa_policy);
++
++        return sd_bus_message_append_basic(reply, 'i', &policy);
++}
++
+ static int property_get_timer_slack_nsec(
+                 sd_bus *bus,
+                 const char *path,
+@@ -698,6 +740,8 @@ const sd_bus_vtable bus_exec_vtable[] = {
+         SD_BUS_PROPERTY("CPUSchedulingPolicy", "i", property_get_cpu_sched_policy, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("CPUSchedulingPriority", "i", property_get_cpu_sched_priority, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("CPUAffinity", "ay", property_get_cpu_affinity, 0, SD_BUS_VTABLE_PROPERTY_CONST),
++        SD_BUS_PROPERTY("NUMAPolicy", "i", property_get_numa_policy, 0, SD_BUS_VTABLE_PROPERTY_CONST),
++        SD_BUS_PROPERTY("NUMAMask", "ay", property_get_numa_mask, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("TimerSlackNSec", "t", property_get_timer_slack_nsec, 0, SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("CPUSchedulingResetOnFork", "b", bus_property_get_bool, offsetof(ExecContext, cpu_sched_reset_on_fork), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("NonBlocking", "b", bus_property_get_bool, offsetof(ExecContext, non_blocking), SD_BUS_VTABLE_PROPERTY_CONST),
+@@ -1550,9 +1594,10 @@ int bus_exec_context_set_transient_property(
+                 return 1;
+         }
+ #endif
+-        if (streq(name, "CPUAffinity")) {
++        if (STR_IN_SET(name, "CPUAffinity", "NUMAMask")) {
+                 const void *a;
+                 size_t n;
++                bool affinity = streq(name, "CPUAffinity");
+                 _cleanup_(cpu_set_reset) CPUSet set = {};
+ 
+                 r = sd_bus_message_read_array(message, 'y', &a, &n);
+@@ -1565,7 +1610,7 @@ int bus_exec_context_set_transient_property(
+ 
+                 if (!UNIT_WRITE_FLAGS_NOOP(flags)) {
+                         if (n == 0) {
+-                                cpu_set_reset(&c->cpu_set);
++                                cpu_set_reset(affinity ? &c->cpu_set : &c->numa_policy.nodes);
+                                 unit_write_settingf(u, flags, name, "%s=", name);
+                         } else {
+                                 _cleanup_free_ char *str = NULL;
+@@ -1577,7 +1622,7 @@ int bus_exec_context_set_transient_property(
+                                 /* We forego any optimizations here, and always create the structure using
+                                  * cpu_set_add_all(), because we don't want to care if the existing size we
+                                  * got over dbus is appropriate. */
+-                                r = cpu_set_add_all(&c->cpu_set, &set);
++                                r = cpu_set_add_all(affinity ? &c->cpu_set : &c->numa_policy.nodes, &set);
+                                 if (r < 0)
+                                         return r;
+ 
+@@ -1587,6 +1632,20 @@ int bus_exec_context_set_transient_property(
+ 
+                 return 1;
+ 
++        } else if (streq(name, "NUMAPolicy")) {
++                int32_t type;
++
++                r = sd_bus_message_read(message, "i", &type);
++                if (r < 0)
++                        return r;
++
++                if (!mpol_is_valid(type))
++                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "Invalid NUMAPolicy value: %i", type);
++
++                if (!UNIT_WRITE_FLAGS_NOOP(flags))
++                        c->numa_policy.type = type;
++
++                return 1;
+         } else if (streq(name, "IOSchedulingClass")) {
+                 int32_t q;
+ 
+diff --git a/src/core/execute.c b/src/core/execute.c
+index bc26aa66e7..56aa89e1ec 100644
+--- a/src/core/execute.c
++++ b/src/core/execute.c
+@@ -2997,6 +2997,16 @@ static int exec_child(
+                         return log_unit_error_errno(unit, errno, "Failed to set up CPU affinity: %m");
+                 }
+ 
++        if (mpol_is_valid(numa_policy_get_type(&context->numa_policy))) {
++                r = apply_numa_policy(&context->numa_policy);
++                if (r == -EOPNOTSUPP)
++                        log_unit_debug_errno(unit, r, "NUMA support not available, ignoring.");
++                else if (r < 0) {
++                        *exit_status = EXIT_NUMA_POLICY;
++                        return log_unit_error_errno(unit, r, "Failed to set NUMA memory policy: %m");
++                }
++        }
++
+         if (context->ioprio_set)
+                 if (ioprio_set(IOPRIO_WHO_PROCESS, 0, context->ioprio) < 0) {
+                         *exit_status = EXIT_IOPRIO;
+@@ -3651,6 +3661,7 @@ void exec_context_init(ExecContext *c) {
+         assert_cc(NAMESPACE_FLAGS_INITIAL != NAMESPACE_FLAGS_ALL);
+         c->restrict_namespaces = NAMESPACE_FLAGS_INITIAL;
+         c->log_level_max = -1;
++        numa_policy_reset(&c->numa_policy);
+ }
+ 
+ void exec_context_done(ExecContext *c) {
+@@ -3695,6 +3706,7 @@ void exec_context_done(ExecContext *c) {
+         c->n_temporary_filesystems = 0;
+ 
+         cpu_set_reset(&c->cpu_set);
++        numa_policy_reset(&c->numa_policy);
+ 
+         c->utmp_id = mfree(c->utmp_id);
+         c->selinux_context = mfree(c->selinux_context);
+@@ -4104,6 +4116,14 @@ void exec_context_dump(const ExecContext *c, FILE* f, const char *prefix) {
+                 fprintf(f, "%sCPUAffinity: %s\n", prefix, affinity);
+         }
+ 
++        if (mpol_is_valid(numa_policy_get_type(&c->numa_policy))) {
++                _cleanup_free_ char *nodes = NULL;
++
++                nodes = cpu_set_to_range_string(&c->numa_policy.nodes);
++                fprintf(f, "%sNUMAPolicy: %s\n", prefix, mpol_to_string(numa_policy_get_type(&c->numa_policy)));
++                fprintf(f, "%sNUMAMask: %s\n", prefix, strnull(nodes));
++        }
++
+         if (c->timer_slack_nsec != NSEC_INFINITY)
+                 fprintf(f, "%sTimerSlackNSec: "NSEC_FMT "\n", prefix, c->timer_slack_nsec);
+ 
+diff --git a/src/core/execute.h b/src/core/execute.h
+index e1e7a494cd..b2eb55f8f5 100644
+--- a/src/core/execute.h
++++ b/src/core/execute.h
+@@ -150,6 +150,7 @@ struct ExecContext {
+         int cpu_sched_priority;
+ 
+         CPUSet cpu_set;
++        NUMAPolicy numa_policy;
+ 
+         ExecInput std_input;
+         ExecOutput std_output;
+diff --git a/src/core/load-fragment-gperf.gperf.m4 b/src/core/load-fragment-gperf.gperf.m4
+index 1066bcfb8f..cdf4d14c4e 100644
+--- a/src/core/load-fragment-gperf.gperf.m4
++++ b/src/core/load-fragment-gperf.gperf.m4
+@@ -36,6 +36,8 @@ $1.CPUSchedulingPolicy,          config_parse_exec_cpu_sched_policy, 0,
+ $1.CPUSchedulingPriority,        config_parse_exec_cpu_sched_prio,   0,                             offsetof($1, exec_context)
+ $1.CPUSchedulingResetOnFork,     config_parse_bool,                  0,                             offsetof($1, exec_context.cpu_sched_reset_on_fork)
+ $1.CPUAffinity,                  config_parse_exec_cpu_affinity,     0,                             offsetof($1, exec_context)
++$1.NUMAPolicy,                   config_parse_numa_policy,           0,                             offsetof($1, exec_context.numa_policy.type)
++$1.NUMAMask,                     config_parse_numa_mask,             0,                             offsetof($1, exec_context.numa_policy)
+ $1.UMask,                        config_parse_mode,                  0,                             offsetof($1, exec_context.umask)
+ $1.Environment,                  config_parse_environ,               0,                             offsetof($1, exec_context.environment)
+ $1.EnvironmentFile,              config_parse_unit_env_file,         0,                             offsetof($1, exec_context.environment_files)
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index 34ae834188..35dd595098 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -93,6 +93,7 @@ DEFINE_CONFIG_PARSE_PTR(config_parse_blockio_weight, cg_blkio_weight_parse, uint
+ DEFINE_CONFIG_PARSE_PTR(config_parse_cg_weight, cg_weight_parse, uint64_t, "Invalid weight");
+ DEFINE_CONFIG_PARSE_PTR(config_parse_cpu_shares, cg_cpu_shares_parse, uint64_t, "Invalid CPU shares");
+ DEFINE_CONFIG_PARSE_PTR(config_parse_exec_mount_flags, mount_propagation_flags_from_string, unsigned long, "Failed to parse mount flag");
++DEFINE_CONFIG_PARSE_ENUM_WITH_DEFAULT(config_parse_numa_policy, mpol, int, -1, "Invalid NUMA policy type");
+ 
+ int config_parse_unit_deps(
+                 const char *unit,
+@@ -1159,6 +1160,33 @@ int config_parse_exec_cpu_sched_policy(const char *unit,
+         return 0;
+ }
+ 
++int config_parse_numa_mask(const char *unit,
++                           const char *filename,
++                           unsigned line,
++                           const char *section,
++                           unsigned section_line,
++                           const char *lvalue,
++                           int ltype,
++                           const char *rvalue,
++                           void *data,
++                           void *userdata) {
++        int r;
++        NUMAPolicy *p = data;
++
++        assert(filename);
++        assert(lvalue);
++        assert(rvalue);
++        assert(data);
++
++        r = parse_cpu_set_extend(rvalue, &p->nodes, true, unit, filename, line, lvalue);
++        if (r < 0) {
++                log_syntax(unit, LOG_ERR, filename, line, r, "Failed to parse NUMA node mask, ignoring: %s", rvalue);
++                return 0;
++        }
++
++        return r;
++}
++
+ int config_parse_exec_cpu_sched_prio(const char *unit,
+                                      const char *filename,
+                                      unsigned line,
+diff --git a/src/core/load-fragment.h b/src/core/load-fragment.h
+index dad281ef72..f2ca1b8ee7 100644
+--- a/src/core/load-fragment.h
++++ b/src/core/load-fragment.h
+@@ -102,6 +102,8 @@ CONFIG_PARSER_PROTOTYPE(config_parse_job_timeout_sec);
+ CONFIG_PARSER_PROTOTYPE(config_parse_job_running_timeout_sec);
+ CONFIG_PARSER_PROTOTYPE(config_parse_log_extra_fields);
+ CONFIG_PARSER_PROTOTYPE(config_parse_collect_mode);
++CONFIG_PARSER_PROTOTYPE(config_parse_numa_policy);
++CONFIG_PARSER_PROTOTYPE(config_parse_numa_mask);
+ 
+ /* gperf prototypes */
+ const struct ConfigPerfItem* load_fragment_gperf_lookup(const char *key, GPERF_LEN_TYPE length);
+diff --git a/src/core/main.c b/src/core/main.c
+index c74dc641c1..83f9dd5878 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -134,6 +134,7 @@ static uint64_t arg_default_tasks_max;
+ static sd_id128_t arg_machine_id;
+ static EmergencyAction arg_cad_burst_action;
+ static CPUSet arg_cpu_affinity;
++static NUMAPolicy arg_numa_policy;
+ 
+ static int parse_configuration(void);
+ 
+@@ -660,6 +661,8 @@ static int parse_config_file(void) {
+                 { "Manager", "ShowStatus",                config_parse_show_status,      0, &arg_show_status                       },
+                 { "Manager", "CPUAffinity",               config_parse_cpu_affinity2,    0, &arg_cpu_affinity                      },
+                 { "Manager", "JoinControllers",           config_parse_join_controllers, 0, &arg_join_controllers                  },
++                { "Manager", "NUMAPolicy",                config_parse_numa_policy,      0, &arg_numa_policy.type                  },
++                { "Manager", "NUMAMask",                  config_parse_numa_mask,        0, &arg_numa_policy                       },
+                 { "Manager", "RuntimeWatchdogSec",        config_parse_sec,              0, &arg_runtime_watchdog                  },
+                 { "Manager", "ShutdownWatchdogSec",       config_parse_sec,              0, &arg_shutdown_watchdog                 },
+                 { "Manager", "WatchdogDevice",            config_parse_path,             0, &arg_watchdog_device                   },
+@@ -1501,6 +1504,27 @@ static void update_cpu_affinity(bool skip_setup) {
+                 log_warning_errno(errno, "Failed to set CPU affinity: %m");
+ }
+ 
++static void update_numa_policy(bool skip_setup) {
++        int r;
++        _cleanup_free_ char *nodes = NULL;
++        const char * policy = NULL;
++
++        if (skip_setup || !mpol_is_valid(numa_policy_get_type(&arg_numa_policy)))
++                return;
++
++        if (DEBUG_LOGGING) {
++                policy = mpol_to_string(numa_policy_get_type(&arg_numa_policy));
++                nodes = cpu_set_to_range_string(&arg_numa_policy.nodes);
++                log_debug("Setting NUMA policy to %s, with nodes %s.", strnull(policy), strnull(nodes));
++        }
++
++        r = apply_numa_policy(&arg_numa_policy);
++        if (r == -EOPNOTSUPP)
++                log_debug_errno(r, "NUMA support not available, ignoring.");
++        else if (r < 0)
++                log_warning_errno(r, "Failed to set NUMA memory policy: %m");
++}
++
+ static void do_reexecute(
+                 int argc,
+                 char *argv[],
+@@ -1672,6 +1696,7 @@ static int invoke_main_loop(
+                         set_manager_defaults(m);
+ 
+                         update_cpu_affinity(false);
++                        update_numa_policy(false);
+ 
+                         if (saved_log_level >= 0)
+                                 manager_override_log_level(m, saved_log_level);
+@@ -1832,6 +1857,7 @@ static int initialize_runtime(
+                 return 0;
+ 
+         update_cpu_affinity(skip_setup);
++        update_numa_policy(skip_setup);
+ 
+         if (arg_system) {
+                 /* Make sure we leave a core dump without panicing the kernel. */
+@@ -2011,6 +2037,7 @@ static void reset_arguments(void) {
+         arg_cad_burst_action = EMERGENCY_ACTION_REBOOT_FORCE;
+ 
+         cpu_set_reset(&arg_cpu_affinity);
++        numa_policy_reset(&arg_numa_policy);
+ }
+ 
+ static int parse_configuration(void) {
+diff --git a/src/core/system.conf.in b/src/core/system.conf.in
+index 653ec6b8c9..0d93fbf147 100644
+--- a/src/core/system.conf.in
++++ b/src/core/system.conf.in
+@@ -24,6 +24,8 @@
+ #CtrlAltDelBurstAction=reboot-force
+ #CPUAffinity=1 2
+ #JoinControllers=cpu,cpuacct net_cls,net_prio
++#NUMAPolicy=default
++#NUMAMask=
+ #RuntimeWatchdogSec=0
+ #ShutdownWatchdogSec=10min
+ #CapabilityBoundingSet=
+diff --git a/src/shared/bus-unit-util.c b/src/shared/bus-unit-util.c
+index ec8732c226..055edd6e22 100644
+--- a/src/shared/bus-unit-util.c
++++ b/src/shared/bus-unit-util.c
+@@ -947,6 +947,34 @@ static int bus_append_execute_property(sd_bus_message *m, const char *field, con
+                 return bus_append_byte_array(m, field, array, allocated);
+         }
+ 
++        if (streq(field, "NUMAPolicy")) {
++                r = mpol_from_string(eq);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to parse %s value: %s", field, eq);
++
++                r = sd_bus_message_append(m, "(sv)", field, "i", (int32_t) r);
++                if (r < 0)
++                        return bus_log_create_error(r);
++
++                return 1;
++        }
++
++        if (streq(field, "NUMAMask")) {
++                _cleanup_(cpu_set_reset) CPUSet nodes = {};
++                _cleanup_free_ uint8_t *array = NULL;
++                size_t allocated;
++
++                r = parse_cpu_set(eq, &nodes);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to parse %s value: %s", field, eq);
++
++                r = cpu_set_to_dbus(&nodes, &array, &allocated);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to serialize NUMAMask: %m");
++
++                return bus_append_byte_array(m, field, array, allocated);
++        }
++
+         if (STR_IN_SET(field, "RestrictAddressFamilies", "SystemCallFilter")) {
+                 int whitelist = 1;
+                 const char *p = eq;
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index 0154b300a3..7274921e6d 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -4573,6 +4573,20 @@ static int print_property(const char *name, sd_bus_message *m, bool value, bool
+ 
+         switch (bus_type) {
+ 
++        case SD_BUS_TYPE_INT32:
++                if (streq(name, "NUMAPolicy")) {
++                        int32_t i;
++
++                        r = sd_bus_message_read_basic(m, bus_type, &i);
++                        if (r < 0)
++                                return r;
++
++                        print_prop(name, "%s", strna(mpol_to_string(i)));
++
++                        return 1;
++                }
++                break;
++
+         case SD_BUS_TYPE_STRUCT:
+ 
+                 if (contents[0] == SD_BUS_TYPE_UINT32 && streq(name, "Job")) {
+@@ -4878,7 +4892,7 @@ static int print_property(const char *name, sd_bus_message *m, bool value, bool
+                         print_prop(name, "%s", h);
+ 
+                         return 1;
+-                } else if (contents[0] == SD_BUS_TYPE_BYTE && streq(name, "CPUAffinity")) {
++                } else if (contents[0] == SD_BUS_TYPE_BYTE && STR_IN_SET(name, "CPUAffinity", "NUMAMask")) {
+                         _cleanup_free_ char *affinity = NULL;
+                         _cleanup_(cpu_set_reset) CPUSet set = {};
+                         const void *a;
+@@ -4890,7 +4904,7 @@ static int print_property(const char *name, sd_bus_message *m, bool value, bool
+ 
+                         r = cpu_set_from_dbus(a, n, &set);
+                         if (r < 0)
+-                                return log_error_errno(r, "Failed to deserialize CPUAffinity: %m");
++                                return log_error_errno(r, "Failed to deserialize %s: %m", name);
+ 
+                         affinity = cpu_set_to_range_string(&set);
+                         if (!affinity)

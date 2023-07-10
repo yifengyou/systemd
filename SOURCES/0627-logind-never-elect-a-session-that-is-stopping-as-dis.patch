@@ -1,0 +1,42 @@
+From 35f9a7f8f4e8917725349fe764706658c02537ca Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 6 Aug 2018 19:02:29 +0200
+Subject: [PATCH] logind: never elect a session that is stopping as display
+
+(cherry picked from commit 04857cd801022d9f9933efb484c6253572f09870)
+
+Related: #1642460
+---
+ src/login/logind-user.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index 35b2ca5489..3e4c99bdbd 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -613,11 +613,10 @@ int user_kill(User *u, int signo) {
+ }
+ 
+ static bool elect_display_filter(Session *s) {
+-        /* Return true if the session is a candidate for the user’s ‘primary
+-         * session’ or ‘display’. */
++        /* Return true if the session is a candidate for the user’s ‘primary session’ or ‘display’. */
+         assert(s);
+ 
+-        return (s->class == SESSION_USER && !s->stopping);
++        return s->class == SESSION_USER && s->started && !s->stopping;
+ }
+ 
+ static int elect_display_compare(Session *s1, Session *s2) {
+@@ -663,9 +662,8 @@ void user_elect_display(User *u) {
+ 
+         assert(u);
+ 
+-        /* This elects a primary session for each user, which we call
+-         * the "display". We try to keep the assignment stable, but we
+-         * "upgrade" to better choices. */
++        /* This elects a primary session for each user, which we call the "display". We try to keep the assignment
++         * stable, but we "upgrade" to better choices. */
+         log_debug("Electing new display for user %s", u->name);
+ 
+         LIST_FOREACH(sessions_by_user, s, u->sessions) {

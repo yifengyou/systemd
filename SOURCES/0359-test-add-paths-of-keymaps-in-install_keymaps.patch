@@ -1,0 +1,34 @@
+From 1599be6d3625700ded28108c0747b000448fa5dc Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Wed, 19 Sep 2018 10:54:16 +0900
+Subject: [PATCH] test: add paths of keymaps in install_keymaps()
+
+It seems that the paths of directories storing keymaps are changed.
+
+(cherry picked from commit 83a7051ee1edbfe8cd2278477d23083beb385409)
+
+Resolves: #1823767
+---
+ test/test-functions | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/test/test-functions b/test/test-functions
+index 4d76ed1f82..546928c516 100644
+--- a/test/test-functions
++++ b/test/test-functions
+@@ -619,10 +619,14 @@ install_pam() {
+ }
+ 
+ install_keymaps() {
++    # The first three paths may be deprecated.
++    # It seems now the last two paths are used by many distributions.
+     for i in \
+         /usr/lib/kbd/keymaps/include/* \
+         /usr/lib/kbd/keymaps/i386/include/* \
+-        /usr/lib/kbd/keymaps/i386/qwerty/us.*; do
++        /usr/lib/kbd/keymaps/i386/qwerty/us.* \
++        /usr/lib/kbd/keymaps/legacy/include/* \
++        /usr/lib/kbd/keymaps/legacy/i386/qwerty/us.*; do
+             [[ -f $i ]] || continue
+             inst $i
+     done

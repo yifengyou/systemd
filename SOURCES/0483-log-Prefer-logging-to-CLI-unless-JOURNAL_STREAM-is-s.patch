@@ -1,0 +1,91 @@
+From b14c82dd9f9fcc42810614cf02efe8651897d36f Mon Sep 17 00:00:00 2001
+From: Daan De Meyer <daan.j.demeyer@gmail.com>
+Date: Wed, 10 Jun 2020 20:19:41 +0200
+Subject: [PATCH] log: Prefer logging to CLI unless JOURNAL_STREAM is set
+
+(cherry picked from commit bc694c06e60505efeb09e5278a7b22cdfa23975e)
+
+Resolves: #1865840
+---
+ src/basic/log.c               | 32 +++++++++++++++++++++++++++++---
+ test/TEST-21-SYSUSERS/test.sh |  3 +--
+ 2 files changed, 30 insertions(+), 5 deletions(-)
+
+diff --git a/src/basic/log.c b/src/basic/log.c
+index 48c094b548..9387e56a57 100644
+--- a/src/basic/log.c
++++ b/src/basic/log.c
+@@ -10,6 +10,7 @@
+ #include <string.h>
+ #include <sys/signalfd.h>
+ #include <sys/socket.h>
++#include <sys/stat.h>
+ #include <sys/time.h>
+ #include <sys/uio.h>
+ #include <sys/un.h>
+@@ -19,6 +20,7 @@
+ #include "sd-messages.h"
+ 
+ #include "alloc-util.h"
++#include "extract-word.h"
+ #include "fd-util.h"
+ #include "format-util.h"
+ #include "io-util.h"
+@@ -220,6 +222,32 @@ fail:
+         return r;
+ }
+ 
++static bool stderr_is_journal(void) {
++        _cleanup_free_ char *w = NULL;
++        const char *e;
++        uint64_t dev, ino;
++        struct stat st;
++
++        e = getenv("JOURNAL_STREAM");
++        if (!e)
++                return false;
++
++        if (extract_first_word(&e, &w, ":", EXTRACT_DONT_COALESCE_SEPARATORS) <= 0)
++                return false;
++        if (!e)
++                return false;
++
++        if (safe_atou64(w, &dev) < 0)
++                return false;
++        if (safe_atou64(e, &ino) < 0)
++                return false;
++
++        if (fstat(STDERR_FILENO, &st) < 0)
++                return false;
++
++        return st.st_dev == dev && st.st_ino == ino;
++}
++
+ int log_open(void) {
+         int r;
+ 
+@@ -239,9 +267,7 @@ int log_open(void) {
+                 return 0;
+         }
+ 
+-        if (log_target != LOG_TARGET_AUTO ||
+-            getpid_cached() == 1 ||
+-            isatty(STDERR_FILENO) <= 0) {
++        if (log_target != LOG_TARGET_AUTO || getpid_cached() == 1 || stderr_is_journal()) {
+ 
+                 if (!prohibit_ipc &&
+                     IN_SET(log_target, LOG_TARGET_AUTO,
+diff --git a/test/TEST-21-SYSUSERS/test.sh b/test/TEST-21-SYSUSERS/test.sh
+index b1049e720d..3460d71f22 100755
+--- a/test/TEST-21-SYSUSERS/test.sh
++++ b/test/TEST-21-SYSUSERS/test.sh
+@@ -108,8 +108,7 @@ test_run() {
+                 echo "*** Running test $f"
+                 prepare_testdir ${f%.input}
+                 cp $f $TESTDIR/usr/lib/sysusers.d/test.conf
+-                systemd-sysusers --root=$TESTDIR 2> /dev/null
+-                journalctl -t systemd-sysusers -o cat | tail -n1 > $TESTDIR/tmp/err
++                systemd-sysusers --root=$TESTDIR 2>&1 | tail -n1 > $TESTDIR/tmp/err
+                 if ! diff -u $TESTDIR/tmp/err  ${f%.*}.expected-err; then
+                         echo "**** Unexpected error output for $f"
+                         cat $TESTDIR/tmp/err

@@ -1,0 +1,291 @@
+From 35455408393cb29a5e49fd769c4823b6a6f886b4 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 7 Aug 2018 11:02:00 +0200
+Subject: [PATCH] logind: optionally, keep the user@.service instance for
+ eached logged in user around for a while
+
+This should speed up rapid logout/login cycles a bit.
+
+By default this timeout is now set to 10s.
+
+Fixes: #8410
+Replaces: #4434
+(cherry picked from commit 9afe9efb9340588db553950727a2a9672dc3db24)
+
+Resolves: #1642460
+---
+ man/logind.conf.xml          | 11 +++++
+ src/login/logind-core.c      |  2 +
+ src/login/logind-dbus.c      |  1 +
+ src/login/logind-gperf.gperf |  1 +
+ src/login/logind-session.c   |  4 ++
+ src/login/logind-user.c      | 88 +++++++++++++++++++++++++++++++++---
+ src/login/logind-user.h      |  7 ++-
+ src/login/logind.h           |  1 +
+ 8 files changed, 107 insertions(+), 8 deletions(-)
+
+diff --git a/man/logind.conf.xml b/man/logind.conf.xml
+index 7d7e869a26..0cf8a7d1f2 100644
+--- a/man/logind.conf.xml
++++ b/man/logind.conf.xml
+@@ -184,6 +184,17 @@
+         5.</para></listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>UserStopDelaySec=</varname></term>
++
++        <listitem><para>Specifies how long to keep the user record and per-user service
++        <filename>user@.service</filename> around for a user after they logged out fully. If set to zero, the per-user
++        service is terminated immediately when the last session of the user has ended. If this option is configured to
++        non-zero rapid logout/login cycles are sped up, as the user's service manager is not constantly restarted. If
++        set to <literal>infinity</literal> the per-user service for a user is never terminated again after first login,
++        and continues to run until system shutdown. Defaults to 10s.</para></listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>HandlePowerKey=</varname></term>
+         <term><varname>HandleSuspendKey=</varname></term>
+diff --git a/src/login/logind-core.c b/src/login/logind-core.c
+index f598bbaa1c..678c708df1 100644
+--- a/src/login/logind-core.c
++++ b/src/login/logind-core.c
+@@ -27,6 +27,8 @@ void manager_reset_config(Manager *m) {
+         m->reserve_vt = 6;
+         m->remove_ipc = false;
+         m->inhibit_delay_max = 5 * USEC_PER_SEC;
++        m->user_stop_delay = 10 * USEC_PER_SEC;
++
+         m->handle_power_key = HANDLE_POWEROFF;
+         m->handle_suspend_key = HANDLE_SUSPEND;
+         m->handle_hibernate_key = HANDLE_HIBERNATE;
+diff --git a/src/login/logind-dbus.c b/src/login/logind-dbus.c
+index 7eba617fff..6586280269 100644
+--- a/src/login/logind-dbus.c
++++ b/src/login/logind-dbus.c
+@@ -2695,6 +2695,7 @@ const sd_bus_vtable manager_vtable[] = {
+         SD_BUS_PROPERTY("BlockInhibited", "s", property_get_inhibited, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+         SD_BUS_PROPERTY("DelayInhibited", "s", property_get_inhibited, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+         SD_BUS_PROPERTY("InhibitDelayMaxUSec", "t", NULL, offsetof(Manager, inhibit_delay_max), SD_BUS_VTABLE_PROPERTY_CONST),
++        SD_BUS_PROPERTY("UserStopDelayUSec", "t", NULL, offsetof(Manager, user_stop_delay), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("HandlePowerKey", "s", property_get_handle_action, offsetof(Manager, handle_power_key), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("HandleSuspendKey", "s", property_get_handle_action, offsetof(Manager, handle_suspend_key), SD_BUS_VTABLE_PROPERTY_CONST),
+         SD_BUS_PROPERTY("HandleHibernateKey", "s", property_get_handle_action, offsetof(Manager, handle_hibernate_key), SD_BUS_VTABLE_PROPERTY_CONST),
+diff --git a/src/login/logind-gperf.gperf b/src/login/logind-gperf.gperf
+index c85339dcd3..8829ce7d85 100644
+--- a/src/login/logind-gperf.gperf
++++ b/src/login/logind-gperf.gperf
+@@ -23,6 +23,7 @@ Login.KillUserProcesses,            config_parse_bool,                  0, offse
+ Login.KillOnlyUsers,                config_parse_strv,                  0, offsetof(Manager, kill_only_users)
+ Login.KillExcludeUsers,             config_parse_strv,                  0, offsetof(Manager, kill_exclude_users)
+ Login.InhibitDelayMaxSec,           config_parse_sec,                   0, offsetof(Manager, inhibit_delay_max)
++Login.UserStopDelaySec,             config_parse_sec,                   0, offsetof(Manager, user_stop_delay)
+ Login.HandlePowerKey,               config_parse_handle_action,         0, offsetof(Manager, handle_power_key)
+ Login.HandleSuspendKey,             config_parse_handle_action,         0, offsetof(Manager, handle_suspend_key)
+ Login.HandleHibernateKey,           config_parse_handle_action,         0, offsetof(Manager, handle_hibernate_key)
+diff --git a/src/login/logind-session.c b/src/login/logind-session.c
+index d56b48a732..dd4ac9482a 100644
+--- a/src/login/logind-session.c
++++ b/src/login/logind-session.c
+@@ -101,6 +101,8 @@ Session* session_free(Session *s) {
+ 
+                 if (s->user->display == s)
+                         s->user->display = NULL;
++
++                user_update_last_session_timer(s->user);
+         }
+ 
+         if (s->seat) {
+@@ -142,6 +144,8 @@ void session_set_user(Session *s, User *u) {
+ 
+         s->user = u;
+         LIST_PREPEND(sessions_by_user, u->sessions, s);
++
++        user_update_last_session_timer(u);
+ }
+ 
+ static void session_save_devices(Session *s, FILE *f) {
+diff --git a/src/login/logind-user.c b/src/login/logind-user.c
+index 39fc76f4dc..f23fcbe674 100644
+--- a/src/login/logind-user.c
++++ b/src/login/logind-user.c
+@@ -47,6 +47,7 @@ int user_new(User **ret, Manager *m, uid_t uid, gid_t gid, const char *name) {
+                 .manager = m,
+                 .uid = uid,
+                 .gid = gid,
++                .last_session_timestamp = USEC_INFINITY,
+         };
+ 
+         u->name = strdup(name);
+@@ -113,6 +114,8 @@ User *user_free(User *u) {
+ 
+         hashmap_remove_value(u->manager->users, UID_TO_PTR(u->uid), u);
+ 
++        (void) sd_event_source_unref(u->timer_event_source);
++
+         u->service_job = mfree(u->service_job);
+ 
+         u->service = mfree(u->service);
+@@ -170,6 +173,10 @@ static int user_save_internal(User *u) {
+                         u->timestamp.realtime,
+                         u->timestamp.monotonic);
+ 
++        if (u->last_session_timestamp != USEC_INFINITY)
++                fprintf(f, "LAST_SESSION_TIMESTAMP=" USEC_FMT "\n",
++                        u->last_session_timestamp);
++
+         if (u->sessions) {
+                 Session *i;
+                 bool first;
+@@ -287,16 +294,17 @@ int user_save(User *u) {
+ }
+ 
+ int user_load(User *u) {
+-        _cleanup_free_ char *realtime = NULL, *monotonic = NULL, *stopping = NULL;
++        _cleanup_free_ char *realtime = NULL, *monotonic = NULL, *stopping = NULL, *last_session_timestamp = NULL;
+         int r;
+ 
+         assert(u);
+ 
+         r = parse_env_file(NULL, u->state_file, NEWLINE,
+-                           "SERVICE_JOB", &u->service_job,
+-                           "STOPPING",    &stopping,
+-                           "REALTIME",    &realtime,
+-                           "MONOTONIC",   &monotonic,
++                           "SERVICE_JOB",            &u->service_job,
++                           "STOPPING",               &stopping,
++                           "REALTIME",               &realtime,
++                           "MONOTONIC",              &monotonic,
++                           "LAST_SESSION_TIMESTAMP", &last_session_timestamp,
+                            NULL);
+         if (r == -ENOENT)
+                 return 0;
+@@ -312,9 +320,11 @@ int user_load(User *u) {
+         }
+ 
+         if (realtime)
+-                timestamp_deserialize(realtime, &u->timestamp.realtime);
++                (void) timestamp_deserialize(realtime, &u->timestamp.realtime);
+         if (monotonic)
+-                timestamp_deserialize(monotonic, &u->timestamp.monotonic);
++                (void) timestamp_deserialize(monotonic, &u->timestamp.monotonic);
++        if (last_session_timestamp)
++                (void) timestamp_deserialize(last_session_timestamp, &u->last_session_timestamp);
+ 
+         return 0;
+ }
+@@ -524,6 +534,17 @@ bool user_may_gc(User *u, bool drop_not_started) {
+         if (u->sessions)
+                 return false;
+ 
++        if (u->last_session_timestamp != USEC_INFINITY) {
++                /* All sessions have been closed. Let's see if we shall leave the user record around for a bit */
++
++                if (u->manager->user_stop_delay == USEC_INFINITY)
++                        return false; /* Leave it around forever! */
++                if (u->manager->user_stop_delay > 0 &&
++                    now(CLOCK_MONOTONIC) < usec_add(u->last_session_timestamp, u->manager->user_stop_delay))
++                        return false; /* Leave it around for a bit longer. */
++        }
++
++        /* Is this a user that shall stay around forever? */
+         if (user_check_linger_file(u) > 0)
+                 return false;
+ 
+@@ -649,6 +670,59 @@ void user_elect_display(User *u) {
+         }
+ }
+ 
++static int user_stop_timeout_callback(sd_event_source *es, uint64_t usec, void *userdata) {
++        User *u = userdata;
++
++        assert(u);
++        user_add_to_gc_queue(u);
++
++        return 0;
++}
++
++void user_update_last_session_timer(User *u) {
++        int r;
++
++        assert(u);
++
++        if (u->sessions) {
++                /* There are sessions, turn off the timer */
++                u->last_session_timestamp = USEC_INFINITY;
++                u->timer_event_source = sd_event_source_unref(u->timer_event_source);
++                return;
++        }
++
++        if (u->last_session_timestamp != USEC_INFINITY)
++                return; /* Timer already started */
++
++        u->last_session_timestamp = now(CLOCK_MONOTONIC);
++
++        assert(!u->timer_event_source);
++
++        if (u->manager->user_stop_delay == 0 || u->manager->user_stop_delay == USEC_INFINITY)
++                return;
++
++        if (sd_event_get_state(u->manager->event) == SD_EVENT_FINISHED) {
++                log_debug("Not allocating user stop timeout, since we are already exiting.");
++                return;
++        }
++
++        r = sd_event_add_time(u->manager->event,
++                              &u->timer_event_source,
++                              CLOCK_MONOTONIC,
++                              usec_add(u->last_session_timestamp, u->manager->user_stop_delay), 0,
++                              user_stop_timeout_callback, u);
++        if (r < 0)
++                log_warning_errno(r, "Failed to enqueue user stop event source, ignoring: %m");
++
++        if (DEBUG_LOGGING) {
++                char s[FORMAT_TIMESPAN_MAX];
++
++                log_debug("Last session of user '%s' logged out, terminating user context in %s.",
++                          u->name,
++                          format_timespan(s, sizeof(s), u->manager->user_stop_delay, USEC_PER_MSEC));
++        }
++}
++
+ static const char* const user_state_table[_USER_STATE_MAX] = {
+         [USER_OFFLINE] = "offline",
+         [USER_OPENING] = "opening",
+diff --git a/src/login/logind-user.h b/src/login/logind-user.h
+index 5e1f7b813a..e05646adc9 100644
+--- a/src/login/logind-user.h
++++ b/src/login/logind-user.h
+@@ -34,7 +34,11 @@ struct User {
+ 
+         Session *display;
+ 
+-        dual_timestamp timestamp;
++        dual_timestamp timestamp;      /* When this User object was 'started' the first time */
++        usec_t last_session_timestamp; /* When the number of sessions of this user went from 1 to 0 the last time */
++
++        /* Set up when the last session of the user logs out */
++        sd_event_source *timer_event_source;
+ 
+         bool in_gc_queue:1;
+ 
+@@ -62,6 +66,7 @@ int user_load(User *u);
+ int user_kill(User *u, int signo);
+ int user_check_linger_file(User *u);
+ void user_elect_display(User *u);
++void user_update_last_session_timer(User *u);
+ 
+ extern const sd_bus_vtable user_vtable[];
+ int user_node_enumerator(sd_bus *bus, const char *path, void *userdata, char ***nodes, sd_bus_error *error);
+diff --git a/src/login/logind.h b/src/login/logind.h
+index ae4d74076b..7288dd7445 100644
+--- a/src/login/logind.h
++++ b/src/login/logind.h
+@@ -62,6 +62,7 @@ struct Manager {
+         Hashmap *user_units;
+ 
+         usec_t inhibit_delay_max;
++        usec_t user_stop_delay;
+ 
+         /* If an action is currently being executed or is delayed,
+          * this is != 0 and encodes what is being done */

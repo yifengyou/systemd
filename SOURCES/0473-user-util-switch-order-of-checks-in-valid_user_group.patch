@@ -1,0 +1,38 @@
+From 7569168bea3d7e11cd3afe6167fcf4a3ac65a1a6 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 30 Mar 2020 21:46:01 +0200
+Subject: [PATCH] user-util: switch order of checks in
+ valid_user_group_name_or_id_full()
+
+When we are supposed to accept numeric UIDs formatted as string, then
+let's check that first, before passing things on to
+valid_user_group_name_full(), since that might log about, and not the
+other way round.
+
+See: #15201
+Follow-up for: 93c23c9297e48e594785e0bb9c51504aae5fbe3e
+
+(cherry picked from commit a85daa0dfb3eb03be9845760e90e54b9af8fb00e)
+
+Related: #1848373
+---
+ src/basic/user-util.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/basic/user-util.c b/src/basic/user-util.c
+index 7dd2bb2c84..68a924770b 100644
+--- a/src/basic/user-util.c
++++ b/src/basic/user-util.c
+@@ -656,10 +656,10 @@ bool valid_user_group_name_or_id_full(const char *u, bool strict) {
+         if (isempty(u))
+                 return false;
+ 
+-        if (valid_user_group_name_full(u, strict))
++        if (parse_uid(u, NULL) >= 0)
+                 return true;
+ 
+-        return parse_uid(u, NULL) >= 0;
++        return valid_user_group_name_full(u, strict);
+ }
+ 
+ bool valid_gecos(const char *d) {

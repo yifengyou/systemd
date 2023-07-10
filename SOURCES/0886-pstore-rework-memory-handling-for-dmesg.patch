@@ -1,0 +1,133 @@
+From a2ba34a79de3748f51d57541c54dbe22e1d03a9e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Fri, 4 Oct 2019 16:17:27 +0200
+Subject: [PATCH] pstore: rework memory handling for dmesg
+
+Semmle Security Reports report:
+> The problem occurs on the way realloc is being used. When a size
+> bigger than the chunk that wants to be reallocated is passed, realloc
+> try to malloc a  bigger size, however in the case that malloc fails
+> (for example, by forcing a big allocation)  realloc will return NULL.
+>
+> According to the man page:
+> "The realloc() function returns a pointer to the newly allocated
+> memory, which is suitably aligned for any built-in type and may be
+> different from ptr,  or  NULL  if  the  request fails.   If size was
+> equal to 0, either NULL or a pointer suitable to be passed to free()
+> is returned.  If realloc() fails, the original block is left
+> untouched; it is  not  freed or moved."
+>
+> The problem occurs when the memory ptr passed to the first argument of
+> realloc is the same as the one used for the result, for example in
+> this case:
+>
+> dmesg = realloc(dmesg, dmesg_size + strlen(pe->dirent.d_name) +
+> strlen(":\n") + pe->content_size + 1);
+>
+> https://lgtm.com/projects/g/systemd/systemd/snapshot/f8bcb81955f9e93a4787627e28f43fffb2a84836/files/src/pstore/pstore.c?sort=name&dir=A
+> SC&mode=heatmap#L300
+>
+> If the malloc inside that realloc fails, then the original memory
+> chunk will never be free but since realloc will return NULL, the
+> pointer to that memory chunk will be lost and a memory leak will
+> occur.
+>
+> In case you are curious, this is the query we used to find this problem:
+> https://lgtm.com/query/8650323308193591473/
+
+Let's use a more standard pattern: allocate memory using greedy_realloc, and
+instead of freeing it when we wrote out a chunk, let's just move the cursor
+back to the beginning and reuse the memory we allocated previously.
+
+If we fail to allocate the memory for dmesg contents, don't write the dmesg
+entry, but let's still process the files to move them out of pstore.
+
+(cherry picked from commit 8198c3e42b0614b6bd1db6f38813b842c8577304)
+
+Related: #2158832
+---
+ src/pstore/pstore.c | 43 ++++++++++++++++++++++++++-----------------
+ 1 file changed, 26 insertions(+), 17 deletions(-)
+
+diff --git a/src/pstore/pstore.c b/src/pstore/pstore.c
+index 7353e83a81..d70e142b4d 100644
+--- a/src/pstore/pstore.c
++++ b/src/pstore/pstore.c
+@@ -176,9 +176,11 @@ static int write_dmesg(const char *dmesg, size_t size, const char *id) {
+         ssize_t wr;
+         int r;
+ 
+-        if (isempty(dmesg) || size == 0)
++        if (size == 0)
+                 return 0;
+ 
++        assert(dmesg);
++
+         /* log_info("Record ID %s", id); */
+ 
+         ofd_path = path_join(arg_archivedir, id, "dmesg.txt");
+@@ -204,7 +206,8 @@ static int write_dmesg(const char *dmesg, size_t size, const char *id) {
+ static void process_dmesg_files(PStoreList *list) {
+         /* Move files, reconstruct dmesg.txt */
+         _cleanup_free_ char *dmesg = NULL, *dmesg_id = NULL;
+-        size_t dmesg_size = 0;
++        size_t dmesg_size = 0, dmesg_allocated = 0;
++        bool dmesg_bad = false;
+         PStoreEntry *pe;
+ 
+         /* Handle each dmesg file: files processed in reverse
+@@ -281,33 +284,39 @@ static void process_dmesg_files(PStoreList *list) {
+                 /* Now move file from pstore to archive storage */
+                 move_file(pe, pe_id);
+ 
++                if (dmesg_bad)
++                        continue;
++
+                 /* If the current record id is NOT the same as the
+                  * previous record id, then start a new dmesg.txt file */
+-                if (!pe_id || !dmesg_id || !streq(pe_id, dmesg_id)) {
++                if (!streq_ptr(pe_id, dmesg_id)) {
+                         /* Encountered a new dmesg group, close out old one, open new one */
+-                        if (dmesg) {
+-                                (void) write_dmesg(dmesg, dmesg_size, dmesg_id);
+-                                dmesg = mfree(dmesg);
+-                                dmesg_size = 0;
+-                        }
++                        (void) write_dmesg(dmesg, dmesg_size, dmesg_id);
++                        dmesg_size = 0;
+ 
+                         /* now point dmesg_id to storage of pe_id */
+                         free_and_replace(dmesg_id, pe_id);
+                 }
+ 
+-                /* Reconstruction of dmesg is done as a useful courtesy, do not log errors */
+-                dmesg = realloc(dmesg, dmesg_size + strlen(pe->dirent.d_name) + strlen(":\n") + pe->content_size + 1);
+-                if (dmesg) {
+-                        dmesg_size += sprintf(&dmesg[dmesg_size], "%s:\n", pe->dirent.d_name);
+-                        if (pe->content) {
+-                                memcpy(&dmesg[dmesg_size], pe->content, pe->content_size);
+-                                dmesg_size += pe->content_size;
+-                        }
++                /* Reconstruction of dmesg is done as a useful courtesy: do not fail, but don't write garbled
++                 * output either. */
++                size_t needed = strlen(pe->dirent.d_name) + strlen(":\n") + pe->content_size + 1;
++                if (!GREEDY_REALLOC(dmesg, dmesg_allocated, dmesg_size + needed)) {
++                        log_warning_errno(ENOMEM, "Failed to write dmesg file: %m");
++                        dmesg_bad = true;
++                        continue;
++                }
++
++                dmesg_size += sprintf(dmesg + dmesg_size, "%s:\n", pe->dirent.d_name);
++                if (pe->content) {
++                        memcpy(dmesg + dmesg_size, pe->content, pe->content_size);
++                        dmesg_size += pe->content_size;
+                 }
+ 
+                 pe_id = mfree(pe_id);
+         }
+-        if (dmesg)
++
++        if (!dmesg_bad)
+                 (void) write_dmesg(dmesg, dmesg_size, dmesg_id);
+ }
+ 

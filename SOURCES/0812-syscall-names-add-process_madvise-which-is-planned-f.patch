@@ -1,0 +1,27 @@
+From bcc0f8bfbc0ea220895c1d3a8bf2d3124ddcef16 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Sun, 25 Oct 2020 13:54:20 +0100
+Subject: [PATCH] syscall-names: add process_madvise which is planned for 5.10
+
+It was added in v5.9-11793-gecb8ac8b1f and is still present in v5.10-rc1, so it
+seems likely that it'll be in 5.10 too.
+
+(cherry picked from commit 397cca2453465d4ad5a51b16ad71acf45a3de352)
+
+Related: #2040247
+---
+ src/shared/syscall-names.text | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/shared/syscall-names.text b/src/shared/syscall-names.text
+index 40d18a8894..f1b7e29d50 100644
+--- a/src/shared/syscall-names.text
++++ b/src/shared/syscall-names.text
+@@ -392,6 +392,7 @@ pread64
+ preadv
+ preadv2
+ prlimit64
++process_madvise
+ process_vm_readv
+ process_vm_writev
+ pselect6

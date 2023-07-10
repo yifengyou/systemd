@@ -1,0 +1,90 @@
+From 1ce5187fb47bec57de4d8d3fd0068072228ec5e3 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 15 Jun 2021 02:13:59 +0900
+Subject: [PATCH] sd-event: always reshuffle time prioq on changing
+ online/offline state
+
+Before 81107b8419c39f726fd2805517a5b9faab204e59, the compare functions
+for the latest or earliest prioq did not handle ratelimited flag.
+So, it was ok to not reshuffle the time prioq when changing the flag.
+
+But now, those two compare functions also compare the source is
+ratelimited or not. So, it is necessary to reshuffle the time prioq
+after changing the ratelimited flag.
+
+Hopefully fixes #19903.
+
+(cherry picked from commit 2115b9b6629eeba7bc9f42f757f38205febb1cb7)
+
+Related: #1968528
+---
+ src/libsystemd/sd-event/sd-event.c | 33 ++++++++++--------------------
+ 1 file changed, 11 insertions(+), 22 deletions(-)
+
+diff --git a/src/libsystemd/sd-event/sd-event.c b/src/libsystemd/sd-event/sd-event.c
+index ae46392901..f78da00c3a 100644
+--- a/src/libsystemd/sd-event/sd-event.c
++++ b/src/libsystemd/sd-event/sd-event.c
+@@ -2390,14 +2390,6 @@ static int event_source_offline(
+                 source_io_unregister(s);
+                 break;
+ 
+-        case SOURCE_TIME_REALTIME:
+-        case SOURCE_TIME_BOOTTIME:
+-        case SOURCE_TIME_MONOTONIC:
+-        case SOURCE_TIME_REALTIME_ALARM:
+-        case SOURCE_TIME_BOOTTIME_ALARM:
+-                event_source_time_prioq_reshuffle(s);
+-                break;
+-
+         case SOURCE_SIGNAL:
+                 event_gc_signal_data(s->event, &s->priority, s->signal.sig);
+                 break;
+@@ -2415,6 +2407,11 @@ static int event_source_offline(
+                 prioq_reshuffle(s->event->exit, s, &s->exit.prioq_index);
+                 break;
+ 
++        case SOURCE_TIME_REALTIME:
++        case SOURCE_TIME_BOOTTIME:
++        case SOURCE_TIME_MONOTONIC:
++        case SOURCE_TIME_REALTIME_ALARM:
++        case SOURCE_TIME_BOOTTIME_ALARM:
+         case SOURCE_DEFER:
+         case SOURCE_POST:
+         case SOURCE_INOTIFY:
+@@ -2424,6 +2421,9 @@ static int event_source_offline(
+                 assert_not_reached("Wut? I shouldn't exist.");
+         }
+ 
++        /* Always reshuffle time prioq, as the ratelimited flag may be changed. */
++        event_source_time_prioq_reshuffle(s);
++
+         return 1;
+ }
+ 
+@@ -2505,22 +2505,11 @@ static int event_source_online(
+         s->ratelimited = ratelimited;
+ 
+         /* Non-failing operations below */
+-        switch (s->type) {
+-        case SOURCE_TIME_REALTIME:
+-        case SOURCE_TIME_BOOTTIME:
+-        case SOURCE_TIME_MONOTONIC:
+-        case SOURCE_TIME_REALTIME_ALARM:
+-        case SOURCE_TIME_BOOTTIME_ALARM:
+-                event_source_time_prioq_reshuffle(s);
+-                break;
+-
+-        case SOURCE_EXIT:
++        if (s->type == SOURCE_EXIT)
+                 prioq_reshuffle(s->event->exit, s, &s->exit.prioq_index);
+-                break;
+ 
+-        default:
+-                break;
+-        }
++        /* Always reshuffle time prioq, as the ratelimited flag may be changed. */
++        event_source_time_prioq_reshuffle(s);
+ 
+         return 1;
+ }

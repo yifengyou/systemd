@@ -1,0 +1,30 @@
+From b6ffe7ec63d86c5ac66171d6731068b87e3e7b50 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Sat, 27 Jun 2020 11:13:01 +0200
+Subject: [PATCH] mount-util: use UMOUNT_NOFOLLOW in recursive umounter
+
+When we only want to unmount mount points below some path then it is
+against our interest to follow symlinks. Hence don't.
+
+(cherry picked from commit 827ea5212507c3833b6ae14cdf65e446b36b5e05)
+
+Related: #1885143
+---
+ src/basic/mount-util.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/basic/mount-util.c b/src/basic/mount-util.c
+index 2cf98eaa84..be26bb5ec1 100644
+--- a/src/basic/mount-util.c
++++ b/src/basic/mount-util.c
+@@ -346,8 +346,8 @@ int umount_recursive(const char *prefix, int flags) {
+                         if (!path_startswith(path, prefix))
+                                 continue;
+ 
+-                        if (umount2(path, flags) < 0) {
+-                                r = log_debug_errno(errno, "Failed to umount %s: %m", path);
++                        if (umount2(path, flags | UMOUNT_NOFOLLOW) < 0) {
++                                log_debug_errno(errno, "Failed to umount %s: %m", path);
+                                 continue;
+                         }
+ 

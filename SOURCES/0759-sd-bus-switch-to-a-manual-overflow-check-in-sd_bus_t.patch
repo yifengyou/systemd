@@ -1,0 +1,48 @@
+From 598eecf5c1c948535ca626833bc5cea59060913f Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 20 Apr 2022 22:30:22 +0200
+Subject: [PATCH] sd-bus: switch to a manual overflow check in
+ sd_bus_track_add_name()
+
+This is generally used in a directly client controllable way, hence we
+should handle ref count overflow gracefully, instead of hitting an
+assert().
+
+As discussed:
+
+https://github.com/systemd/systemd/pull/23099#discussion_r854341850
+(cherry picked from commit 7f40cb7c86b0fff3a82096a9499570bad9c19fd2)
+
+[msekleta: We've never switched to using track_item_ref/unref introduced
+in c2d7dd35d2 hence we still had potential undefined behavior related to
+overflow check and this commit fixes that.]
+
+Related: #2047373
+---
+ src/libsystemd/sd-bus/bus-track.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/src/libsystemd/sd-bus/bus-track.c b/src/libsystemd/sd-bus/bus-track.c
+index 8893f190a1..b818e93bec 100644
+--- a/src/libsystemd/sd-bus/bus-track.c
++++ b/src/libsystemd/sd-bus/bus-track.c
+@@ -208,12 +208,16 @@ _public_ int sd_bus_track_add_name(sd_bus_track *track, const char *name) {
+         i = hashmap_get(track->names, name);
+         if (i) {
+                 if (track->recursive) {
+-                        unsigned k = i->n_ref + 1;
++                        assert(i->n_ref > 0);
+ 
+-                        if (k < i->n_ref) /* Check for overflow */
++                        /* Manual oveflow check (instead of a DEFINE_TRIVIAL_REF_FUNC() helper or so), so
++                         * that we can return a proper error, given this is almost always called in a
++                         * directly client controllable way, and thus better should never hit an assertion
++                         * here. */
++                        if (i->n_ref >= UINT_MAX)
+                                 return -EOVERFLOW;
+ 
+-                        i->n_ref = k;
++                        i->n_ref++;
+                 }
+ 
+                 bus_track_remove_from_queue(track);

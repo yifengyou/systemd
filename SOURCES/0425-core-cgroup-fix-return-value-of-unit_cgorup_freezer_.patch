@@ -1,0 +1,31 @@
+From abf2fb67dc3d7da8db030ea8b8db73a20acc08a9 Mon Sep 17 00:00:00 2001
+From: Michal Sekletar <msekleta@redhat.com>
+Date: Thu, 7 May 2020 17:23:30 +0200
+Subject: [PATCH] core/cgroup: fix return value of unit_cgorup_freezer_action()
+
+We should return 0 only if current freezer state, as reported by the
+kernel, is already the desired state. Otherwise, we would dispatch
+return dbus message prematurely in bus_unit_method_freezer_generic().
+
+Thanks to Frantisek Sumsal for reporting the issue.
+
+(cherry picked from commit d910f4c2b2542544d7b187a09605da7a0f220837)
+
+Related: #1830861
+---
+ src/core/cgroup.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/cgroup.c b/src/core/cgroup.c
+index e7ae9273a6..2d819b8ebb 100644
+--- a/src/core/cgroup.c
++++ b/src/core/cgroup.c
+@@ -2963,7 +2963,7 @@ int unit_cgroup_freezer_action(Unit *u, FreezerAction action) {
+         if (r < 0)
+                 return r;
+ 
+-        return 0;
++        return 1;
+ }
+ 
+ static const char* const cgroup_device_policy_table[_CGROUP_DEVICE_POLICY_MAX] = {

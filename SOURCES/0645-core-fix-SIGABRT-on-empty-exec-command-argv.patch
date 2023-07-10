@@ -1,0 +1,103 @@
+From 8e322f5bc24547963978be071a8a2547abad875a Mon Sep 17 00:00:00 2001
+From: Henri Chain <henri.chain@enioka.com>
+Date: Tue, 5 Oct 2021 13:10:31 +0200
+Subject: [PATCH] core: fix SIGABRT on empty exec command argv
+
+This verifies that the argv part of any exec_command parameters that
+are sent through dbus is not empty at deserialization time.
+
+There is an additional check in service.c service_verify() that again
+checks if all exec_commands are correctly populated, after the service
+has been loaded, whether through dbus or otherwise.
+
+Fixes #20933.
+
+(cherry picked from commit 29500cf8c47e6eb0518d171d62aa8213020c9152)
+
+Resolves: #2020239
+---
+ src/core/dbus-execute.c             |  4 ++++
+ src/core/service.c                  | 12 +++++++++++
+ test/TEST-23-TYPE-EXEC/testsuite.sh | 31 +++++++++++++++++++++++++++++
+ 3 files changed, 47 insertions(+)
+
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index 8348663000..2e64f0baf4 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -969,6 +969,10 @@ int bus_set_transient_exec_command(
+                 if (r < 0)
+                         return r;
+ 
++                if (strv_isempty(argv))
++                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS,
++                                                 "\"%s\" argv cannot be empty", name);
++
+                 r = sd_bus_message_read(message, "b", &b);
+                 if (r < 0)
+                         return r;
+diff --git a/src/core/service.c b/src/core/service.c
+index 5e3e75b5ae..12adf89dd4 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -536,6 +536,18 @@ static int service_verify(Service *s) {
+         if (UNIT(s)->load_state != UNIT_LOADED)
+                 return 0;
+ 
++        for (ServiceExecCommand c = 0; c < _SERVICE_EXEC_COMMAND_MAX; c++) {
++                ExecCommand *command;
++
++                LIST_FOREACH(command, command, s->exec_command[c])
++                        if (strv_isempty(command->argv)) {
++                                log_unit_error(UNIT(s),
++                                               "Service has an empty argv in %s=. Refusing.",
++                                               service_exec_command_to_string(c));
++                                return -ENOEXEC;
++                        }
++        }
++
+         if (!s->exec_command[SERVICE_EXEC_START] && !s->exec_command[SERVICE_EXEC_STOP]) {
+                 log_unit_error(UNIT(s), "Service lacks both ExecStart= and ExecStop= setting. Refusing.");
+                 return -ENOEXEC;
+diff --git a/test/TEST-23-TYPE-EXEC/testsuite.sh b/test/TEST-23-TYPE-EXEC/testsuite.sh
+index 80734bbbdc..e0c34cfd04 100755
+--- a/test/TEST-23-TYPE-EXEC/testsuite.sh
++++ b/test/TEST-23-TYPE-EXEC/testsuite.sh
+@@ -21,6 +21,37 @@ systemd-run --unit=four -p Type=exec /bin/sleep infinity
+ ! systemd-run --unit=five -p Type=exec -p User=idontexist /bin/sleep infinity
+ ! systemd-run --unit=six -p Type=exec /tmp/brokenbinary
+ 
++# For issue #20933
++
++# Should work normally
++busctl call \
++  org.freedesktop.systemd1 /org/freedesktop/systemd1 \
++  org.freedesktop.systemd1.Manager StartTransientUnit \
++  "ssa(sv)a(sa(sv))" test-20933-ok.service replace 1 \
++    ExecStart "a(sasb)" 1 \
++      /usr/bin/sleep 2 /usr/bin/sleep 1 true \
++  0
++
++# DBus call should fail but not crash systemd
++busctl call \
++  org.freedesktop.systemd1 /org/freedesktop/systemd1 \
++  org.freedesktop.systemd1.Manager StartTransientUnit \
++  "ssa(sv)a(sa(sv))" test-20933-bad.service replace 1 \
++    ExecStart "a(sasb)" 1 \
++      /usr/bin/sleep 0 true \
++  0 && { echo 'unexpected success'; exit 1; }
++
++# Same but with the empty argv in the middle
++busctl call \
++  org.freedesktop.systemd1 /org/freedesktop/systemd1 \
++  org.freedesktop.systemd1.Manager StartTransientUnit \
++  "ssa(sv)a(sa(sv))" test-20933-bad-middle.service replace 1 \
++    ExecStart "a(sasb)" 3 \
++      /usr/bin/sleep 2 /usr/bin/sleep 1 true \
++      /usr/bin/sleep 0                  true \
++      /usr/bin/sleep 2 /usr/bin/sleep 1 true \
++  0 && { echo 'unexpected success'; exit 1; }
++
+ systemd-analyze set-log-level info
+ 
+ echo OK > /testok

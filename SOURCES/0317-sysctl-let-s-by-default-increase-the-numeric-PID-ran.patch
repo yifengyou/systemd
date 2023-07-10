@@ -1,0 +1,70 @@
+From b9be2c6b48227642ba85c5a741f121cc99655904 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Mon, 6 Jan 2020 12:30:58 +0100
+Subject: [PATCH] sysctl: let's by default increase the numeric PID range from
+ 2^16 to 2^22
+
+This should PID collisions a tiny bit less likely, and thus improve
+security and robustness.
+
+2^22 isn't particularly a lot either, but it's the current kernel
+limitation.
+
+Bumping this limit was suggested by Linus himself:
+
+https://lwn.net/ml/linux-kernel/CAHk-=wiZ40LVjnXSi9iHLE_-ZBsWFGCgdmNiYZUXn1-V5YBg2g@mail.gmail.com/
+
+Let's experiment with this in systemd upstream first. Downstreams and
+users can after all still comment this easily.
+
+Besides compat concern the most often heard issue with such high PIDs is
+usability, since they are potentially hard to type. I am not entirely sure though
+whether 4194304 (as largest new PID) is that much worse to type or to
+copy than 65563.
+
+This should also simplify management of per system tasks limits as by
+this move the sysctl /proc/sys/kernel/threads-max becomes the primary
+knob to control how many processes to have in parallel.
+
+Resolves: #1744214
+---
+ sysctl.d/50-pid-max.conf | 17 +++++++++++++++++
+ sysctl.d/meson.build     |  1 +
+ 2 files changed, 18 insertions(+)
+ create mode 100644 sysctl.d/50-pid-max.conf
+
+diff --git a/sysctl.d/50-pid-max.conf b/sysctl.d/50-pid-max.conf
+new file mode 100644
+index 0000000000..3a8393d185
+--- /dev/null
++++ b/sysctl.d/50-pid-max.conf
+@@ -0,0 +1,17 @@
++#  This file is part of systemd.
++#
++#  systemd is free software; you can redistribute it and/or modify it
++#  under the terms of the GNU Lesser General Public License as published by
++#  the Free Software Foundation; either version 2.1 of the License, or
++#  (at your option) any later version.
++
++# See sysctl.d(5) and core(5) for documentation.
++
++# To override settings in this file, create a local file in /etc
++# (e.g. /etc/sysctl.d/90-override.conf), and put any assignments
++# there.
++
++# Bump the numeric PID range to its maximum of 2^22 (from the in-kernel default
++# of 2^16), to make PID collisions less likely.
++kernel.pid_max = 4194304
++
+diff --git a/sysctl.d/meson.build b/sysctl.d/meson.build
+index 64f6ce942e..a95957ad7d 100644
+--- a/sysctl.d/meson.build
++++ b/sysctl.d/meson.build
+@@ -2,6 +2,7 @@
+ 
+ install_data(
+         '50-default.conf',
++        '50-pid-max.conf',
+         install_dir : sysctldir)
+ 
+ in_files = []

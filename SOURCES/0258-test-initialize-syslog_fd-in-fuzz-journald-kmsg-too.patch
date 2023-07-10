@@ -1,0 +1,44 @@
+From af471e7402a70b670cd50e45c6139a0ac50a74bd Mon Sep 17 00:00:00 2001
+From: Evgeny Vereshchagin <evvers@ya.ru>
+Date: Fri, 16 Nov 2018 09:23:53 +0100
+Subject: [PATCH] test: initialize syslog_fd in fuzz-journald-kmsg too
+
+This is a follow-up to 8857fb9beb9dcb that prevents the fuzzer from crashing with
+```
+==220==ERROR: AddressSanitizer: ABRT on unknown address 0x0000000000dc (pc 0x7ff4953c8428 bp 0x7ffcf66ec290 sp 0x7ffcf66ec128 T0)
+SCARINESS: 10 (signal)
+    #0 0x7ff4953c8427 in gsignal (/lib/x86_64-linux-gnu/libc.so.6+0x35427)
+    #1 0x7ff4953ca029 in abort (/lib/x86_64-linux-gnu/libc.so.6+0x37029)
+    #2 0x7ff49666503a in log_assert_failed_realm /work/build/../../src/systemd/src/basic/log.c:805:9
+    #3 0x7ff496614ecf in safe_close /work/build/../../src/systemd/src/basic/fd-util.c:66:17
+    #4 0x548806 in server_done /work/build/../../src/systemd/src/journal/journald-server.c:2064:9
+    #5 0x5349fa in LLVMFuzzerTestOneInput /work/build/../../src/systemd/src/fuzz/fuzz-journald-kmsg.c:26:9
+    #6 0x592755 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) /src/libfuzzer/FuzzerLoop.cpp:571:15
+    #7 0x590627 in fuzzer::Fuzzer::RunOne(unsigned char const*, unsigned long, bool, fuzzer::InputInfo*, bool*) /src/libfuzzer/FuzzerLoop.cpp:480:3
+    #8 0x594432 in fuzzer::Fuzzer::MutateAndTestOne() /src/libfuzzer/FuzzerLoop.cpp:708:19
+    #9 0x5973c6 in fuzzer::Fuzzer::Loop(std::__1::vector<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> >, fuzzer::fuzzer_allocator<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char> > > > const&) /src/libfuzzer/FuzzerLoop.cpp:839:5
+    #10 0x574541 in fuzzer::FuzzerDriver(int*, char***, int (*)(unsigned char const*, unsigned long)) /src/libfuzzer/FuzzerDriver.cpp:764:6
+    #11 0x5675fc in main /src/libfuzzer/FuzzerMain.cpp:20:10
+    #12 0x7ff4953b382f in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x2082f)
+    #13 0x420f58 in _start (/out/fuzz-journald-kmsg+0x420f58)
+```
+
+(cherry picked from commit cc55ac0171a2493768c021faa356513642797e7f)
+
+Resolves: #1764560
+---
+ src/fuzz/fuzz-journald-kmsg.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/fuzz/fuzz-journald-kmsg.c b/src/fuzz/fuzz-journald-kmsg.c
+index 5d99d244b5..e2611c6d45 100644
+--- a/src/fuzz/fuzz-journald-kmsg.c
++++ b/src/fuzz/fuzz-journald-kmsg.c
+@@ -11,6 +11,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+                 return 0;
+ 
+         s = (Server) {
++                .syslog_fd = -1,
+                 .native_fd = -1,
+                 .stdout_fd = -1,
+                 .dev_kmsg_fd = -1,

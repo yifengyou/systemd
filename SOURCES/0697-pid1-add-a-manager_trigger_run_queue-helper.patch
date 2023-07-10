@@ -1,0 +1,98 @@
+From 5a218b6820be7ffaf21cd42cd4c96b47d18442ee Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Fri, 12 Nov 2021 09:43:07 +0100
+Subject: [PATCH] pid1: add a manager_trigger_run_queue() helper
+
+We have two different places where we re-trigger the run queue now.
+let's unify it under a common function, that is part of the Manager
+code.
+
+Follow-up for #20953
+
+(cherry picked from commit b0c4b2824693fe6a27ea9439ec7a6328a0e23704)
+
+Related: #2036608
+---
+ src/core/job.c     |  5 ++---
+ src/core/manager.c | 12 ++++++++++++
+ src/core/manager.h |  2 ++
+ src/core/mount.c   |  9 +++------
+ 4 files changed, 19 insertions(+), 9 deletions(-)
+
+diff --git a/src/core/job.c b/src/core/job.c
+index 43ab55ed18..55f36b928f 100644
+--- a/src/core/job.c
++++ b/src/core/job.c
+@@ -1139,11 +1139,10 @@ void job_add_to_run_queue(Job *j) {
+         if (j->in_run_queue)
+                 return;
+ 
+-        if (!j->manager->run_queue)
+-                sd_event_source_set_enabled(j->manager->run_queue_event_source, SD_EVENT_ONESHOT);
+-
+         LIST_PREPEND(run_queue, j->manager->run_queue, j);
+         j->in_run_queue = true;
++
++        manager_trigger_run_queue(j->manager);
+ }
+ 
+ void job_add_to_dbus_queue(Job *j) {
+diff --git a/src/core/manager.c b/src/core/manager.c
+index ee976f70b3..845c26f498 100644
+--- a/src/core/manager.c
++++ b/src/core/manager.c
+@@ -2120,6 +2120,18 @@ static int manager_dispatch_run_queue(sd_event_source *source, void *userdata) {
+         return 1;
+ }
+ 
++void manager_trigger_run_queue(Manager *m) {
++        int r;
++
++        assert(m);
++
++        r = sd_event_source_set_enabled(
++                        m->run_queue_event_source,
++                        m->run_queue ? SD_EVENT_ONESHOT: SD_EVENT_OFF);
++        if (r < 0)
++                log_warning_errno(r, "Failed to enable job run queue event source, ignoring: %m");
++}
++
+ static unsigned manager_dispatch_dbus_queue(Manager *m) {
+         unsigned n = 0, budget;
+         Unit *u;
+diff --git a/src/core/manager.h b/src/core/manager.h
+index c4b8e80093..7b572c8dfd 100644
+--- a/src/core/manager.h
++++ b/src/core/manager.h
+@@ -416,6 +416,8 @@ unsigned manager_dispatch_load_queue(Manager *m);
+ int manager_environment_add(Manager *m, char **minus, char **plus);
+ int manager_set_default_rlimits(Manager *m, struct rlimit **default_rlimit);
+ 
++void manager_trigger_run_queue(Manager *m);
++
+ int manager_loop(Manager *m);
+ 
+ int manager_open_serialization(Manager *m, FILE **_f);
+diff --git a/src/core/mount.c b/src/core/mount.c
+index bdba9e6884..c17154cde1 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -1712,15 +1712,12 @@ static bool mount_is_mounted(Mount *m) {
+ 
+ static int mount_on_ratelimit_expire(sd_event_source *s, void *userdata) {
+         Manager *m = userdata;
+-        int r;
+ 
+         assert(m);
+ 
+-        /* By entering ratelimited state we made all mount start jobs not runnable, now rate limit is over so let's
+-         * make sure we dispatch them in the next iteration. */
+-        r = sd_event_source_set_enabled(m->run_queue_event_source, SD_EVENT_ONESHOT);
+-        if (r < 0)
+-                log_debug_errno(r, "Failed to enable run queue event source, ignoring: %m");
++        /* By entering ratelimited state we made all mount start jobs not runnable, now rate limit is over so
++         * let's make sure we dispatch them in the next iteration. */
++        manager_trigger_run_queue(m);
+ 
+         return 0;
+ }

@@ -1,0 +1,77 @@
+From cabd9055d0d745f7de9625dec6c623d363dd3aa6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 29 May 2019 10:17:43 +0200
+Subject: [PATCH] shared/cpu-set-util: only force range printing one time
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The idea is to have at least one range to make the new format clearly
+distinguishable from the old. But it is enough to just do it once.
+In particular, in case the affinity would be specified like 0, 2, 4, 6…,
+this gives much shorter output.
+
+(cherry picked from commit 1f57a176af5152d05719bf43740e87a47e37af50)
+
+Related: #1734787
+---
+ src/basic/cpu-set-util.c     | 10 ++++++++--
+ src/test/test-cpu-set-util.c |  7 ++++---
+ 2 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/src/basic/cpu-set-util.c b/src/basic/cpu-set-util.c
+index bff39ec143..5024290557 100644
+--- a/src/basic/cpu-set-util.c
++++ b/src/basic/cpu-set-util.c
+@@ -58,7 +58,10 @@ char *cpu_set_to_range_string(const CPUSet *set) {
+                         if (!GREEDY_REALLOC(str, allocated, len + 2 + 2 * DECIMAL_STR_MAX(unsigned)))
+                                 return NULL;
+ 
+-                        r = sprintf(str + len, len > 0 ? " %d-%d" : "%d-%d", range_start, range_end);
++                        if (range_end > range_start || len == 0)
++                                r = sprintf(str + len, len > 0 ? " %d-%d" : "%d-%d", range_start, range_end);
++                        else
++                                r = sprintf(str + len, len > 0 ? " %d" : "%d", range_start);
+                         assert_se(r > 0);
+                         len += r;
+                 }
+@@ -67,7 +70,10 @@ char *cpu_set_to_range_string(const CPUSet *set) {
+                 if (!GREEDY_REALLOC(str, allocated, len + 2 + 2 * DECIMAL_STR_MAX(int)))
+                         return NULL;
+ 
+-                r = sprintf(str + len, len > 0 ? " %d-%d" : "%d-%d", range_start, range_end);
++                if (range_end > range_start || len == 0)
++                        r = sprintf(str + len, len > 0 ? " %d-%d" : "%d-%d", range_start, range_end);
++                else
++                        r = sprintf(str + len, len > 0 ? " %d" : "%d", range_start);
+                 assert_se(r > 0);
+         }
+ 
+diff --git a/src/test/test-cpu-set-util.c b/src/test/test-cpu-set-util.c
+index 0d2741cd43..995b981d25 100644
+--- a/src/test/test-cpu-set-util.c
++++ b/src/test/test-cpu-set-util.c
+@@ -31,19 +31,20 @@ static void test_parse_cpu_set(void) {
+         cpu_set_reset(&c);
+ 
+         /* Simple range (from CPUAffinity example) */
+-        assert_se(parse_cpu_set_full("1 2", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
++        assert_se(parse_cpu_set_full("1 2 4", &c, true, NULL, "fake", 1, "CPUAffinity") >= 0);
+         assert_se(c.set);
+         assert_se(c.allocated >= sizeof(__cpu_mask) / 8);
+         assert_se(CPU_ISSET_S(1, c.allocated, c.set));
+         assert_se(CPU_ISSET_S(2, c.allocated, c.set));
+-        assert_se(CPU_COUNT_S(c.allocated, c.set) == 2);
++        assert_se(CPU_ISSET_S(4, c.allocated, c.set));
++        assert_se(CPU_COUNT_S(c.allocated, c.set) == 3);
+ 
+         assert_se(str = cpu_set_to_string(&c));
+         log_info("cpu_set_to_string: %s", str);
+         str = mfree(str);
+         assert_se(str = cpu_set_to_range_string(&c));
+         log_info("cpu_set_to_range_string: %s", str);
+-        assert_se(streq(str, "1-2"));
++        assert_se(streq(str, "1-2 4"));
+         str = mfree(str);
+         cpu_set_reset(&c);
+ 

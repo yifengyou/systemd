@@ -1,0 +1,37 @@
+From 68555d26da9e46efbd70703b39a81cee601d265a Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Wed, 3 Mar 2021 13:14:02 +0100
+Subject: [PATCH] ci: add missing test dependencies
+
+rhel-only
+Related: #1934504
+---
+ .github/workflows/unit_tests.sh | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/.github/workflows/unit_tests.sh b/.github/workflows/unit_tests.sh
+index 8648e7149e..ad4584ec1d 100755
+--- a/.github/workflows/unit_tests.sh
++++ b/.github/workflows/unit_tests.sh
+@@ -6,7 +6,20 @@ CONT_NAME="${CONT_NAME:-centos-$CENTOS_RELEASE-$RANDOM}"
+ DOCKER_EXEC="${DOCKER_EXEC:-docker exec $CONT_NAME}"
+ DOCKER_RUN="${DOCKER_RUN:-docker run}"
+ REPO_ROOT="${REPO_ROOT:-$PWD}"
+-ADDITIONAL_DEPS=(libasan libubsan net-tools strace nc e2fsprogs quota dnsmasq diffutils)
++ADDITIONAL_DEPS=(
++        diffutils
++        dnsmasq
++        e2fsprogs
++        hostname
++        libasan
++        libubsan
++        nc
++        net-tools
++        perl-IPC-SysV
++        perl-Time-HiRes
++        quota
++        strace
++)
+ # RHEL8 options
+ CONFIGURE_OPTS=(
+     -Dsysvinit-path=/etc/rc.d/init.d

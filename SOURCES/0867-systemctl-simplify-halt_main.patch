@@ -1,0 +1,86 @@
+From 797b00e6a6f33d2b74beba02f678bf4d12e2146b Mon Sep 17 00:00:00 2001
+From: Ludwig Nussel <ludwig.nussel@suse.de>
+Date: Tue, 14 Dec 2021 17:27:05 +0100
+Subject: [PATCH] systemctl: simplify halt_main()
+
+The code at this point is not able to tell whether it was called as
+halt/poweroff/reboot or shutdown with time "now".
+The code also takes a shortcut to skip logind if called as root.
+That however means asking shutdown for immediate action won't trigger a
+wall message.
+As per https://github.com/systemd/systemd/issues/8424#issuecomment-374677315
+all commands should trigger a wall message.
+That simplifies the code as we can try logind first always.
+
+(cherry picked from commit adefc8789b63225662e50ceaa282f9553b5c64eb)
+
+Resolves: #2053273
+---
+ src/systemctl/systemctl.c | 44 ++++++++++++++++-----------------------
+ 1 file changed, 18 insertions(+), 26 deletions(-)
+
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index b967550b97..4bedb52f2a 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -8658,34 +8658,23 @@ static int logind_schedule_shutdown(void) {
+ static int halt_main(void) {
+         int r;
+ 
+-        r = logind_check_inhibitors(arg_action);
+-        if (r < 0)
+-                return r;
+-
++        /* always try logind first */
+         if (arg_when > 0)
+-                return logind_schedule_shutdown();
+-
+-        if (geteuid() != 0) {
+-                if (arg_dry_run || arg_force > 0) {
+-                        (void) must_be_root();
+-                        return -EPERM;
+-                }
++                r = logind_schedule_shutdown();
++        else {
++                r = logind_check_inhibitors(arg_action);
++                if (r < 0)
++                        return r;
+ 
+-                /* Try logind if we are a normal user and no special
+-                 * mode applies. Maybe PolicyKit allows us to shutdown
+-                 * the machine. */
+-                if (IN_SET(arg_action, ACTION_POWEROFF, ACTION_REBOOT, ACTION_HALT)) {
+-                        r = logind_reboot(arg_action);
+-                        if (r >= 0)
+-                                return r;
+-                        if (IN_SET(r, -EOPNOTSUPP, -EINPROGRESS))
+-                                /* requested operation is not
+-                                 * supported on the local system or
+-                                 * already in progress */
+-                                return r;
+-                        /* on all other errors, try low-level operation */
+-                }
++                r = logind_reboot(arg_action);
+         }
++        if (r >= 0)
++                return r;
++        if (IN_SET(r, -EOPNOTSUPP, -EINPROGRESS))
++                /* Requested operation is not supported on the local system or already in
++                 * progress */
++                return r;
++        /* on all other errors, try low-level operation */
+ 
+         /* In order to minimize the difference between operation with and
+          * without logind, we explicitly enable non-blocking mode for this,
+@@ -8695,7 +8684,10 @@ static int halt_main(void) {
+         if (!arg_dry_run && !arg_force)
+                 return start_with_fallback();
+ 
+-        assert(geteuid() == 0);
++        if (geteuid() != 0) {
++                (void) must_be_root();
++                return -EPERM;
++        }
+ 
+         if (!arg_no_wtmp) {
+                 if (sd_booted() > 0)

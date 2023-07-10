@@ -1,0 +1,27 @@
+From 70bf708d5360372aa541e25ff512609230781dd6 Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Wed, 7 Nov 2018 14:56:20 +0900
+Subject: [PATCH] test: missing "die"
+
+Follow-up for a41ff38b0999fb83464309a29b8f39450b8d4b85.
+
+(cherry picked from commit 11d93952ea806de2b6e9fb381153115cccc7b5e8)
+
+Related: #1642728
+---
+ test/udev-test.pl | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index a1c24f49b4..61bd3d703a 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1544,7 +1544,7 @@ sub udev_setup {
+         # even if the parent directory has setgid bit enabled.
+         chown (0, 0, $udev_dev) || die "unable to chown $udev_dev\n";
+         chmod (0755, $udev_dev) || die "unable to chmod $udev_dev\n";
+-        system("mknod", $udev_dev . "/null", "c", "1", "3") && "unable to create $udev_dev/null";
++        system("mknod", $udev_dev . "/null", "c", "1", "3") && die "unable to create $udev_dev/null";
+ 
+         system("cp", "-r", "test/sys/", $udev_sys) && die "unable to copy test/sys";
+ 

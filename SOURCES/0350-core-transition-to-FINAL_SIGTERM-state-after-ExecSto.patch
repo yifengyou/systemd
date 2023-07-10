@@ -1,0 +1,159 @@
+From 6e732b6e44ad8eb3e94c47459c64f0bc6ef2fcb0 Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Sat, 25 Jan 2020 16:46:16 +0100
+Subject: [PATCH] core: transition to FINAL_SIGTERM state after ExecStopPost=
+
+Fixes #14566
+
+(cherry picked from commit c1566ef0d22ed786b9ecf4c476e53b8a91e67578)
+
+Resolves: #1766479
+---
+ src/core/service.c                    | 10 +++++
+ test/TEST-47-ISSUE-14566/Makefile     |  1 +
+ test/TEST-47-ISSUE-14566/repro.sh     |  5 +++
+ test/TEST-47-ISSUE-14566/test.sh      | 55 +++++++++++++++++++++++++++
+ test/TEST-47-ISSUE-14566/testsuite.sh | 23 +++++++++++
+ 5 files changed, 94 insertions(+)
+ create mode 120000 test/TEST-47-ISSUE-14566/Makefile
+ create mode 100755 test/TEST-47-ISSUE-14566/repro.sh
+ create mode 100755 test/TEST-47-ISSUE-14566/test.sh
+ create mode 100755 test/TEST-47-ISSUE-14566/testsuite.sh
+
+diff --git a/src/core/service.c b/src/core/service.c
+index b1ec52d220..5035dcacac 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -3280,6 +3280,12 @@ static void service_sigchld_event(Unit *u, pid_t pid, int code, int status) {
+                                 break;
+ 
+                         case SERVICE_STOP_POST:
++
++                                if (control_pid_good(s) <= 0)
++                                        service_enter_signal(s, SERVICE_FINAL_SIGTERM, f);
++
++                                break;
++
+                         case SERVICE_FINAL_SIGTERM:
+                         case SERVICE_FINAL_SIGKILL:
+ 
+@@ -3415,6 +3421,10 @@ static void service_sigchld_event(Unit *u, pid_t pid, int code, int status) {
+                                 break;
+ 
+                         case SERVICE_STOP_POST:
++                                if (main_pid_good(s) <= 0)
++                                        service_enter_signal(s, SERVICE_FINAL_SIGTERM, f);
++                                break;
++
+                         case SERVICE_FINAL_SIGTERM:
+                         case SERVICE_FINAL_SIGKILL:
+                                 if (main_pid_good(s) <= 0)
+diff --git a/test/TEST-47-ISSUE-14566/Makefile b/test/TEST-47-ISSUE-14566/Makefile
+new file mode 120000
+index 0000000000..e9f93b1104
+--- /dev/null
++++ b/test/TEST-47-ISSUE-14566/Makefile
+@@ -0,0 +1 @@
++../TEST-01-BASIC/Makefile
+\ No newline at end of file
+diff --git a/test/TEST-47-ISSUE-14566/repro.sh b/test/TEST-47-ISSUE-14566/repro.sh
+new file mode 100755
+index 0000000000..5217602257
+--- /dev/null
++++ b/test/TEST-47-ISSUE-14566/repro.sh
+@@ -0,0 +1,5 @@
++#!/bin/bash
++
++sleep infinity &
++echo $! > /leakedtestpid
++wait $!
+diff --git a/test/TEST-47-ISSUE-14566/test.sh b/test/TEST-47-ISSUE-14566/test.sh
+new file mode 100755
+index 0000000000..0ce772164a
+--- /dev/null
++++ b/test/TEST-47-ISSUE-14566/test.sh
+@@ -0,0 +1,55 @@
++#!/bin/bash
++set -e
++TEST_DESCRIPTION="Test that KillMode=mixed does not leave left over proccesses with ExecStopPost="
++. $TEST_BASE_DIR/test-functions
++
++test_setup() {
++    create_empty_image
++    mkdir -p $TESTDIR/root
++    mount ${LOOPDEV}p1 $TESTDIR/root
++
++    (
++        LOG_LEVEL=5
++        eval $(udevadm info --export --query=env --name=${LOOPDEV}p2)
++
++        setup_basic_environment
++
++        # mask some services that we do not want to run in these tests
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-hwdb-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-journal-catalog-update.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-networkd.socket
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-resolved.service
++        ln -fs /dev/null $initdir/etc/systemd/system/systemd-machined.service
++
++        # setup the testsuite service
++        cat >$initdir/etc/systemd/system/testsuite.service <<EOF
++[Unit]
++Description=Testsuite service
++
++[Service]
++ExecStart=/testsuite.sh
++Type=oneshot
++EOF
++        cat > $initdir/etc/systemd/system/issue_14566_test.service << EOF
++[Unit]
++Description=Issue 14566 Repro
++
++[Service]
++ExecStart=/repro.sh
++ExecStopPost=/bin/true
++KillMode=mixed
++EOF
++
++        cp testsuite.sh $initdir/
++        cp repro.sh $initdir/
++
++        setup_testsuite
++    )
++    setup_nspawn_root
++
++    ddebug "umount $TESTDIR/root"
++    umount $TESTDIR/root
++}
++
++do_test "$@"
+diff --git a/test/TEST-47-ISSUE-14566/testsuite.sh b/test/TEST-47-ISSUE-14566/testsuite.sh
+new file mode 100755
+index 0000000000..d917cf52ff
+--- /dev/null
++++ b/test/TEST-47-ISSUE-14566/testsuite.sh
+@@ -0,0 +1,23 @@
++#!/bin/bash
++set -ex
++set -o pipefail
++
++systemd-analyze log-level debug
++systemd-analyze log-target console
++
++systemctl start issue_14566_test
++systemctl status issue_14566_test
++
++leaked_pid=$(cat /leakedtestpid)
++
++systemctl stop issue_14566_test
++
++# Leaked PID will still be around if we're buggy.
++# I personally prefer to see 42.
++ps -p "$leaked_pid" && exit 42
++
++systemd-analyze log-level info
++
++echo OK > /testok
++
++exit 0

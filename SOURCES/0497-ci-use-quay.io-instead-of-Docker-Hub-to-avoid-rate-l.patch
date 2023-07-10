@@ -1,0 +1,33 @@
+From 2dd82aad646bde5a0d49df8562e2578c8b3d04f4 Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Fri, 15 Jan 2021 13:00:33 +0100
+Subject: [PATCH] ci: use quay.io instead of Docker Hub to avoid rate limits
+
+Docker Hub introduced rate limits for anonymous users (100 requests per
+six hours), which break our CI in the busier periods. Let's try to use
+the quay.io CentOS image to mitigate this.
+
+rhel-only
+Related: #1871827
+---
+ ci/travis-centos-rhel8.sh | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/ci/travis-centos-rhel8.sh b/ci/travis-centos-rhel8.sh
+index 43e2cb2585..ffe5813b1a 100755
+--- a/ci/travis-centos-rhel8.sh
++++ b/ci/travis-centos-rhel8.sh
+@@ -81,11 +81,11 @@ for phase in "${PHASES[@]}"; do
+             info "Setup phase"
+             info "Using Travis $CENTOS_RELEASE"
+             # Pull a Docker image and start a new container
+-            docker pull centos:$CENTOS_RELEASE
++            docker pull quay.io/centos/centos:$CENTOS_RELEASE
+             info "Starting container $CONT_NAME"
+             $DOCKER_RUN -v $REPO_ROOT:/build:rw \
+                         -w /build --privileged=true --name $CONT_NAME \
+-                        -dit --net=host centos:$CENTOS_RELEASE /sbin/init
++                        -dit --net=host quay.io/centos/centos:$CENTOS_RELEASE /sbin/init
+             # Beautiful workaround for Fedora's version of Docker
+             sleep 1
+             $DOCKER_EXEC dnf makecache

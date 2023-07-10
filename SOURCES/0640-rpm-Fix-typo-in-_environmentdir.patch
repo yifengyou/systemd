@@ -1,0 +1,25 @@
+From 74cbe4b73a1dbb1113c822690561b8b41b2fb60a Mon Sep 17 00:00:00 2001
+From: Neal Gompa <ngompa13@gmail.com>
+Date: Mon, 25 Jun 2018 12:56:50 -0400
+Subject: [PATCH] rpm: Fix typo in %_environmentdir
+
+Signed-off-by: Neal Gompa <ngompa13@gmail.com>
+(cherry picked from commit 6ea4cb975f99cdfd447332ffa9631790a5975eea)
+Resolves: #2018024
+---
+ src/core/macros.systemd.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/macros.systemd.in b/src/core/macros.systemd.in
+index f3b74f4273..a24d7bbe58 100644
+--- a/src/core/macros.systemd.in
++++ b/src/core/macros.systemd.in
+@@ -18,7 +18,7 @@
+ %_sysctldir @sysctldir@
+ %_sysusersdir @sysusersdir@
+ %_tmpfilesdir @tmpfilesdir@
+-%_environmnentdir @environmentdir@
++%_environmentdir @environmentdir@
+ %_modulesloaddir @modulesloaddir@
+ %_modprobedir @modprobedir@
+ %_systemdgeneratordir @systemgeneratordir@

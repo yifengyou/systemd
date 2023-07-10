@@ -1,0 +1,62 @@
+From 82156850f6642a363aa2ff06677ad089a460104e Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 26 Nov 2019 09:46:00 +0100
+Subject: [PATCH] pid1: add new kernel cmdline arg systemd.cpu_affinity=
+
+Let's allow configuration of the CPU affinity via the kernel cmdline,
+overriding CPUAffinity= in /etc/systemd/system.conf
+
+Prompted by:
+
+https://lists.freedesktop.org/archives/systemd-devel/2019-November/043754.html
+
+(cherry picked from commit 68d58f38693e586b5ce5785274f8e42a79625196)
+
+Resolves: #1812894
+---
+ man/kernel-command-line.xml | 11 +++++++++++
+ src/core/main.c             |  9 +++++++++
+ 2 files changed, 20 insertions(+)
+
+diff --git a/man/kernel-command-line.xml b/man/kernel-command-line.xml
+index 0545f9d84b..4d8cb4e50e 100644
+--- a/man/kernel-command-line.xml
++++ b/man/kernel-command-line.xml
+@@ -366,6 +366,17 @@
+         </listitem>
+       </varlistentry>
+ 
++      <varlistentry>
++        <term><varname>systemd.cpu_affinity=</varname></term>
++
++        <listitem>
++          <para>Overrides the CPU affinity mask for the service manager and the default for all child
++          processes it forks. This takes precedence over <varname>CPUAffinity=</varname>, see
++          <citerefentry><refentrytitle>systemd-system.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>
++          for details.</para>
++        </listitem>
++      </varlistentry>
++
+       <varlistentry>
+         <term><varname>modules_load=</varname></term>
+         <term><varname>rd.modules_load=</varname></term>
+diff --git a/src/core/main.c b/src/core/main.c
+index 45d09b1e11..9f238a8430 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -472,6 +472,15 @@ static int parse_proc_cmdline_item(const char *key, const char *value, void *dat
+                 if (arg_default_timeout_start_usec <= 0)
+                         arg_default_timeout_start_usec = USEC_INFINITY;
+ 
++        } else if (proc_cmdline_key_streq(key, "systemd.cpu_affinity")) {
++
++                if (proc_cmdline_value_missing(key, value))
++                        return 0;
++
++                r = parse_cpu_set(value, &arg_cpu_affinity);
++                if (r < 0)
++                        log_warning_errno(r, "Failed to parse CPU affinity mask '%s', ignoring: %m", value);
++
+         } else if (proc_cmdline_key_streq(key, "systemd.watchdog_device")) {
+ 
+                 if (proc_cmdline_value_missing(key, value))

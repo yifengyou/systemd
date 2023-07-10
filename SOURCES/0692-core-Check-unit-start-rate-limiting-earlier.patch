@@ -1,0 +1,400 @@
+From 471eda89a25a3ceac91a2d05e39a54aae78038ed Mon Sep 17 00:00:00 2001
+From: Daan De Meyer <daan.j.demeyer@gmail.com>
+Date: Tue, 24 Aug 2021 16:46:47 +0100
+Subject: [PATCH] core: Check unit start rate limiting earlier
+
+Fixes #17433. Currently, if any of the validations we do before we
+check start rate limiting fail, we can still enter a busy loop as
+no rate limiting gets applied. A common occurence of this scenario
+is path units triggering a service that fails a condition check.
+
+To fix the issue, we simply move up start rate limiting checks to
+be the first thing we do when starting a unit. To achieve this,
+we add a new method to the unit vtable and implement it for the
+relevant unit types so that we can do the start rate limit checks
+earlier on.
+
+(cherry picked from commit 9727f2427ff6b2e1f4ab927cc57ad8e888f04e95)
+
+Related: #2036608
+
+[msekleta: I've deleted part of the original commit that adds test for
+issue #17433. This was necessary because upstream commit assumes newer
+organization of the test code which we don't have in RHEL-8 tree. As
+a consequence we must add explicit test for this in the internal
+test-suite.]
+---
+ src/core/automount.c | 23 +++++++++++++++++------
+ src/core/mount.c     | 23 +++++++++++++++++------
+ src/core/path.c      | 23 +++++++++++++++++------
+ src/core/service.c   | 25 ++++++++++++++++++-------
+ src/core/socket.c    | 23 +++++++++++++++++------
+ src/core/swap.c      | 23 +++++++++++++++++------
+ src/core/timer.c     | 22 ++++++++++++++++------
+ src/core/unit.c      | 14 ++++++++++----
+ src/core/unit.h      |  4 ++++
+ 9 files changed, 133 insertions(+), 47 deletions(-)
+
+diff --git a/src/core/automount.c b/src/core/automount.c
+index 2bc160cb07..5e16adabb5 100644
+--- a/src/core/automount.c
++++ b/src/core/automount.c
+@@ -808,12 +808,6 @@ static int automount_start(Unit *u) {
+                 return -ENOENT;
+         }
+ 
+-        r = unit_test_start_limit(u);
+-        if (r < 0) {
+-                automount_enter_dead(a, AUTOMOUNT_FAILURE_START_LIMIT_HIT);
+-                return r;
+-        }
+-
+         r = unit_acquire_invocation_id(u);
+         if (r < 0)
+                 return r;
+@@ -1077,6 +1071,21 @@ static bool automount_supported(void) {
+         return supported;
+ }
+ 
++static int automount_test_start_limit(Unit *u) {
++        Automount *a = AUTOMOUNT(u);
++        int r;
++
++        assert(a);
++
++        r = unit_test_start_limit(u);
++        if (r < 0) {
++                automount_enter_dead(a, AUTOMOUNT_FAILURE_START_LIMIT_HIT);
++                return r;
++        }
++
++        return 0;
++}
++
+ static const char* const automount_result_table[_AUTOMOUNT_RESULT_MAX] = {
+         [AUTOMOUNT_SUCCESS] = "success",
+         [AUTOMOUNT_FAILURE_RESOURCES] = "resources",
+@@ -1135,4 +1144,6 @@ const UnitVTable automount_vtable = {
+                         [JOB_FAILED]     = "Failed to unset automount %s.",
+                 },
+         },
++
++        .test_start_limit = automount_test_start_limit,
+ };
+diff --git a/src/core/mount.c b/src/core/mount.c
+index aa586d88cb..22848847e5 100644
+--- a/src/core/mount.c
++++ b/src/core/mount.c
+@@ -1065,12 +1065,6 @@ static int mount_start(Unit *u) {
+ 
+         assert(IN_SET(m->state, MOUNT_DEAD, MOUNT_FAILED));
+ 
+-        r = unit_test_start_limit(u);
+-        if (r < 0) {
+-                mount_enter_dead(m, MOUNT_FAILURE_START_LIMIT_HIT);
+-                return r;
+-        }
+-
+         r = unit_acquire_invocation_id(u);
+         if (r < 0)
+                 return r;
+@@ -1957,6 +1951,21 @@ static int mount_control_pid(Unit *u) {
+         return m->control_pid;
+ }
+ 
++static int mount_test_start_limit(Unit *u) {
++        Mount *m = MOUNT(u);
++        int r;
++
++        assert(m);
++
++        r = unit_test_start_limit(u);
++        if (r < 0) {
++                mount_enter_dead(m, MOUNT_FAILURE_START_LIMIT_HIT);
++                return r;
++        }
++
++        return 0;
++}
++
+ static const char* const mount_exec_command_table[_MOUNT_EXEC_COMMAND_MAX] = {
+         [MOUNT_EXEC_MOUNT] = "ExecMount",
+         [MOUNT_EXEC_UNMOUNT] = "ExecUnmount",
+@@ -2048,4 +2057,6 @@ const UnitVTable mount_vtable = {
+                         [JOB_TIMEOUT]    = "Timed out unmounting %s.",
+                 },
+         },
++
++        .test_start_limit = mount_test_start_limit,
+ };
+diff --git a/src/core/path.c b/src/core/path.c
+index 4bccc0396b..1e69a1f05f 100644
+--- a/src/core/path.c
++++ b/src/core/path.c
+@@ -565,12 +565,6 @@ static int path_start(Unit *u) {
+                 return -ENOENT;
+         }
+ 
+-        r = unit_test_start_limit(u);
+-        if (r < 0) {
+-                path_enter_dead(p, PATH_FAILURE_START_LIMIT_HIT);
+-                return r;
+-        }
+-
+         r = unit_acquire_invocation_id(u);
+         if (r < 0)
+                 return r;
+@@ -730,6 +724,21 @@ static void path_reset_failed(Unit *u) {
+         p->result = PATH_SUCCESS;
+ }
+ 
++static int path_test_start_limit(Unit *u) {
++        Path *p = PATH(u);
++        int r;
++
++        assert(p);
++
++        r = unit_test_start_limit(u);
++        if (r < 0) {
++                path_enter_dead(p, PATH_FAILURE_START_LIMIT_HIT);
++                return r;
++        }
++
++        return 0;
++}
++
+ static const char* const path_type_table[_PATH_TYPE_MAX] = {
+         [PATH_EXISTS] = "PathExists",
+         [PATH_EXISTS_GLOB] = "PathExistsGlob",
+@@ -782,4 +791,6 @@ const UnitVTable path_vtable = {
+ 
+         .bus_vtable = bus_path_vtable,
+         .bus_set_property = bus_path_set_property,
++
++        .test_start_limit = path_test_start_limit,
+ };
+diff --git a/src/core/service.c b/src/core/service.c
+index 1a1de43d0d..c5f408d817 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -2387,13 +2387,6 @@ static int service_start(Unit *u) {
+ 
+         assert(IN_SET(s->state, SERVICE_DEAD, SERVICE_FAILED));
+ 
+-        /* Make sure we don't enter a busy loop of some kind. */
+-        r = unit_test_start_limit(u);
+-        if (r < 0) {
+-                service_enter_dead(s, SERVICE_FAILURE_START_LIMIT_HIT, false);
+-                return r;
+-        }
+-
+         r = unit_acquire_invocation_id(u);
+         if (r < 0)
+                 return r;
+@@ -4081,6 +4074,22 @@ static bool service_needs_console(Unit *u) {
+                       SERVICE_FINAL_SIGKILL);
+ }
+ 
++static int service_test_start_limit(Unit *u) {
++        Service *s = SERVICE(u);
++        int r;
++
++        assert(s);
++
++        /* Make sure we don't enter a busy loop of some kind. */
++        r = unit_test_start_limit(u);
++        if (r < 0) {
++                service_enter_dead(s, SERVICE_FAILURE_START_LIMIT_HIT, false);
++                return r;
++        }
++
++        return 0;
++}
++
+ static const char* const service_restart_table[_SERVICE_RESTART_MAX] = {
+         [SERVICE_RESTART_NO] = "no",
+         [SERVICE_RESTART_ON_SUCCESS] = "on-success",
+@@ -4222,4 +4231,6 @@ const UnitVTable service_vtable = {
+                         [JOB_FAILED]     = "Stopped (with error) %s.",
+                 },
+         },
++
++        .test_start_limit = service_test_start_limit,
+ };
+diff --git a/src/core/socket.c b/src/core/socket.c
+index 09491c6677..36d2e4f823 100644
+--- a/src/core/socket.c
++++ b/src/core/socket.c
+@@ -2469,12 +2469,6 @@ static int socket_start(Unit *u) {
+ 
+         assert(IN_SET(s->state, SOCKET_DEAD, SOCKET_FAILED));
+ 
+-        r = unit_test_start_limit(u);
+-        if (r < 0) {
+-                socket_enter_dead(s, SOCKET_FAILURE_START_LIMIT_HIT);
+-                return r;
+-        }
+-
+         r = unit_acquire_invocation_id(u);
+         if (r < 0)
+                 return r;
+@@ -3267,6 +3261,21 @@ static int socket_control_pid(Unit *u) {
+         return s->control_pid;
+ }
+ 
++static int socket_test_start_limit(Unit *u) {
++        Socket *s = SOCKET(u);
++        int r;
++
++        assert(s);
++
++        r = unit_test_start_limit(u);
++        if (r < 0) {
++                socket_enter_dead(s, SOCKET_FAILURE_START_LIMIT_HIT);
++                return r;
++        }
++
++        return 0;
++}
++
+ static const char* const socket_exec_command_table[_SOCKET_EXEC_COMMAND_MAX] = {
+         [SOCKET_EXEC_START_PRE] = "ExecStartPre",
+         [SOCKET_EXEC_START_CHOWN] = "ExecStartChown",
+@@ -3359,4 +3368,6 @@ const UnitVTable socket_vtable = {
+                         [JOB_TIMEOUT]    = "Timed out stopping %s.",
+                 },
+         },
++
++        .test_start_limit = socket_test_start_limit,
+ };
+diff --git a/src/core/swap.c b/src/core/swap.c
+index 823699699e..90fcd69300 100644
+--- a/src/core/swap.c
++++ b/src/core/swap.c
+@@ -851,12 +851,6 @@ static int swap_start(Unit *u) {
+                 if (UNIT(other)->job && UNIT(other)->job->state == JOB_RUNNING)
+                         return -EAGAIN;
+ 
+-        r = unit_test_start_limit(u);
+-        if (r < 0) {
+-                swap_enter_dead(s, SWAP_FAILURE_START_LIMIT_HIT);
+-                return r;
+-        }
+-
+         r = unit_acquire_invocation_id(u);
+         if (r < 0)
+                 return r;
+@@ -1458,6 +1452,21 @@ static int swap_control_pid(Unit *u) {
+         return s->control_pid;
+ }
+ 
++static int swap_test_start_limit(Unit *u) {
++        Swap *s = SWAP(u);
++        int r;
++
++        assert(s);
++
++        r = unit_test_start_limit(u);
++        if (r < 0) {
++                swap_enter_dead(s, SWAP_FAILURE_START_LIMIT_HIT);
++                return r;
++        }
++
++        return 0;
++}
++
+ static const char* const swap_exec_command_table[_SWAP_EXEC_COMMAND_MAX] = {
+         [SWAP_EXEC_ACTIVATE] = "ExecActivate",
+         [SWAP_EXEC_DEACTIVATE] = "ExecDeactivate",
+@@ -1547,4 +1556,6 @@ const UnitVTable swap_vtable = {
+                         [JOB_TIMEOUT]    = "Timed out deactivating swap %s.",
+                 },
+         },
++
++        .test_start_limit = swap_test_start_limit,
+ };
+diff --git a/src/core/timer.c b/src/core/timer.c
+index be16321296..fb9ae17990 100644
+--- a/src/core/timer.c
++++ b/src/core/timer.c
+@@ -599,12 +599,6 @@ static int timer_start(Unit *u) {
+                 return -ENOENT;
+         }
+ 
+-        r = unit_test_start_limit(u);
+-        if (r < 0) {
+-                timer_enter_dead(t, TIMER_FAILURE_START_LIMIT_HIT);
+-                return r;
+-        }
+-
+         r = unit_acquire_invocation_id(u);
+         if (r < 0)
+                 return r;
+@@ -829,6 +823,21 @@ static void timer_timezone_change(Unit *u) {
+         timer_enter_waiting(t, false);
+ }
+ 
++static int timer_test_start_limit(Unit *u) {
++        Timer *t = TIMER(u);
++        int r;
++
++        assert(t);
++
++        r = unit_test_start_limit(u);
++        if (r < 0) {
++                timer_enter_dead(t, TIMER_FAILURE_START_LIMIT_HIT);
++                return r;
++        }
++
++        return 0;
++}
++
+ static const char* const timer_base_table[_TIMER_BASE_MAX] = {
+         [TIMER_ACTIVE] = "OnActiveSec",
+         [TIMER_BOOT] = "OnBootSec",
+@@ -884,4 +893,5 @@ const UnitVTable timer_vtable = {
+         .bus_set_property = bus_timer_set_property,
+ 
+         .can_transient = true,
++        .test_start_limit = timer_test_start_limit,
+ };
+diff --git a/src/core/unit.c b/src/core/unit.c
+index 9013186d8a..f0df7452fa 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -1728,10 +1728,16 @@ int unit_start(Unit *u) {
+ 
+         assert(u);
+ 
+-        /* If this is already started, then this will succeed. Note
+-         * that this will even succeed if this unit is not startable
+-         * by the user. This is relied on to detect when we need to
+-         * wait for units and when waiting is finished. */
++        /* Check start rate limiting early so that failure conditions don't cause us to enter a busy loop. */
++        if (UNIT_VTABLE(u)->test_start_limit) {
++                int r = UNIT_VTABLE(u)->test_start_limit(u);
++                if (r < 0)
++                        return r;
++        }
++
++        /* If this is already started, then this will succeed. Note that this will even succeed if this unit
++         * is not startable by the user. This is relied on to detect when we need to wait for units and when
++         * waiting is finished. */
+         state = unit_active_state(u);
+         if (UNIT_IS_ACTIVE_OR_RELOADING(state))
+                 return -EALREADY;
+diff --git a/src/core/unit.h b/src/core/unit.h
+index a8bc350b66..9e6f1bcf81 100644
+--- a/src/core/unit.h
++++ b/src/core/unit.h
+@@ -567,6 +567,10 @@ typedef struct UnitVTable {
+         /* The bus vtable */
+         const sd_bus_vtable *bus_vtable;
+ 
++        /* If this function is set, it's invoked first as part of starting a unit to allow start rate
++         * limiting checks to occur before we do anything else. */
++        int (*test_start_limit)(Unit *u);
++
+         /* The strings to print in status messages */
+         UnitStatusMessageFormats status_message_formats;
+ 

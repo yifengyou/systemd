@@ -1,0 +1,31 @@
+From 3392b2fb9e4920e9238a09c774252dc0d0183903 Mon Sep 17 00:00:00 2001
+From: Daan De Meyer <daan.j.demeyer@gmail.com>
+Date: Sat, 30 Oct 2021 22:12:06 +0100
+Subject: [PATCH] core: Move 'r' variable declaration to start of unit_start()
+
+(cherry picked from commit 5f37c1a955e399756c4137d22f7f0f45a619f425)
+
+Related: #2065322
+---
+ src/core/unit.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/core/unit.c b/src/core/unit.c
+index e3e534ea2e..4fd9af87b7 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -1725,12 +1725,13 @@ static bool unit_verify_deps(Unit *u) {
+ int unit_start(Unit *u) {
+         UnitActiveState state;
+         Unit *following;
++        int r;
+ 
+         assert(u);
+ 
+         /* Check our ability to start early so that failure conditions don't cause us to enter a busy loop. */
+         if (UNIT_VTABLE(u)->can_start) {
+-                int r = UNIT_VTABLE(u)->can_start(u);
++                r = UNIT_VTABLE(u)->can_start(u);
+                 if (r < 0)
+                         return r;
+         }

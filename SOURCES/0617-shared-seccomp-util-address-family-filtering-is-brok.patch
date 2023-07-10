@@ -1,0 +1,76 @@
+From 3cf73fa4599116da350a0100378e749bbcbcad37 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Thu, 26 Nov 2020 11:23:54 +0100
+Subject: [PATCH] shared/seccomp-util: address family filtering is broken on
+ ppc
+
+This reverts the gist of da1921a5c396547261c8c7fcd94173346eb3b718 and
+0d9fca76bb69e162265b2d25cb79f1890c0da31b (for ppc).
+
+Quoting #17559:
+> libseccomp 2.5 added socket syscall multiplexing on ppc64(el):
+> https://github.com/seccomp/libseccomp/pull/229
+>
+> Like with i386, s390 and s390x this breaks socket argument filtering, so
+> RestrictAddressFamilies doesn't work.
+>
+> This causes the unit test to fail:
+> /* test_restrict_address_families */
+> Operating on architecture: ppc
+> Failed to install socket family rules for architecture ppc, skipping: Operation canceled
+> Operating on architecture: ppc64
+> Failed to add socket() rule for architecture ppc64, skipping: Invalid argument
+> Operating on architecture: ppc64-le
+> Failed to add socket() rule for architecture ppc64-le, skipping: Invalid argument
+> Assertion 'fd < 0' failed at src/test/test-seccomp.c:424, function test_restrict_address_families(). Aborting.
+>
+> The socket filters can't be added so `socket(AF_UNIX, SOCK_DGRAM, 0);` still
+> works, triggering the assertion.
+
+Fixes #17559.
+
+(cherry picked from commit d5923e38bc0e6cf9d7620ed5f1f8606fe7fe1168)
+
+Resolves: #1982650
+---
+ src/shared/seccomp-util.c | 6 +++---
+ src/test/test-seccomp.c   | 2 +-
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/shared/seccomp-util.c b/src/shared/seccomp-util.c
+index e903512d45..c57c409433 100644
+--- a/src/shared/seccomp-util.c
++++ b/src/shared/seccomp-util.c
+@@ -1251,9 +1251,6 @@ int seccomp_restrict_address_families(Set *address_families, bool whitelist) {
+                 case SCMP_ARCH_X32:
+                 case SCMP_ARCH_ARM:
+                 case SCMP_ARCH_AARCH64:
+-                case SCMP_ARCH_PPC:
+-                case SCMP_ARCH_PPC64:
+-                case SCMP_ARCH_PPC64LE:
+                 case SCMP_ARCH_MIPSEL64N32:
+                 case SCMP_ARCH_MIPS64N32:
+                 case SCMP_ARCH_MIPSEL64:
+@@ -1267,6 +1264,9 @@ int seccomp_restrict_address_families(Set *address_families, bool whitelist) {
+                 case SCMP_ARCH_X86:
+                 case SCMP_ARCH_MIPSEL:
+                 case SCMP_ARCH_MIPS:
++                case SCMP_ARCH_PPC:
++                case SCMP_ARCH_PPC64:
++                case SCMP_ARCH_PPC64LE:
+                 default:
+                         /* These we either know we don't support (i.e. are the ones that do use socketcall()), or we
+                          * don't know */
+diff --git a/src/test/test-seccomp.c b/src/test/test-seccomp.c
+index 009a2e1922..5eb1c78b8b 100644
+--- a/src/test/test-seccomp.c
++++ b/src/test/test-seccomp.c
+@@ -25,7 +25,7 @@
+ #include "util.h"
+ #include "virt.h"
+ 
+-#if SCMP_SYS(socket) < 0 || defined(__i386__) || defined(__s390x__) || defined(__s390__)
++#if SCMP_SYS(socket) < 0 || defined(__i386__) || defined(__s390x__) || defined(__s390__) || defined(__powerpc64__) || defined(__powerpc__)
+ /* On these archs, socket() is implemented via the socketcall() syscall multiplexer,
+  * and we can't restrict it hence via seccomp. */
+ #  define SECCOMP_RESTRICT_ADDRESS_FAMILIES_BROKEN 1

@@ -1,0 +1,27 @@
+From 63b5df7c9fda4f7d44674076da5fc5cef4564f3a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 17 Jul 2019 09:39:39 +0200
+Subject: [PATCH] shared: fix assert call
+
+Fixup for 3572d3df8f8. Coverity CID#1403013.
+
+(cherry picked from commit 60b17d6fcd988c9995b7d1476d3aba1c4cbbfddd)
+
+Related: #1830861
+---
+ src/shared/bus-wait-for-units.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/shared/bus-wait-for-units.c b/src/shared/bus-wait-for-units.c
+index d07f491e93..de15da1620 100644
+--- a/src/shared/bus-wait-for-units.c
++++ b/src/shared/bus-wait-for-units.c
+@@ -190,7 +190,7 @@ static void wait_for_item_check_ready(WaitForItem *item) {
+         BusWaitForUnits *d;
+ 
+         assert(item);
+-        assert(d = item->parent);
++        assert_se(d = item->parent);
+ 
+         if (FLAGS_SET(item->flags, BUS_WAIT_FOR_MAINTENANCE_END)) {
+ 

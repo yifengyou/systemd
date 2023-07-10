@@ -1,0 +1,62 @@
+From 7a7b0c4ec7a5595a44d9c70d8270b0724a8b8c45 Mon Sep 17 00:00:00 2001
+From: David Tardon <dtardon@redhat.com>
+Date: Mon, 13 Mar 2023 14:31:38 +0100
+Subject: [PATCH] journald-server: move relinquish code into function
+
+No functional change, just refactoring.
+
+RHEL-only
+
+Related: #2174645
+---
+ src/journal/journald-server.c | 23 ++++++++++++++++-------
+ 1 file changed, 16 insertions(+), 7 deletions(-)
+
+diff --git a/src/journal/journald-server.c b/src/journal/journald-server.c
+index c72cb68095..aa70db95cc 100644
+--- a/src/journal/journald-server.c
++++ b/src/journal/journald-server.c
+@@ -1258,20 +1258,16 @@ static int dispatch_sigrtmin1(sd_event_source *es, const struct signalfd_siginfo
+         return 0;
+ }
+ 
+-
+-static int dispatch_sigrtmin2(sd_event_source *es, const struct signalfd_siginfo *si, void *userdata) {
+-        Server *s = userdata;
++static void relinquish_var(Server *s) {
+         int r;
+ 
+         assert(s);
+ 
+         if (s->storage == STORAGE_NONE)
+-                return 0;
++                return;
+ 
+         if (s->runtime_journal && !s->system_journal)
+-                return 0;
+-
+-        log_debug("Received request to relinquish /var from PID " PID_FMT, si->ssi_pid);
++                return;
+ 
+         (void) system_journal_open(s, false, true);
+ 
+@@ -1286,6 +1282,19 @@ static int dispatch_sigrtmin2(sd_event_source *es, const struct signalfd_siginfo
+         if (r < 0)
+                 log_warning_errno(r, "Failed to write /run/systemd/journal/relinquished, ignoring: %m");
+ 
++        return;
++}
++
++static int dispatch_sigrtmin2(sd_event_source *es, const struct signalfd_siginfo *si, void *userdata) {
++        Server *s = userdata;
++
++        assert(s);
++        assert(si);
++
++        log_debug("Received request to relinquish /var from PID " PID_FMT, si->ssi_pid);
++
++        relinquish_var(s);
++
+         return 0;
+ }
+ 

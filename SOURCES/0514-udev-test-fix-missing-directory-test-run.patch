@@ -1,0 +1,35 @@
+From 974431a70775d5127cd973c4b4705d2cf8884011 Mon Sep 17 00:00:00 2001
+From: Alexey Bogdanenko <alexey@bogdanenko.com>
+Date: Sat, 8 Dec 2018 15:35:30 +0300
+Subject: [PATCH] udev-test: fix missing directory test/run
+
+Fixes the following error:
+
+    Failed to mount test /run: No such file or directory
+
+By the time command "./test-udev check" calls function "fake_filesystems",
+directory "test/run" must be present.
+
+(cherry picked from commit 1e5548c0e0962424b6ca5fdfd35c866b70760c8f)
+
+Related: #1642728
+---
+ test/udev-test.pl | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 3517feab15..eb76ebd72e 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1558,6 +1558,11 @@ sub udev_setup {
+ 
+         system("rm", "-rf", "$udev_run");
+ 
++        if (!mkdir($udev_run)) {
++                warn "unable to create directory $udev_run";
++                return 0;
++        }
++
+         return 1;
+ }
+ 

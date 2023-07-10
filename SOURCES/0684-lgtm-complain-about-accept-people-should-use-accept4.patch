@@ -1,0 +1,27 @@
+From bfa090ce83f2b0734c526a4426a20f6f0f943aa0 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Wed, 10 Apr 2019 19:36:40 +0200
+Subject: [PATCH] lgtm: complain about accept() [people should use accept4()
+ instead, due to O_CLOEXEC]
+
+(cherry picked from commit e2d0fa6feb3797246c8bfda3db45a2f5b62e1b5b)
+
+Related: #2017033
+---
+ .lgtm/cpp-queries/PotentiallyDangerousFunction.ql | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql b/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
+index 96712cf1c6..865330430d 100644
+--- a/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
++++ b/.lgtm/cpp-queries/PotentiallyDangerousFunction.ql
+@@ -41,6 +41,9 @@ predicate potentiallyDangerousFunction(Function f, string message) {
+   ) or (
+     f.getQualifiedName() = "strerror" and
+     message = "Call to strerror() is not thread-safe. Use strerror_r() or printf()'s %m format string instead."
++  ) or (
++    f.getQualifiedName() = "accept" and
++    message = "Call to accept() is not O_CLOEXEC-safe. Use accept4() instead."
+   )
+ }
+ 

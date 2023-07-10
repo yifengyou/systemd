@@ -1,0 +1,51 @@
+From 1d63577410cde215c04921d62f435259a6b258d7 Mon Sep 17 00:00:00 2001
+From: Ludwig Nussel <ludwig.nussel@suse.de>
+Date: Mon, 20 Dec 2021 18:05:50 +0100
+Subject: [PATCH] systemctl: shutdown don't fallback on auth fail
+
+For shutdowns don't fall back to starting the target directly if talking
+to logind failed with auth failure. That would just lead to another
+polkit auth attempt.
+
+(cherry picked from commit 38d55bf2641f345445cb4e6a5e5e808555591db2)
+
+Related: #2053273
+---
+ src/systemctl/systemctl.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index 4bedb52f2a..199f736f7f 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -3675,8 +3675,8 @@ static int start_special(int argc, char *argv[], void *userdata) {
+                         r = logind_reboot(a);
+                         if (r >= 0)
+                                 return r;
+-                        if (IN_SET(r, -EOPNOTSUPP, -EINPROGRESS))
+-                                /* requested operation is not supported or already in progress */
++                        if (IN_SET(r, -EACCES, -EOPNOTSUPP, -EINPROGRESS))
++                                /* Requested operation requires auth, is not supported or already in progress */
+                                 return r;
+ 
+                         /* On all other errors, try low-level operation. In order to minimize the difference between
+@@ -8644,7 +8644,7 @@ static int logind_schedule_shutdown(void) {
+                         action,
+                         arg_when);
+         if (r < 0)
+-                return log_warning_errno(r, "Failed to call ScheduleShutdown in logind, proceeding with immediate shutdown: %s", bus_error_message(&error, r));
++                return log_warning_errno(r, "Failed to schedule shutdown: %s", bus_error_message(&error, r));
+ 
+         if (!arg_quiet)
+                 log_info("Shutdown scheduled for %s, use 'shutdown -c' to cancel.", format_timestamp(date, sizeof(date), arg_when));
+@@ -8670,8 +8670,8 @@ static int halt_main(void) {
+         }
+         if (r >= 0)
+                 return r;
+-        if (IN_SET(r, -EOPNOTSUPP, -EINPROGRESS))
+-                /* Requested operation is not supported on the local system or already in
++        if (IN_SET(r, -EACCES, -EOPNOTSUPP, -EINPROGRESS))
++                /* Requested operation requires auth, is not supported on the local system or already in
+                  * progress */
+                 return r;
+         /* on all other errors, try low-level operation */

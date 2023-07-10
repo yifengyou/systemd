@@ -1,0 +1,60 @@
+From 5b5a590c5a8bbaebbecf4ab4797334a09a870287 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 23 Nov 2020 15:33:50 +0100
+Subject: [PATCH] sd-event: let's suffix last_run/last_log with "_usec"
+
+Otherwise it's a bit confusing what this is about: two timestamps.
+
+(cherry picked from commit e6a7bee538f6638c2d5ca2afc66bf47cba3f075c)
+
+Related: #1819868
+---
+ src/libsystemd/sd-event/sd-event.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/src/libsystemd/sd-event/sd-event.c b/src/libsystemd/sd-event/sd-event.c
+index 9d42157206..88641879cc 100644
+--- a/src/libsystemd/sd-event/sd-event.c
++++ b/src/libsystemd/sd-event/sd-event.c
+@@ -301,7 +301,7 @@ struct sd_event {
+ 
+         LIST_HEAD(sd_event_source, sources);
+ 
+-        usec_t last_run, last_log;
++        usec_t last_run_usec, last_log_usec;
+         unsigned delays[sizeof(usec_t) * 8];
+ };
+ 
+@@ -3579,19 +3579,19 @@ _public_ int sd_event_run(sd_event *e, uint64_t timeout) {
+         assert_return(e->state != SD_EVENT_FINISHED, -ESTALE);
+         assert_return(e->state == SD_EVENT_INITIAL, -EBUSY);
+ 
+-        if (e->profile_delays && e->last_run) {
++        if (e->profile_delays && e->last_run_usec != 0) {
+                 usec_t this_run;
+                 unsigned l;
+ 
+                 this_run = now(CLOCK_MONOTONIC);
+ 
+-                l = u64log2(this_run - e->last_run);
++                l = u64log2(this_run - e->last_run_usec);
+                 assert(l < ELEMENTSOF(e->delays));
+                 e->delays[l]++;
+ 
+-                if (this_run - e->last_log >= 5*USEC_PER_SEC) {
++                if (this_run - e->last_log_usec >= 5*USEC_PER_SEC) {
+                         event_log_delays(e);
+-                        e->last_log = this_run;
++                        e->last_log_usec = this_run;
+                 }
+         }
+ 
+@@ -3601,7 +3601,7 @@ _public_ int sd_event_run(sd_event *e, uint64_t timeout) {
+                 r = sd_event_wait(e, timeout);
+ 
+         if (e->profile_delays)
+-                e->last_run = now(CLOCK_MONOTONIC);
++                e->last_run_usec = now(CLOCK_MONOTONIC);
+ 
+         if (r > 0) {
+                 /* There's something now, then let's dispatch it */

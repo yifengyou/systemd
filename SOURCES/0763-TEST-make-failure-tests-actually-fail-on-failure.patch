@@ -1,0 +1,123 @@
+From d153f9ff573b191076b843118e825f71227dbc01 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Thu, 8 Apr 2021 01:27:33 +0200
+Subject: [PATCH] TEST-*: make failure tests actually fail on failure
+
+Here the intent was actually correct, and the tests still pass when the check
+is made effective.
+
+(cherry picked from commit 4e20fe27950e14e8a082a74515f347546a9371d0)
+
+Related: #2087152
+---
+ test/TEST-03-JOBS/test-jobs.sh          |  8 ++++----
+ test/TEST-04-JOURNAL/test-journal.sh    |  4 ++--
+ test/TEST-18-FAILUREACTION/testsuite.sh |  2 +-
+ test/TEST-20-MAINPIDGAMES/testsuite.sh  | 14 ++++++++++++--
+ test/TEST-23-TYPE-EXEC/testsuite.sh     |  4 ++--
+ 5 files changed, 21 insertions(+), 11 deletions(-)
+
+diff --git a/test/TEST-03-JOBS/test-jobs.sh b/test/TEST-03-JOBS/test-jobs.sh
+index 42190cf478..4ff53e0ade 100755
+--- a/test/TEST-03-JOBS/test-jobs.sh
++++ b/test/TEST-03-JOBS/test-jobs.sh
+@@ -18,7 +18,7 @@ systemctl start --job-mode=ignore-dependencies hello
+ END_SEC=$(date -u '+%s')
+ ELAPSED=$(($END_SEC-$START_SEC))
+ 
+-[ "$ELAPSED" -lt 3 ]
++test "$ELAPSED" -lt 3
+ 
+ # sleep should still be running, hello not.
+ systemctl list-jobs > /root/list-jobs.txt
+@@ -27,11 +27,11 @@ grep 'hello\.service' /root/list-jobs.txt && exit 1
+ systemctl stop sleep.service hello-after-sleep.target
+ 
+ # Some basic testing that --show-transaction does something useful
+-! systemctl is-active systemd-importd
++systemctl is-active systemd-importd && { echo 'unexpected success'; exit 1; }
+ systemctl -T start systemd-importd
+ systemctl is-active systemd-importd
+ systemctl --show-transaction stop systemd-importd
+-! systemctl is-active systemd-importd
++systemctl is-active systemd-importd && { echo 'unexpected success'; exit 1; }
+ 
+ # Test for a crash when enqueuing a JOB_NOP when other job already exists
+ systemctl start --no-block hello-after-sleep.target
+@@ -79,7 +79,7 @@ ELAPSED=$(($END_SEC-$START_SEC))
+ 
+ # wait5fail fails, so systemctl should fail
+ START_SEC=$(date -u '+%s')
+-! systemctl start --wait wait2.service wait5fail.service || exit 1
++systemctl start --wait wait2.service wait5fail.service && { echo 'unexpected success'; exit 1; }
+ END_SEC=$(date -u '+%s')
+ ELAPSED=$(($END_SEC-$START_SEC))
+ [[ "$ELAPSED" -ge 5 ]] && [[ "$ELAPSED" -le 7 ]] || exit 1
+diff --git a/test/TEST-04-JOURNAL/test-journal.sh b/test/TEST-04-JOURNAL/test-journal.sh
+index 52a6ee84d1..a3db1a7472 100755
+--- a/test/TEST-04-JOURNAL/test-journal.sh
++++ b/test/TEST-04-JOURNAL/test-journal.sh
+@@ -60,8 +60,8 @@ journalctl -b -o export --output-fields=MESSAGE,FOO --output-fields=PRIORITY,MES
+ grep -q '^__CURSOR=' /output
+ grep -q '^MESSAGE=foo$' /output
+ grep -q '^PRIORITY=6$' /output
+-! grep -q '^FOO=' /output
+-! grep -q '^SYSLOG_FACILITY=' /output
++grep '^FOO=' /output && { echo 'unexpected success'; exit 1; }
++grep '^SYSLOG_FACILITY=' /output && { echo 'unexpected success'; exit 1; }
+ 
+ # https://github.com/systemd/systemd/issues/13708
+ ID=$(journalctl --new-id128 | sed -n 2p)
+diff --git a/test/TEST-18-FAILUREACTION/testsuite.sh b/test/TEST-18-FAILUREACTION/testsuite.sh
+index 1867cc3c47..21b055d6ef 100755
+--- a/test/TEST-18-FAILUREACTION/testsuite.sh
++++ b/test/TEST-18-FAILUREACTION/testsuite.sh
+@@ -5,7 +5,7 @@ set -ex
+ set -o pipefail
+ 
+ systemd-run --wait -p FailureAction=poweroff true
+-! systemd-run --wait -p SuccessAction=poweroff false
++systemd-run --wait -p SuccessAction=poweroff false && { echo 'unexpected success'; exit 1; }
+ 
+ if test -f /firstphase ; then
+     echo OK > /firstphase
+diff --git a/test/TEST-20-MAINPIDGAMES/testsuite.sh b/test/TEST-20-MAINPIDGAMES/testsuite.sh
+index 0e1a116b07..d1bfdd7a2d 100755
+--- a/test/TEST-20-MAINPIDGAMES/testsuite.sh
++++ b/test/TEST-20-MAINPIDGAMES/testsuite.sh
+@@ -128,8 +128,18 @@ test -f /run/mainpidsh3/pid
+ EOF
+ chmod 755 /dev/shm/mainpid3.sh
+ 
+-# This has to fail, as we shouldn't accept the dangerous PID file, and then inotify-wait on it to be corrected which we never do
+-! systemd-run --unit=mainpidsh3.service -p StandardOutput=tty -p StandardError=tty -p Type=forking -p RuntimeDirectory=mainpidsh3 -p PIDFile=/run/mainpidsh3/pid -p DynamicUser=1 -p TimeoutStartSec=2s /dev/shm/mainpid3.sh
++# This has to fail, as we shouldn't accept the dangerous PID file, and then
++# inotify-wait on it to be corrected which we never do.
++systemd-run --unit=mainpidsh3.service \
++            -p StandardOutput=tty \
++            -p StandardError=tty \
++            -p Type=forking \
++            -p RuntimeDirectory=mainpidsh3 \
++            -p PIDFile=/run/mainpidsh3/pid \
++            -p DynamicUser=1 \
++            -p TimeoutStartSec=2s \
++            /dev/shm/mainpid3.sh \
++    && { echo 'unexpected success'; exit 1; }
+ 
+ # Test that this failed due to timeout, and not some other error
+ test `systemctl show -p Result --value mainpidsh3.service` = timeout
+diff --git a/test/TEST-23-TYPE-EXEC/testsuite.sh b/test/TEST-23-TYPE-EXEC/testsuite.sh
+index e0c34cfd04..beb7fd2e38 100755
+--- a/test/TEST-23-TYPE-EXEC/testsuite.sh
++++ b/test/TEST-23-TYPE-EXEC/testsuite.sh
+@@ -18,8 +18,8 @@ systemd-run --unit=three -p Type=simple /tmp/brokenbinary
+ 
+ # And now, do the same with Type=exec, where the latter two should fail
+ systemd-run --unit=four -p Type=exec /bin/sleep infinity
+-! systemd-run --unit=five -p Type=exec -p User=idontexist /bin/sleep infinity
+-! systemd-run --unit=six -p Type=exec /tmp/brokenbinary
++systemd-run --unit=five -p Type=exec -p User=idontexist /bin/sleep infinity && { echo 'unexpected success'; exit 1; }
++systemd-run --unit=six -p Type=exec /tmp/brokenbinary && { echo 'unexpected success'; exit 1; }
+ 
+ # For issue #20933
+ 

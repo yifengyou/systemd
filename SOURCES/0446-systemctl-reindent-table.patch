@@ -1,0 +1,53 @@
+From 26d2d89c6216672cedf6abfe1b73081adebbdcf8 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Tue, 26 Mar 2019 15:49:52 +0100
+Subject: [PATCH] systemctl: reindent table
+
+(cherry picked from commit 5fd77930ad9980af5257f9f871556d6973db736c)
+
+Related: #846319
+---
+ src/systemctl/systemctl.c | 30 +++++++++++++++---------------
+ 1 file changed, 15 insertions(+), 15 deletions(-)
+
+diff --git a/src/systemctl/systemctl.c b/src/systemctl/systemctl.c
+index 04e24691d8..f057dc829c 100644
+--- a/src/systemctl/systemctl.c
++++ b/src/systemctl/systemctl.c
+@@ -2974,21 +2974,21 @@ static const struct {
+         const char *verb;
+         const char *mode;
+ } action_table[_ACTION_MAX] = {
+-        [ACTION_HALT]                 = { SPECIAL_HALT_TARGET,                     "halt",                   "replace-irreversibly" },
+-        [ACTION_POWEROFF]             = { SPECIAL_POWEROFF_TARGET,                 "poweroff",               "replace-irreversibly" },
+-        [ACTION_REBOOT]               = { SPECIAL_REBOOT_TARGET,                   "reboot",                 "replace-irreversibly" },
+-        [ACTION_KEXEC]                = { SPECIAL_KEXEC_TARGET,                    "kexec",                  "replace-irreversibly" },
+-        [ACTION_RUNLEVEL2]            = { SPECIAL_MULTI_USER_TARGET,               NULL,                     "isolate" },
+-        [ACTION_RUNLEVEL3]            = { SPECIAL_MULTI_USER_TARGET,               NULL,                     "isolate" },
+-        [ACTION_RUNLEVEL4]            = { SPECIAL_MULTI_USER_TARGET,               NULL,                     "isolate" },
+-        [ACTION_RUNLEVEL5]            = { SPECIAL_GRAPHICAL_TARGET,                NULL,                     "isolate" },
+-        [ACTION_RESCUE]               = { SPECIAL_RESCUE_TARGET,                   "rescue",                 "isolate" },
+-        [ACTION_EMERGENCY]            = { SPECIAL_EMERGENCY_TARGET,                "emergency",              "isolate" },
+-        [ACTION_DEFAULT]              = { SPECIAL_DEFAULT_TARGET,                  "default",                "isolate" },
+-        [ACTION_EXIT]                 = { SPECIAL_EXIT_TARGET,                     "exit",                   "replace-irreversibly" },
+-        [ACTION_SUSPEND]              = { SPECIAL_SUSPEND_TARGET,                  "suspend",                "replace-irreversibly" },
+-        [ACTION_HIBERNATE]            = { SPECIAL_HIBERNATE_TARGET,                "hibernate",              "replace-irreversibly" },
+-        [ACTION_HYBRID_SLEEP]         = { SPECIAL_HYBRID_SLEEP_TARGET,             "hybrid-sleep",           "replace-irreversibly" },
++        [ACTION_HALT]                   = { SPECIAL_HALT_TARGET,                   "halt",                   "replace-irreversibly" },
++        [ACTION_POWEROFF]               = { SPECIAL_POWEROFF_TARGET,               "poweroff",               "replace-irreversibly" },
++        [ACTION_REBOOT]                 = { SPECIAL_REBOOT_TARGET,                 "reboot",                 "replace-irreversibly" },
++        [ACTION_KEXEC]                  = { SPECIAL_KEXEC_TARGET,                  "kexec",                  "replace-irreversibly" },
++        [ACTION_RUNLEVEL2]              = { SPECIAL_MULTI_USER_TARGET,             NULL,                     "isolate"              },
++        [ACTION_RUNLEVEL3]              = { SPECIAL_MULTI_USER_TARGET,             NULL,                     "isolate"              },
++        [ACTION_RUNLEVEL4]              = { SPECIAL_MULTI_USER_TARGET,             NULL,                     "isolate"              },
++        [ACTION_RUNLEVEL5]              = { SPECIAL_GRAPHICAL_TARGET,              NULL,                     "isolate"              },
++        [ACTION_RESCUE]                 = { SPECIAL_RESCUE_TARGET,                 "rescue",                 "isolate"              },
++        [ACTION_EMERGENCY]              = { SPECIAL_EMERGENCY_TARGET,              "emergency",              "isolate"              },
++        [ACTION_DEFAULT]                = { SPECIAL_DEFAULT_TARGET,                "default",                "isolate"              },
++        [ACTION_EXIT]                   = { SPECIAL_EXIT_TARGET,                   "exit",                   "replace-irreversibly" },
++        [ACTION_SUSPEND]                = { SPECIAL_SUSPEND_TARGET,                "suspend",                "replace-irreversibly" },
++        [ACTION_HIBERNATE]              = { SPECIAL_HIBERNATE_TARGET,              "hibernate",              "replace-irreversibly" },
++        [ACTION_HYBRID_SLEEP]           = { SPECIAL_HYBRID_SLEEP_TARGET,           "hybrid-sleep",           "replace-irreversibly" },
+         [ACTION_SUSPEND_THEN_HIBERNATE] = { SPECIAL_SUSPEND_THEN_HIBERNATE_TARGET, "suspend-then-hibernate", "replace-irreversibly" },
+ };
+ 

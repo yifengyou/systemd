@@ -1,0 +1,85 @@
+From d8ae33a302f01601e9e98b4aca3516e93c634a54 Mon Sep 17 00:00:00 2001
+From: Andreas Henriksson <andreas@fatal.se>
+Date: Sun, 14 Oct 2018 14:53:09 +0200
+Subject: [PATCH] sulogin-shell: Use force if SYSTEMD_SULOGIN_FORCE set
+
+When the root account is locked sulogin will either inform you of
+this and not allow you in or if --force is used it will hand
+you passwordless root (if using a recent enough version of util-linux).
+
+Not being allowed a shell is ofcourse inconvenient, but at the same
+time handing out passwordless root unconditionally is probably not
+a good idea everywhere.
+
+This patch thus allows to control which behaviour you want by
+setting the SYSTEMD_SULOGIN_FORCE environment variable to true
+or false to control the behaviour, eg. via adding this to
+'systemctl edit rescue.service' (or emergency.service):
+
+[Service]
+Environment=SYSTEMD_SULOGIN_FORCE=1
+
+Distributions who used locked root accounts and want the passwordless
+behaviour could thus simply drop in the override file in
+/etc/systemd/system/rescue.service.d/override.conf
+
+Fixes: #7115
+Addresses: https://bugs.debian.org/802211
+(cherry picked from commit 33eb44fe4a8d7971b5614bc4c2d90f8d91cce66c)
+
+Resolves: #1625929
+---
+ doc/ENVIRONMENT.md                |  6 ++++++
+ src/sulogin-shell/sulogin-shell.c | 11 ++++++++++-
+ 2 files changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/doc/ENVIRONMENT.md b/doc/ENVIRONMENT.md
+index 1e648be640..39a36a52cc 100644
+--- a/doc/ENVIRONMENT.md
++++ b/doc/ENVIRONMENT.md
+@@ -101,3 +101,9 @@ systemd-timedated:
+   NTP client services. If set, `timedatectl set-ntp on` enables and starts the
+   first existing unit listed in the environment variable, and
+   `timedatectl set-ntp off` disables and stops all listed units.
++
++systemd-sulogin-shell:
++
++* `$SYSTEMD_SULOGIN_FORCE=1` — This skips asking for the root password if the
++  root password is not available (such as when the root account is locked).
++  See `sulogin(8)` for more details.
+diff --git a/src/sulogin-shell/sulogin-shell.c b/src/sulogin-shell/sulogin-shell.c
+index 5db3592d6f..a1ea2333de 100644
+--- a/src/sulogin-shell/sulogin-shell.c
++++ b/src/sulogin-shell/sulogin-shell.c
+@@ -9,6 +9,7 @@
+ #include "bus-util.h"
+ #include "bus-error.h"
+ #include "def.h"
++#include "env-util.h"
+ #include "log.h"
+ #include "process-util.h"
+ #include "sd-bus.h"
+@@ -89,7 +90,11 @@ static void print_mode(const char* mode) {
+ }
+ 
+ int main(int argc, char *argv[]) {
+-        static const char* const sulogin_cmdline[] = {SULOGIN, NULL};
++        const char* sulogin_cmdline[] = {
++                SULOGIN,
++                NULL,             /* --force */
++                NULL
++        };
+         _cleanup_(sd_bus_flush_close_unrefp) sd_bus *bus = NULL;
+         int r;
+ 
+@@ -99,6 +104,10 @@ int main(int argc, char *argv[]) {
+ 
+         print_mode(argc > 1 ? argv[1] : "");
+ 
++        if (getenv_bool("SYSTEMD_SULOGIN_FORCE") > 0)
++                /* allows passwordless logins if root account is locked. */
++                sulogin_cmdline[1] = "--force";
++
+         (void) fork_wait(sulogin_cmdline);
+ 
+         r = bus_connect_system_systemd(&bus);

@@ -1,0 +1,133 @@
+From a4e9cf5b5c5e4c4a6f05825cd9c159283a425ae2 Mon Sep 17 00:00:00 2001
+From: Anita Zhang <the.anitazha@gmail.com>
+Date: Fri, 4 Oct 2019 16:03:04 -0700
+Subject: [PATCH] core: disallow using '-.service' as a service name
+
+-.service.d will become a special top level drop in so don't let it be a
+usable service name (otherwise the interaction gets complicated).
+
+(cherry picked from commit e23d911664b4fd86eb2c24b64233cb9f23cffdd1)
+
+Resolves: #2051520
+---
+ src/basic/special.h       |  4 ++++
+ src/basic/unit-name.c     | 25 +++++++++++++++++++++++++
+ src/basic/unit-name.h     |  2 ++
+ src/core/service.c        |  5 +++++
+ src/test/test-unit-name.c | 19 +++++++++++++++++++
+ 5 files changed, 55 insertions(+)
+
+diff --git a/src/basic/special.h b/src/basic/special.h
+index 379a3d7979..2915122929 100644
+--- a/src/basic/special.h
++++ b/src/basic/special.h
+@@ -103,3 +103,7 @@
+ 
+ /* The root directory. */
+ #define SPECIAL_ROOT_MOUNT "-.mount"
++
++/* Used to apply settings to all services through drop-ins.
++ * Should not exist as an actual service. */
++#define SPECIAL_ROOT_SERVICE "-.service"
+diff --git a/src/basic/unit-name.c b/src/basic/unit-name.c
+index 614eb8649b..82a666a481 100644
+--- a/src/basic/unit-name.c
++++ b/src/basic/unit-name.c
+@@ -668,6 +668,31 @@ good:
+         return 0;
+ }
+ 
++bool service_unit_name_is_valid(const char *name) {
++        _cleanup_free_ char *prefix = NULL, *s = NULL;
++        const char *e, *service_name = name;
++
++        if (!unit_name_is_valid(name, UNIT_NAME_ANY))
++                return false;
++
++        e = endswith(name, ".service");
++        if (!e)
++                return false;
++
++        /* If it's a template or instance, get the prefix as a service name. */
++        if (unit_name_is_valid(name, UNIT_NAME_INSTANCE|UNIT_NAME_TEMPLATE)) {
++                assert_se(unit_name_to_prefix(name, &prefix) == 0);
++                assert_se(s = strjoin(prefix, ".service"));
++                service_name = s;
++        }
++
++        /* Reject reserved service name(s). */
++        if (streq(service_name, SPECIAL_ROOT_SERVICE))
++                return false;
++
++        return true;
++}
++
+ int slice_build_parent_slice(const char *slice, char **ret) {
+         char *s, *dash;
+         int r;
+diff --git a/src/basic/unit-name.h b/src/basic/unit-name.h
+index 61abcd585b..21729cba83 100644
+--- a/src/basic/unit-name.h
++++ b/src/basic/unit-name.h
+@@ -60,6 +60,8 @@ static inline int unit_name_mangle(const char *name, UnitNameMangle flags, char
+         return unit_name_mangle_with_suffix(name, flags, ".service", ret);
+ }
+ 
++bool service_unit_name_is_valid(const char *name);
++
+ int slice_build_parent_slice(const char *slice, char **ret);
+ int slice_build_subslice(const char *slice, const char*name, char **subslice);
+ bool slice_name_is_valid(const char *name);
+diff --git a/src/core/service.c b/src/core/service.c
+index e8ae1a5772..b7eb10c044 100644
+--- a/src/core/service.c
++++ b/src/core/service.c
+@@ -556,6 +556,11 @@ static int service_verify(Service *s) {
+                 }
+         }
+ 
++        if (!service_unit_name_is_valid(UNIT(s)->id)) {
++                log_unit_error(UNIT(s), "Service name is invalid or reserved. Refusing.");
++                return -ENOEXEC;
++        }
++
+         if (!s->exec_command[SERVICE_EXEC_START] && !s->exec_command[SERVICE_EXEC_STOP]
+             && UNIT(s)->success_action == EMERGENCY_ACTION_NONE) {
+                 /* FailureAction= only makes sense if one of the start or stop commands is specified.
+diff --git a/src/test/test-unit-name.c b/src/test/test-unit-name.c
+index 2b00ef8cb7..b629df5aea 100644
+--- a/src/test/test-unit-name.c
++++ b/src/test/test-unit-name.c
+@@ -347,6 +347,24 @@ static void test_unit_name_build(void) {
+         free(t);
+ }
+ 
++static void test_service_unit_name_is_valid(void) {
++        assert_se(service_unit_name_is_valid("foo.service"));
++        assert_se(service_unit_name_is_valid("foo@bar.service"));
++        assert_se(service_unit_name_is_valid("foo@bar@bar.service"));
++        assert_se(service_unit_name_is_valid("--.service"));
++        assert_se(service_unit_name_is_valid(".-.service"));
++        assert_se(service_unit_name_is_valid("-foo-bar.service"));
++        assert_se(service_unit_name_is_valid("-foo-bar-.service"));
++        assert_se(service_unit_name_is_valid("foo-bar-.service"));
++
++        assert_se(!service_unit_name_is_valid("-.service"));
++        assert_se(!service_unit_name_is_valid(""));
++        assert_se(!service_unit_name_is_valid("foo.slice"));
++        assert_se(!service_unit_name_is_valid("@.service"));
++        assert_se(!service_unit_name_is_valid("@bar.service"));
++        assert_se(!service_unit_name_is_valid("-@.service"));
++}
++
+ static void test_slice_name_is_valid(void) {
+         assert_se( slice_name_is_valid(SPECIAL_ROOT_SLICE));
+         assert_se( slice_name_is_valid("foo.slice"));
+@@ -833,6 +851,7 @@ int main(int argc, char* argv[]) {
+         test_unit_prefix_is_valid();
+         test_unit_name_change_suffix();
+         test_unit_name_build();
++        test_service_unit_name_is_valid();
+         test_slice_name_is_valid();
+         test_build_subslice();
+         test_build_parent_slice();

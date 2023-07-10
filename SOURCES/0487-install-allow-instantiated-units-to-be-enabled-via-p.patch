@@ -1,0 +1,339 @@
+From 4c41ad9418058aefb2d2732b0b65da9c7cdf5151 Mon Sep 17 00:00:00 2001
+From: Ruixin Bao <rubao@redhat.com>
+Date: Tue, 21 Aug 2018 20:40:56 +0000
+Subject: [PATCH] install: allow instantiated units to be enabled via presets
+
+This patch implements https://github.com/systemd/systemd/issues/9421.
+
+The .preset file now is able to take a rule in the format of:(e.g)
+enable foo@.service bar0 bar1 bar2
+
+In the above example, when preset-all is called, all three instances of
+foo@bar0.service, foo@bar1.service and foo@bar2.service will be enabled.
+
+When preset is called on a single service(e.g: foo@bar1.service), only
+the mentioned one(foo@bar1.service) will be enabled.
+
+Tests are added for future regression.
+
+(cherry picked from commit 4c9565eea534cd233a913c8c21f7920dba229743)
+
+Resolves: #1812972
+---
+ src/shared/install.c         | 155 ++++++++++++++++++++++++++++++-----
+ src/test/test-install-root.c |  57 +++++++++++++
+ 2 files changed, 193 insertions(+), 19 deletions(-)
+
+diff --git a/src/shared/install.c b/src/shared/install.c
+index 77ae812878..1d4beaa83b 100644
+--- a/src/shared/install.c
++++ b/src/shared/install.c
+@@ -60,6 +60,7 @@ typedef enum {
+ typedef struct {
+         char *pattern;
+         PresetAction action;
++        char **instances;
+ } PresetRule;
+ 
+ typedef struct {
+@@ -87,8 +88,10 @@ static inline void presets_freep(Presets *p) {
+         if (!p)
+                 return;
+ 
+-        for (i = 0; i < p->n_rules; i++)
++        for (i = 0; i < p->n_rules; i++) {
+                 free(p->rules[i].pattern);
++                strv_free(p->rules[i].instances);
++        }
+ 
+         free(p->rules);
+         p->n_rules = 0;
+@@ -2755,6 +2758,39 @@ int unit_file_exists(UnitFileScope scope, const LookupPaths *paths, const char *
+         return 1;
+ }
+ 
++static int split_pattern_into_name_and_instances(const char *pattern, char **out_unit_name, char ***out_instances) {
++        _cleanup_strv_free_ char **instances = NULL;
++        _cleanup_free_ char *unit_name = NULL;
++        int r;
++
++        assert(pattern);
++        assert(out_instances);
++        assert(out_unit_name);
++
++        r = extract_first_word(&pattern, &unit_name, NULL, 0);
++        if (r < 0)
++                return r;
++
++        /* We handle the instances logic when unit name is extracted */
++        if (pattern) {
++                /* We only create instances when a rule of templated unit
++                 * is seen. A rule like enable foo@.service a b c will
++                 * result in an array of (a, b, c) as instance names */
++                if (!unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE))
++                        return -EINVAL;
++
++                instances = strv_split(pattern, WHITESPACE);
++                if (!instances)
++                        return -ENOMEM;
++
++                *out_instances = TAKE_PTR(instances);
++        }
++
++        *out_unit_name = TAKE_PTR(unit_name);
++
++        return 0;
++}
++
+ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *presets) {
+         _cleanup_(presets_freep) Presets ps = {};
+         size_t n_allocated = 0;
+@@ -2824,15 +2860,20 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
+ 
+                         parameter = first_word(l, "enable");
+                         if (parameter) {
+-                                char *pattern;
++                                char *unit_name;
++                                char **instances = NULL;
+ 
+-                                pattern = strdup(parameter);
+-                                if (!pattern)
+-                                        return -ENOMEM;
++                                /* Unit_name will remain the same as parameter when no instances are specified */
++                                r = split_pattern_into_name_and_instances(parameter, &unit_name, &instances);
++                                if (r < 0) {
++                                        log_syntax(NULL, LOG_WARNING, *p, n, 0, "Couldn't parse line '%s'. Ignoring.", line);
++                                        continue;
++                                }
+ 
+                                 rule = (PresetRule) {
+-                                        .pattern = pattern,
++                                        .pattern = unit_name,
+                                         .action = PRESET_ENABLE,
++                                        .instances = instances,
+                                 };
+                         }
+ 
+@@ -2868,15 +2909,71 @@ static int read_presets(UnitFileScope scope, const char *root_dir, Presets *pres
+         return 0;
+ }
+ 
+-static int query_presets(const char *name, const Presets presets) {
++static int pattern_match_multiple_instances(
++                        const PresetRule rule,
++                        const char *unit_name,
++                        char ***ret) {
++
++        _cleanup_free_ char *templated_name = NULL;
++        int r;
++
++        /* If no ret is needed or the rule itself does not have instances
++         * initalized, we return not matching */
++        if (!ret || !rule.instances)
++                return 0;
++
++        r = unit_name_template(unit_name, &templated_name);
++        if (r < 0)
++                return r;
++        if (!streq(rule.pattern, templated_name))
++                return 0;
++
++        /* Compose a list of specified instances when unit name is a template  */
++        if (unit_name_is_valid(unit_name, UNIT_NAME_TEMPLATE)) {
++                _cleanup_free_ char *prefix = NULL;
++                _cleanup_strv_free_ char **out_strv = NULL;
++                char **iter;
++
++                r = unit_name_to_prefix(unit_name, &prefix);
++                if (r < 0)
++                        return r;
++
++                STRV_FOREACH(iter, rule.instances) {
++                        _cleanup_free_ char *name = NULL;
++                        r = unit_name_build(prefix, *iter, ".service", &name);
++                        if (r < 0)
++                                return r;
++                        r = strv_extend(&out_strv, name);
++                        if (r < 0)
++                                return r;
++                }
++
++                *ret = TAKE_PTR(out_strv);
++                return 1;
++        } else {
++                /* We now know the input unit name is an instance name */
++                _cleanup_free_ char *instance_name = NULL;
++
++                r = unit_name_to_instance(unit_name, &instance_name);
++                if (r < 0)
++                        return r;
++
++                if (strv_find(rule.instances, instance_name))
++                        return 1;
++        }
++        return 0;
++}
++
++static int query_presets(const char *name, const Presets presets, char ***instance_name_list) {
+         PresetAction action = PRESET_UNKNOWN;
+         size_t i;
+-
++        char **s;
+         if (!unit_name_is_valid(name, UNIT_NAME_ANY))
+                 return -EINVAL;
+ 
+         for (i = 0; i < presets.n_rules; i++)
+-                if (fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0) {
++                if (pattern_match_multiple_instances(presets.rules[i], name, instance_name_list) > 0 ||
++                    fnmatch(presets.rules[i].pattern, name, FNM_NOESCAPE) == 0) {
+                         action = presets.rules[i].action;
+                         break;
+                 }
+@@ -2886,7 +2983,11 @@ static int query_presets(const char *name, const Presets presets) {
+                 log_debug("Preset files don't specify rule for %s. Enabling.", name);
+                 return 1;
+         case PRESET_ENABLE:
+-                log_debug("Preset files say enable %s.", name);
++                if (instance_name_list && *instance_name_list)
++                        STRV_FOREACH(s, *instance_name_list)
++                                log_debug("Preset files say enable %s.", *s);
++                else
++                        log_debug("Preset files say enable %s.", name);
+                 return 1;
+         case PRESET_DISABLE:
+                 log_debug("Preset files say disable %s.", name);
+@@ -2904,7 +3005,7 @@ int unit_file_query_preset(UnitFileScope scope, const char *root_dir, const char
+         if (r < 0)
+                 return r;
+ 
+-        return query_presets(name, presets);
++        return query_presets(name, presets, NULL);
+ }
+ 
+ static int execute_preset(
+@@ -2964,6 +3065,7 @@ static int preset_prepare_one(
+                 size_t *n_changes) {
+ 
+         _cleanup_(install_context_done) InstallContext tmp = {};
++        _cleanup_strv_free_ char **instance_name_list = NULL;
+         UnitFileInstallInfo *i;
+         int r;
+ 
+@@ -2979,19 +3081,34 @@ static int preset_prepare_one(
+                 return 0;
+         }
+ 
+-        r = query_presets(name, presets);
++        r = query_presets(name, presets, &instance_name_list);
+         if (r < 0)
+                 return r;
+ 
+         if (r > 0) {
+-                r = install_info_discover(scope, plus, paths, name, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
+-                                          &i, changes, n_changes);
+-                if (r < 0)
+-                        return r;
++                if (instance_name_list) {
++                        char **s;
++                        STRV_FOREACH(s, instance_name_list) {
++                                r = install_info_discover(scope, plus, paths, *s, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
++                                                          &i, changes, n_changes);
++                                if (r < 0)
++                                        return r;
++
++                                r = install_info_may_process(i, paths, changes, n_changes);
++                                if (r < 0)
++                                        return r;
++                        }
++                } else {
++                        r = install_info_discover(scope, plus, paths, name, SEARCH_LOAD|SEARCH_FOLLOW_CONFIG_SYMLINKS,
++                                                  &i, changes, n_changes);
++                        if (r < 0)
++                                return r;
++
++                        r = install_info_may_process(i, paths, changes, n_changes);
++                        if (r < 0)
++                                return r;
++                }
+ 
+-                r = install_info_may_process(i, paths, changes, n_changes);
+-                if (r < 0)
+-                        return r;
+         } else
+                 r = install_info_discover(scope, minus, paths, name, SEARCH_FOLLOW_CONFIG_SYMLINKS,
+                                           &i, changes, n_changes);
+diff --git a/src/test/test-install-root.c b/src/test/test-install-root.c
+index 15dd3c6966..dbbcfe4297 100644
+--- a/src/test/test-install-root.c
++++ b/src/test/test-install-root.c
+@@ -983,6 +983,62 @@ static void test_with_dropin_template(const char *root) {
+         assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "with-dropin-3@instance-2.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
+ }
+ 
++static void test_preset_multiple_instances(const char *root) {
++        UnitFileChange *changes = NULL;
++        size_t n_changes = 0;
++        const char *p;
++        UnitFileState state;
++
++        /* Set up template service files and preset file */
++        p = strjoina(root, "/usr/lib/systemd/system/foo@.service");
++        assert_se(write_string_file(p,
++                                    "[Install]\n"
++                                    "DefaultInstance=def\n"
++                                    "WantedBy=multi-user.target\n", WRITE_STRING_FILE_CREATE) >= 0);
++
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
++
++        p = strjoina(root, "/usr/lib/systemd/system-preset/test.preset");
++        assert_se(write_string_file(p,
++                                    "enable foo@.service bar0 bar1 bartest\n"
++                                    "enable emptylist@.service\n" /* This line ensures the old functionality for templated unit still works */
++                                    "disable *\n" , WRITE_STRING_FILE_CREATE) >= 0);
++
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bar0.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
++
++        /* Preset a single instantiated unit specified in the list */
++        assert_se(unit_file_preset(UNIT_FILE_SYSTEM, 0, root, STRV_MAKE("foo@bar0.service"), UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bar0.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
++        assert_se(n_changes == 1);
++        assert_se(changes[0].type == UNIT_FILE_SYMLINK);
++        p = strjoina(root, SYSTEM_CONFIG_UNIT_PATH"/multi-user.target.wants/foo@bar0.service");
++        assert_se(streq(changes[0].path, p));
++        unit_file_changes_free(changes, n_changes);
++        changes = NULL; n_changes = 0;
++
++        assert_se(unit_file_disable(UNIT_FILE_SYSTEM, 0, root, STRV_MAKE("foo@bar0.service"), &changes, &n_changes) >= 0);
++        assert_se(n_changes == 1);
++        assert_se(changes[0].type == UNIT_FILE_UNLINK);
++        p = strjoina(root, SYSTEM_CONFIG_UNIT_PATH"/multi-user.target.wants/foo@bar0.service");
++        assert_se(streq(changes[0].path, p));
++        unit_file_changes_free(changes, n_changes);
++        changes = NULL; n_changes = 0;
++
++        /* Check for preset-all case, only instances on the list should be enabled, not including the default instance */
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@def.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bar1.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bartest.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
++
++        assert_se(unit_file_preset_all(UNIT_FILE_SYSTEM, 0, root, UNIT_FILE_PRESET_FULL, &changes, &n_changes) >= 0);
++        assert_se(n_changes > 0);
++
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@def.service", &state) >= 0 && state == UNIT_FILE_DISABLED);
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bar0.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bar1.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
++        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, root, "foo@bartest.service", &state) >= 0 && state == UNIT_FILE_ENABLED);
++
++}
++
+ int main(int argc, char *argv[]) {
+         char root[] = "/tmp/rootXXXXXX";
+         const char *p;
+@@ -1012,6 +1068,7 @@ int main(int argc, char *argv[]) {
+         test_indirect(root);
+         test_preset_and_list(root);
+         test_preset_order(root);
++        test_preset_multiple_instances(root);
+         test_revert(root);
+         test_static_instance(root);
+         test_with_dropin(root);

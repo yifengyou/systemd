@@ -1,0 +1,35 @@
+From 03b766cc937ffa4dcb7cfb25b2ac20d8a00cb6db Mon Sep 17 00:00:00 2001
+From: gaoyi <ymuemc@163.com>
+Date: Sun, 12 Jul 2020 03:27:45 -0400
+Subject: [PATCH] test: add test case for multi matches when use "||"
+
+Signed-off-by: gaoyi <ymuemc@163.com>
+(cherry picked from commit 0d3a8bc7ebd76591e14f7098b4266fd2065ac4db)
+
+Related: #1642728
+---
+ test/udev-test.pl | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index 50d978391b..4bf97d82bb 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -1322,6 +1322,17 @@ EOF
+ KERNEL=="sda", TAG=""
+ TAGS=="foo|", SYMLINK+="found"
+ TAGS=="aaa|bbb", SYMLINK+="bad"
++EOF
++        },
++        {
++                desc            => "test multi matches 11",
++                devpath         => "/devices/pci0000:00/0000:00:1f.2/host0/target0:0:0/0:0:0:0/block/sda",
++                exp_name        => "found",
++                not_exp_name    => "bad",
++                rules           => <<EOF
++KERNEL=="sda", TAG="c"
++TAGS=="foo||bar||c", SYMLINK+="found"
++TAGS=="aaa||bbb||ccc", SYMLINK+="bad"
+ EOF
+         },
+         {

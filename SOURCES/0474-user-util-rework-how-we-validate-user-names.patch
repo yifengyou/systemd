@@ -1,0 +1,803 @@
+From 33b851f0c30e47fe71a293e2c990ef26573efe86 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Sat, 4 Apr 2020 12:23:02 +0200
+Subject: [PATCH] user-util: rework how we validate user names
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This reworks the user validation infrastructure. There are now two
+modes. In regular mode we are strict and test against a strict set of
+valid chars. And in "relaxed" mode we just filter out some really
+obvious, dangerous stuff. i.e. strict is whitelisting what is OK, but
+"relaxed" is blacklisting what is really not OK.
+
+The idea is that we use strict mode whenver we allocate a new user
+(i.e. in sysusers.d or homed), while "relaxed" mode is when we process
+users registered elsewhere, (i.e. userdb, logind, …)
+
+The requirements on user name validity vary wildly. SSSD thinks its fine
+to embedd "@" for example, while the suggested NAME_REGEX field on
+Debian does not even allow uppercase chars…
+
+This effectively liberaralizes a lot what we expect from usernames.
+
+The code that warns about questionnable user names is now optional and
+only used at places such as unit file parsing, so that it doesn't show
+up on every userdb query, but only when processing configuration files
+that know better.
+
+Fixes: #15149 #15090
+(cherry picked from commit 7a8867abfab10e5bbca10590ec2aa40c5b27d8fb)
+
+Resolves: #1848373
+---
+ src/basic/user-util.c         | 185 +++++++++++++----------
+ src/basic/user-util.h         |  21 +--
+ src/core/dbus-execute.c       |   6 +-
+ src/core/dbus-manager.c       |   2 +-
+ src/core/dbus-socket.c        |   4 +-
+ src/core/dbus-util.c          |   7 +-
+ src/core/dbus-util.h          |   2 +-
+ src/core/dynamic-user.c       |   2 +-
+ src/core/load-fragment.c      |   4 +-
+ src/core/unit.c               |   2 +-
+ src/nss-systemd/nss-systemd.c |   6 +-
+ src/systemd/sd-messages.h     |   3 +
+ src/sysusers/sysusers.c       |   4 +-
+ src/test/test-user-util.c     | 271 ++++++++++++++++++----------------
+ 14 files changed, 287 insertions(+), 232 deletions(-)
+
+diff --git a/src/basic/user-util.c b/src/basic/user-util.c
+index 68a924770b..cd870c4361 100644
+--- a/src/basic/user-util.c
++++ b/src/basic/user-util.c
+@@ -14,6 +14,8 @@
+ #include <unistd.h>
+ #include <utmp.h>
+ 
++#include "sd-messages.h"
++
+ #include "alloc-util.h"
+ #include "fd-util.h"
+ #include "fileio.h"
+@@ -576,92 +578,125 @@ int take_etc_passwd_lock(const char *root) {
+         return fd;
+ }
+ 
+-bool valid_user_group_name_full(const char *u, bool strict) {
++bool valid_user_group_name(const char *u, ValidUserFlags flags) {
+         const char *i;
+-        long sz;
+-        bool warned = false;
+ 
+-        /* Checks if the specified name is a valid user/group name. Also see POSIX IEEE Std 1003.1-2008, 2016 Edition,
+-         * 3.437. We are a bit stricter here however. Specifically we deviate from POSIX rules:
+-         *
+-         * - We require that names fit into the appropriate utmp field
+-         * - We don't allow empty user names
+-         * - No dots in the first character
++        /* Checks if the specified name is a valid user/group name. There are two flavours of this call:
++         * strict mode is the default which is POSIX plus some extra rules; and relaxed mode where we accept
++         * pretty much everything except the really worst offending names.
+          *
+-         * If strict==true, additionally:
+-         * - We don't allow any dots (this conflicts with chown syntax which permits dots as user/group name separator)
+-         * - We don't allow a digit as the first character
+-         *
+-         * Note that other systems are even more restrictive, and don't permit underscores or uppercase characters.
+-         */
++         * Whenever we synthesize users ourselves we should use the strict mode. But when we process users
++         * created by other stuff, let's be more liberal. */
+ 
+-        if (isempty(u))
++        if (isempty(u)) /* An empty user name is never valid */
+                 return false;
+ 
+-        if (!(u[0] >= 'a' && u[0] <= 'z') &&
+-            !(u[0] >= 'A' && u[0] <= 'Z') &&
+-            !(u[0] >= '0' && u[0] <= '9' && !strict) &&
+-            u[0] != '_')
+-                return false;
+-
+-        bool only_digits_seen = u[0] >= '0' && u[0] <= '9';
+-
+-        if (only_digits_seen) {
+-                log_warning("User or group name \"%s\" starts with a digit, accepting for compatibility.", u);
+-                warned = true;
+-        }
+-
+-        for (i = u+1; *i; i++) {
+-                if (((*i >= 'a' && *i <= 'z') ||
+-                     (*i >= 'A' && *i <= 'Z') ||
+-                     (*i >= '0' && *i <= '9') ||
+-                     IN_SET(*i, '_', '-'))) {
+-                        if (!(*i >= '0' && *i <= '9'))
+-                                only_digits_seen = false;
+-                        continue;
+-                        }
+-
+-                if (*i == '.' && !strict) {
+-                        if (!warned) {
+-                                log_warning("Bad user or group name \"%s\", accepting for compatibility.", u);
+-                                warned = true;
+-                        }
+-
+-                        continue;
+-                }
+-
+-                return false;
++        if (parse_uid(u, NULL) >= 0) /* Something that parses as numeric UID string is valid exactly when the
++                                      * flag for it is set */
++                return FLAGS_SET(flags, VALID_USER_ALLOW_NUMERIC);
++
++        if (FLAGS_SET(flags, VALID_USER_RELAX)) {
++
++                /* In relaxed mode we just check very superficially. Apparently SSSD and other stuff is
++                 * extremely liberal (way too liberal if you ask me, even inserting "@" in user names, which
++                 * is bound to cause problems for example when used with an MTA), hence only filter the most
++                 * obvious cases, or where things would result in an invalid entry if such a user name would
++                 * show up in /etc/passwd (or equivalent getent output).
++                 *
++                 * Note that we stepped far out of POSIX territory here. It's not our fault though, but
++                 * SSSD's, Samba's and everybody else who ignored POSIX on this. (I mean, I am happy to step
++                 * outside of POSIX' bounds any day, but I must say in this case I probably wouldn't
++                 * have...) */
++
++                if (startswith(u, " ") || endswith(u, " ")) /* At least expect whitespace padding is removed
++                                                             * at front and back (accept in the middle, since
++                                                             * that's apparently a thing on Windows). Note
++                                                             * that this also blocks usernames consisting of
++                                                             * whitespace only. */
++                        return false;
++
++                if (!utf8_is_valid(u)) /* We want to synthesize JSON from this, hence insist on UTF-8 */
++                        return false;
++
++                if (string_has_cc(u, NULL)) /* CC characters are just dangerous (and \n in particular is the
++                                             * record separator in /etc/passwd), so we can't allow that. */
++                        return false;
++
++                if (strpbrk(u, ":/")) /* Colons are the field separator in /etc/passwd, we can't allow
++                                       * that. Slashes are special to file systems paths and user names
++                                       * typically show up in the file system as home directories, hence
++                                       * don't allow slashes. */
++                        return false;
++
++                if (in_charset(u, "0123456789")) /* Don't allow fully numeric strings, they might be confused
++                                                  * with with UIDs (note that this test is more broad than
++                                                  * the parse_uid() test above, as it will cover more than
++                                                  * the 32bit range, and it will detect 65535 (which is in
++                                                  * invalid UID, even though in the unsigned 32 bit range) */
++                        return false;
++
++                if (u[0] == '-' && in_charset(u + 1, "0123456789")) /* Don't allow negative fully numeric
++                                                                     * strings either. After all some people
++                                                                     * write 65535 as -1 (even though that's
++                                                                     * not even true on 32bit uid_t
++                                                                     * anyway) */
++                        return false;
++
++                if (dot_or_dot_dot(u)) /* User names typically become home directory names, and these two are
++                                        * special in that context, don't allow that. */
++                        return false;
++
++                /* Compare with strict result and warn if result doesn't match */
++                if (FLAGS_SET(flags, VALID_USER_WARN) && !valid_user_group_name(u, 0))
++                        log_struct(LOG_NOTICE,
++                                   "MESSAGE=Accepting user/group name '%s', which does not match strict user/group name rules.", u,
++                                   "USER_GROUP_NAME=%s", u,
++                                   "MESSAGE_ID=" SD_MESSAGE_UNSAFE_USER_NAME_STR);
++
++                /* Note that we make no restrictions on the length in relaxed mode! */
++        } else {
++                long sz;
++                size_t l;
++
++                /* Also see POSIX IEEE Std 1003.1-2008, 2016 Edition, 3.437. We are a bit stricter here
++                 * however. Specifically we deviate from POSIX rules:
++                 *
++                 * - We don't allow empty user names (see above)
++                 * - We require that names fit into the appropriate utmp field
++                 * - We don't allow any dots (this conflicts with chown syntax which permits dots as user/group name separator)
++                 * - We don't allow dashes or digit as the first character
++                 *
++                 * Note that other systems are even more restrictive, and don't permit underscores or uppercase characters.
++                 */
++
++                if (!(u[0] >= 'a' && u[0] <= 'z') &&
++                    !(u[0] >= 'A' && u[0] <= 'Z') &&
++                    u[0] != '_')
++                        return false;
++
++                for (i = u+1; *i; i++)
++                        if (!(*i >= 'a' && *i <= 'z') &&
++                            !(*i >= 'A' && *i <= 'Z') &&
++                            !(*i >= '0' && *i <= '9') &&
++                            !IN_SET(*i, '_', '-'))
++                                return false;
++
++                l = i - u;
++
++                sz = sysconf(_SC_LOGIN_NAME_MAX);
++                assert_se(sz > 0);
++
++                if (l > (size_t) sz)
++                        return false;
++                if (l > FILENAME_MAX)
++                        return false;
++                if (l > UT_NAMESIZE - 1)
++                        return false;
+         }
+ 
+-        if (only_digits_seen)
+-                return false;
+-
+-        sz = sysconf(_SC_LOGIN_NAME_MAX);
+-        assert_se(sz > 0);
+-
+-        if ((size_t) (i-u) > (size_t) sz)
+-                return false;
+-
+-        if ((size_t) (i-u) > UT_NAMESIZE - 1)
+-                return false;
+-
+         return true;
+ }
+ 
+-bool valid_user_group_name_or_id_full(const char *u, bool strict) {
+-
+-        /* Similar as above, but is also fine with numeric UID/GID specifications, as long as they are in the
+-         * right range, and not the invalid user ids. */
+-
+-        if (isempty(u))
+-                return false;
+-
+-        if (parse_uid(u, NULL) >= 0)
+-                return true;
+-
+-        return valid_user_group_name_full(u, strict);
+-}
+-
+ bool valid_gecos(const char *d) {
+ 
+         if (!d)
+diff --git a/src/basic/user-util.h b/src/basic/user-util.h
+index 5ad0b2a2f9..939bded40d 100644
+--- a/src/basic/user-util.h
++++ b/src/basic/user-util.h
+@@ -78,20 +78,13 @@ static inline bool userns_supported(void) {
+         return access("/proc/self/uid_map", F_OK) >= 0;
+ }
+ 
+-bool valid_user_group_name_full(const char *u, bool strict);
+-bool valid_user_group_name_or_id_full(const char *u, bool strict);
+-static inline bool valid_user_group_name(const char *u) {
+-        return valid_user_group_name_full(u, true);
+-}
+-static inline bool valid_user_group_name_or_id(const char *u) {
+-        return valid_user_group_name_or_id_full(u, true);
+-}
+-static inline bool valid_user_group_name_compat(const char *u) {
+-        return valid_user_group_name_full(u, false);
+-}
+-static inline bool valid_user_group_name_or_id_compat(const char *u) {
+-        return valid_user_group_name_or_id_full(u, false);
+-}
++typedef enum ValidUserFlags {
++        VALID_USER_RELAX         = 1 << 0,
++        VALID_USER_WARN          = 1 << 1,
++        VALID_USER_ALLOW_NUMERIC = 1 << 2,
++} ValidUserFlags;
++
++bool valid_user_group_name(const char *u, ValidUserFlags flags);
+ bool valid_gecos(const char *d);
+ bool valid_home(const char *p);
+ 
+diff --git a/src/core/dbus-execute.c b/src/core/dbus-execute.c
+index e004fb55c9..8348663000 100644
+--- a/src/core/dbus-execute.c
++++ b/src/core/dbus-execute.c
+@@ -1113,10 +1113,10 @@ int bus_exec_context_set_transient_property(
+         flags |= UNIT_PRIVATE;
+ 
+         if (streq(name, "User"))
+-                return bus_set_transient_user_compat(u, name, &c->user, message, flags, error);
++                return bus_set_transient_user_relaxed(u, name, &c->user, message, flags, error);
+ 
+         if (streq(name, "Group"))
+-                return bus_set_transient_user_compat(u, name, &c->group, message, flags, error);
++                return bus_set_transient_user_relaxed(u, name, &c->group, message, flags, error);
+ 
+         if (streq(name, "TTYPath"))
+                 return bus_set_transient_path(u, name, &c->tty_path, message, flags, error);
+@@ -1298,7 +1298,7 @@ int bus_exec_context_set_transient_property(
+                         return r;
+ 
+                 STRV_FOREACH(p, l)
+-                        if (!isempty(*p) && !valid_user_group_name_or_id_compat(*p))
++                        if (!isempty(*p) && !valid_user_group_name(*p, VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX|VALID_USER_WARN))
+                                 return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS,
+                                                          "Invalid supplementary group names");
+ 
+diff --git a/src/core/dbus-manager.c b/src/core/dbus-manager.c
+index 0a1d3df42f..7488f22116 100644
+--- a/src/core/dbus-manager.c
++++ b/src/core/dbus-manager.c
+@@ -1762,7 +1762,7 @@ static int method_lookup_dynamic_user_by_name(sd_bus_message *message, void *use
+ 
+         if (!MANAGER_IS_SYSTEM(m))
+                 return sd_bus_error_setf(error, SD_BUS_ERROR_NOT_SUPPORTED, "Dynamic users are only supported in the system instance.");
+-        if (!valid_user_group_name(name))
++        if (!valid_user_group_name(name, VALID_USER_RELAX))
+                 return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "User name invalid: %s", name);
+ 
+         r = dynamic_user_lookup_name(m, name, &uid);
+diff --git a/src/core/dbus-socket.c b/src/core/dbus-socket.c
+index 8fdbc05409..fa6bbe2c6f 100644
+--- a/src/core/dbus-socket.c
++++ b/src/core/dbus-socket.c
+@@ -281,10 +281,10 @@ static int bus_socket_set_transient_property(
+                 return bus_set_transient_fdname(u, name, &s->fdname, message, flags, error);
+ 
+         if (streq(name, "SocketUser"))
+-                return bus_set_transient_user_compat(u, name, &s->user, message, flags, error);
++                return bus_set_transient_user_relaxed(u, name, &s->user, message, flags, error);
+ 
+         if (streq(name, "SocketGroup"))
+-                return bus_set_transient_user_compat(u, name, &s->group, message, flags, error);
++                return bus_set_transient_user_relaxed(u, name, &s->group, message, flags, error);
+ 
+         if (streq(name, "BindIPv6Only"))
+                 return bus_set_transient_bind_ipv6_only(u, name, &s->bind_ipv6_only, message, flags, error);
+diff --git a/src/core/dbus-util.c b/src/core/dbus-util.c
+index 7862beaacb..951450e53d 100644
+--- a/src/core/dbus-util.c
++++ b/src/core/dbus-util.c
+@@ -30,7 +30,12 @@ int bus_property_get_triggered_unit(
+ 
+ BUS_DEFINE_SET_TRANSIENT(mode_t, "u", uint32_t, mode_t, "%040o");
+ BUS_DEFINE_SET_TRANSIENT(unsigned, "u", uint32_t, unsigned, "%" PRIu32);
+-BUS_DEFINE_SET_TRANSIENT_STRING_WITH_CHECK(user_compat, valid_user_group_name_or_id_compat);
++
++static inline bool valid_user_group_name_or_id_relaxed(const char *u) {
++        return valid_user_group_name(u, VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX);
++}
++
++BUS_DEFINE_SET_TRANSIENT_STRING_WITH_CHECK(user_relaxed, valid_user_group_name_or_id_relaxed);
+ BUS_DEFINE_SET_TRANSIENT_STRING_WITH_CHECK(path, path_is_absolute);
+ 
+ int bus_set_transient_string(
+diff --git a/src/core/dbus-util.h b/src/core/dbus-util.h
+index a3316c6701..713b464dd9 100644
+--- a/src/core/dbus-util.h
++++ b/src/core/dbus-util.h
+@@ -235,7 +235,7 @@ int bus_property_get_triggered_unit(sd_bus *bus, const char *path, const char *i
+ 
+ int bus_set_transient_mode_t(Unit *u, const char *name, mode_t *p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+ int bus_set_transient_unsigned(Unit *u, const char *name, unsigned *p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+-int bus_set_transient_user_compat(Unit *u, const char *name, char **p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
++int bus_set_transient_user_relaxed(Unit *u, const char *name, char **p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+ int bus_set_transient_path(Unit *u, const char *name, char **p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+ int bus_set_transient_string(Unit *u, const char *name, char **p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+ int bus_set_transient_bool(Unit *u, const char *name, bool *p, sd_bus_message *message, UnitWriteFlags flags, sd_bus_error *error);
+diff --git a/src/core/dynamic-user.c b/src/core/dynamic-user.c
+index 021fd93a76..548b3cc9df 100644
+--- a/src/core/dynamic-user.c
++++ b/src/core/dynamic-user.c
+@@ -108,7 +108,7 @@ static int dynamic_user_acquire(Manager *m, const char *name, DynamicUser** ret)
+                 return 0;
+         }
+ 
+-        if (!valid_user_group_name_or_id(name))
++        if (!valid_user_group_name(name, VALID_USER_ALLOW_NUMERIC))
+                 return -EINVAL;
+ 
+         if (socketpair(AF_UNIX, SOCK_DGRAM|SOCK_CLOEXEC, 0, storage_socket) < 0)
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index ba81d94504..e0d7b8f7f8 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -1932,7 +1932,7 @@ int config_parse_user_group_compat(
+                 return -ENOEXEC;
+         }
+ 
+-        if (!valid_user_group_name_or_id_compat(k)) {
++        if (!valid_user_group_name(k, VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX|VALID_USER_WARN)) {
+                 log_syntax(unit, LOG_ERR, filename, line, 0, "Invalid user/group name or numeric ID: %s", k);
+                 return -ENOEXEC;
+         }
+@@ -1986,7 +1986,7 @@ int config_parse_user_group_strv_compat(
+                         return -ENOEXEC;
+                 }
+ 
+-                if (!valid_user_group_name_or_id_compat(k)) {
++                if (!valid_user_group_name(k, VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX|VALID_USER_WARN)) {
+                         log_syntax(unit, LOG_ERR, filename, line, 0, "Invalid user/group name or numeric ID: %s", k);
+                         return -ENOEXEC;
+                 }
+diff --git a/src/core/unit.c b/src/core/unit.c
+index ffbf3cfd48..cd3e7c806d 100644
+--- a/src/core/unit.c
++++ b/src/core/unit.c
+@@ -4088,7 +4088,7 @@ static int user_from_unit_name(Unit *u, char **ret) {
+         if (r < 0)
+                 return r;
+ 
+-        if (valid_user_group_name(n)) {
++        if (valid_user_group_name(n, 0)) {
+                 *ret = TAKE_PTR(n);
+                 return 0;
+         }
+diff --git a/src/nss-systemd/nss-systemd.c b/src/nss-systemd/nss-systemd.c
+index f8db27ae27..615c710257 100644
+--- a/src/nss-systemd/nss-systemd.c
++++ b/src/nss-systemd/nss-systemd.c
+@@ -123,7 +123,7 @@ static int direct_lookup_uid(uid_t uid, char **ret) {
+         r = readlink_malloc(path, &s);
+         if (r < 0)
+                 return r;
+-        if (!valid_user_group_name(s)) { /* extra safety check */
++        if (!valid_user_group_name(s, VALID_USER_RELAX)) { /* extra safety check */
+                 free(s);
+                 return -EINVAL;
+         }
+@@ -153,7 +153,7 @@ enum nss_status _nss_systemd_getpwnam_r(
+ 
+         /* If the username is not valid, then we don't know it. Ideally libc would filter these for us anyway. We don't
+          * generate EINVAL here, because it isn't really out business to complain about invalid user names. */
+-        if (!valid_user_group_name(name))
++        if (!valid_user_group_name(name, VALID_USER_RELAX))
+                 return NSS_STATUS_NOTFOUND;
+ 
+         /* Synthesize entries for the root and nobody users, in case they are missing in /etc/passwd */
+@@ -356,7 +356,7 @@ enum nss_status _nss_systemd_getgrnam_r(
+         assert(name);
+         assert(gr);
+ 
+-        if (!valid_user_group_name(name))
++        if (!valid_user_group_name(name, VALID_USER_RELAX))
+                 return NSS_STATUS_NOTFOUND;
+ 
+         /* Synthesize records for root and nobody, in case they are missing form /etc/group */
+diff --git a/src/systemd/sd-messages.h b/src/systemd/sd-messages.h
+index bdd4fd3974..847b698ba4 100644
+--- a/src/systemd/sd-messages.h
++++ b/src/systemd/sd-messages.h
+@@ -152,6 +152,9 @@ _SD_BEGIN_DECLARATIONS;
+ #define SD_MESSAGE_DNSSEC_DOWNGRADE       SD_ID128_MAKE(36,db,2d,fa,5a,90,45,e1,bd,4a,f5,f9,3e,1c,f0,57)
+ #define SD_MESSAGE_DNSSEC_DOWNGRADE_STR   SD_ID128_MAKE_STR(36,db,2d,fa,5a,90,45,e1,bd,4a,f5,f9,3e,1c,f0,57)
+ 
++#define SD_MESSAGE_UNSAFE_USER_NAME       SD_ID128_MAKE(b6,1f,da,c6,12,e9,4b,91,82,28,5b,99,88,43,06,1f)
++#define SD_MESSAGE_UNSAFE_USER_NAME_STR   SD_ID128_MAKE_STR(b6,1f,da,c6,12,e9,4b,91,82,28,5b,99,88,43,06,1f)
++
+ _SD_END_DECLARATIONS;
+ 
+ #endif
+diff --git a/src/sysusers/sysusers.c b/src/sysusers/sysusers.c
+index 33959d3c11..a374ebaaf4 100644
+--- a/src/sysusers/sysusers.c
++++ b/src/sysusers/sysusers.c
+@@ -1413,7 +1413,7 @@ static int parse_line(const char *fname, unsigned line, const char *buffer) {
+                         return r;
+                 }
+ 
+-                if (!valid_user_group_name(resolved_name)) {
++                if (!valid_user_group_name(resolved_name, 0)) {
+                         log_error("[%s:%u] '%s' is not a valid user or group name.", fname, line, resolved_name);
+                         return -EINVAL;
+                 }
+@@ -1524,7 +1524,7 @@ static int parse_line(const char *fname, unsigned line, const char *buffer) {
+                         return -EINVAL;
+                 }
+ 
+-                if (!valid_user_group_name(resolved_id)) {
++                if (!valid_user_group_name(resolved_id, 0)) {
+                         log_error("[%s:%u] '%s' is not a valid user or group name.", fname, line, resolved_id);
+                         return -EINVAL;
+                 }
+diff --git a/src/test/test-user-util.c b/src/test/test-user-util.c
+index 56079f1486..31ac018da9 100644
+--- a/src/test/test-user-util.c
++++ b/src/test/test-user-util.c
+@@ -131,144 +131,163 @@ static void test_uid_ptr(void) {
+         assert_se(PTR_TO_UID(UID_TO_PTR(1000)) == 1000);
+ }
+ 
+-static void test_valid_user_group_name_compat(void) {
++static void test_valid_user_group_name_relaxed(void) {
+         log_info("/* %s */", __func__);
+ 
+-        assert_se(!valid_user_group_name_compat(NULL));
+-        assert_se(!valid_user_group_name_compat(""));
+-        assert_se(!valid_user_group_name_compat("1"));
+-        assert_se(!valid_user_group_name_compat("65535"));
+-        assert_se(!valid_user_group_name_compat("-1"));
+-        assert_se(!valid_user_group_name_compat("-kkk"));
+-        assert_se(!valid_user_group_name_compat("rööt"));
+-        assert_se(!valid_user_group_name_compat("."));
+-        assert_se(!valid_user_group_name_compat(".eff"));
+-        assert_se(!valid_user_group_name_compat("foo\nbar"));
+-        assert_se(!valid_user_group_name_compat("0123456789012345678901234567890123456789"));
+-        assert_se(!valid_user_group_name_or_id_compat("aaa:bbb"));
+-        assert_se(!valid_user_group_name_compat("."));
+-        assert_se(!valid_user_group_name_compat(".1"));
+-        assert_se(!valid_user_group_name_compat(".65535"));
+-        assert_se(!valid_user_group_name_compat(".-1"));
+-        assert_se(!valid_user_group_name_compat(".-kkk"));
+-        assert_se(!valid_user_group_name_compat(".rööt"));
+-        assert_se(!valid_user_group_name_or_id_compat(".aaa:bbb"));
+-
+-        assert_se(valid_user_group_name_compat("root"));
+-        assert_se(valid_user_group_name_compat("lennart"));
+-        assert_se(valid_user_group_name_compat("LENNART"));
+-        assert_se(valid_user_group_name_compat("_kkk"));
+-        assert_se(valid_user_group_name_compat("kkk-"));
+-        assert_se(valid_user_group_name_compat("kk-k"));
+-        assert_se(valid_user_group_name_compat("eff.eff"));
+-        assert_se(valid_user_group_name_compat("eff."));
+-
+-        assert_se(valid_user_group_name_compat("some5"));
+-        assert_se(valid_user_group_name_compat("5some"));
+-        assert_se(valid_user_group_name_compat("INNER5NUMBER"));
++        assert_se(!valid_user_group_name(NULL, VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("", VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("1", VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("65535", VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("-1", VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("foo\nbar", VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("0123456789012345678901234567890123456789", VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("aaa:bbb", VALID_USER_RELAX|VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name(".aaa:bbb", VALID_USER_RELAX|VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name(".", VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("..", VALID_USER_RELAX));
++
++        assert_se(valid_user_group_name("root", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("lennart", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("LENNART", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("_kkk", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("kkk-", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("kk-k", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("eff.eff", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("eff.", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("-kkk", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("rööt", VALID_USER_RELAX));
++        assert_se(valid_user_group_name(".eff", VALID_USER_RELAX));
++        assert_se(valid_user_group_name(".1", VALID_USER_RELAX));
++        assert_se(valid_user_group_name(".65535", VALID_USER_RELAX));
++        assert_se(valid_user_group_name(".-1", VALID_USER_RELAX));
++        assert_se(valid_user_group_name(".-kkk", VALID_USER_RELAX));
++        assert_se(valid_user_group_name(".rööt", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("...", VALID_USER_RELAX));
++
++        assert_se(valid_user_group_name("some5", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("5some", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("INNER5NUMBER", VALID_USER_RELAX));
++
++        assert_se(valid_user_group_name("piff.paff@ad.domain.example", VALID_USER_RELAX));
++        assert_se(valid_user_group_name("Dāvis", VALID_USER_RELAX));
+ }
+ 
+ static void test_valid_user_group_name(void) {
+         log_info("/* %s */", __func__);
+ 
+-        assert_se(!valid_user_group_name(NULL));
+-        assert_se(!valid_user_group_name(""));
+-        assert_se(!valid_user_group_name("1"));
+-        assert_se(!valid_user_group_name("65535"));
+-        assert_se(!valid_user_group_name("-1"));
+-        assert_se(!valid_user_group_name("-kkk"));
+-        assert_se(!valid_user_group_name("rööt"));
+-        assert_se(!valid_user_group_name("."));
+-        assert_se(!valid_user_group_name(".eff"));
+-        assert_se(!valid_user_group_name("foo\nbar"));
+-        assert_se(!valid_user_group_name("0123456789012345678901234567890123456789"));
+-        assert_se(!valid_user_group_name_or_id("aaa:bbb"));
+-        assert_se(!valid_user_group_name("."));
+-        assert_se(!valid_user_group_name(".1"));
+-        assert_se(!valid_user_group_name(".65535"));
+-        assert_se(!valid_user_group_name(".-1"));
+-        assert_se(!valid_user_group_name(".-kkk"));
+-        assert_se(!valid_user_group_name(".rööt"));
+-        assert_se(!valid_user_group_name_or_id(".aaa:bbb"));
+-
+-        assert_se(valid_user_group_name("root"));
+-        assert_se(valid_user_group_name("lennart"));
+-        assert_se(valid_user_group_name("LENNART"));
+-        assert_se(valid_user_group_name("_kkk"));
+-        assert_se(valid_user_group_name("kkk-"));
+-        assert_se(valid_user_group_name("kk-k"));
+-        assert_se(!valid_user_group_name("eff.eff"));
+-        assert_se(!valid_user_group_name("eff."));
+-
+-        assert_se(valid_user_group_name("some5"));
+-        assert_se(!valid_user_group_name("5some"));
+-        assert_se(valid_user_group_name("INNER5NUMBER"));
++        assert_se(!valid_user_group_name(NULL, 0));
++        assert_se(!valid_user_group_name("", 0));
++        assert_se(!valid_user_group_name("1", 0));
++        assert_se(!valid_user_group_name("65535", 0));
++        assert_se(!valid_user_group_name("-1", 0));
++        assert_se(!valid_user_group_name("-kkk", 0));
++        assert_se(!valid_user_group_name("rööt", 0));
++        assert_se(!valid_user_group_name(".", 0));
++        assert_se(!valid_user_group_name(".eff", 0));
++        assert_se(!valid_user_group_name("foo\nbar", 0));
++        assert_se(!valid_user_group_name("0123456789012345678901234567890123456789", 0));
++        assert_se(!valid_user_group_name("aaa:bbb", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name(".", 0));
++        assert_se(!valid_user_group_name("..", 0));
++        assert_se(!valid_user_group_name("...", 0));
++        assert_se(!valid_user_group_name(".1", 0));
++        assert_se(!valid_user_group_name(".65535", 0));
++        assert_se(!valid_user_group_name(".-1", 0));
++        assert_se(!valid_user_group_name(".-kkk", 0));
++        assert_se(!valid_user_group_name(".rööt", 0));
++        assert_se(!valid_user_group_name(".aaa:bbb", VALID_USER_ALLOW_NUMERIC));
++
++        assert_se(valid_user_group_name("root", 0));
++        assert_se(valid_user_group_name("lennart", 0));
++        assert_se(valid_user_group_name("LENNART", 0));
++        assert_se(valid_user_group_name("_kkk", 0));
++        assert_se(valid_user_group_name("kkk-", 0));
++        assert_se(valid_user_group_name("kk-k", 0));
++        assert_se(!valid_user_group_name("eff.eff", 0));
++        assert_se(!valid_user_group_name("eff.", 0));
++
++        assert_se(valid_user_group_name("some5", 0));
++        assert_se(!valid_user_group_name("5some", 0));
++        assert_se(valid_user_group_name("INNER5NUMBER", 0));
++
++        assert_se(!valid_user_group_name("piff.paff@ad.domain.example", 0));
++        assert_se(!valid_user_group_name("Dāvis", 0));
+ }
+ 
+-static void test_valid_user_group_name_or_id_compat(void) {
++static void test_valid_user_group_name_or_numeric_relaxed(void) {
+         log_info("/* %s */", __func__);
+ 
+-        assert_se(!valid_user_group_name_or_id_compat(NULL));
+-        assert_se(!valid_user_group_name_or_id_compat(""));
+-        assert_se(valid_user_group_name_or_id_compat("0"));
+-        assert_se(valid_user_group_name_or_id_compat("1"));
+-        assert_se(valid_user_group_name_or_id_compat("65534"));
+-        assert_se(!valid_user_group_name_or_id_compat("65535"));
+-        assert_se(valid_user_group_name_or_id_compat("65536"));
+-        assert_se(!valid_user_group_name_or_id_compat("-1"));
+-        assert_se(!valid_user_group_name_or_id_compat("-kkk"));
+-        assert_se(!valid_user_group_name_or_id_compat("rööt"));
+-        assert_se(!valid_user_group_name_or_id_compat("."));
+-        assert_se(!valid_user_group_name_or_id_compat(".eff"));
+-        assert_se(valid_user_group_name_or_id_compat("eff.eff"));
+-        assert_se(valid_user_group_name_or_id_compat("eff."));
+-        assert_se(!valid_user_group_name_or_id_compat("foo\nbar"));
+-        assert_se(!valid_user_group_name_or_id_compat("0123456789012345678901234567890123456789"));
+-        assert_se(!valid_user_group_name_or_id_compat("aaa:bbb"));
+-
+-        assert_se(valid_user_group_name_or_id_compat("root"));
+-        assert_se(valid_user_group_name_or_id_compat("lennart"));
+-        assert_se(valid_user_group_name_or_id_compat("LENNART"));
+-        assert_se(valid_user_group_name_or_id_compat("_kkk"));
+-        assert_se(valid_user_group_name_or_id_compat("kkk-"));
+-        assert_se(valid_user_group_name_or_id_compat("kk-k"));
+-
+-        assert_se(valid_user_group_name_or_id_compat("some5"));
+-        assert_se(valid_user_group_name_or_id_compat("5some"));
+-        assert_se(valid_user_group_name_or_id_compat("INNER5NUMBER"));
++        assert_se(!valid_user_group_name(NULL, VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("0", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("1", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("65534", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("65535", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("65536", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("-1", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("foo\nbar", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("0123456789012345678901234567890123456789", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("aaa:bbb", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(!valid_user_group_name(".", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(!valid_user_group_name("..", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++
++        assert_se(valid_user_group_name("root", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("lennart", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("LENNART", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("_kkk", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("kkk-", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("kk-k", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("-kkk", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("rööt", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name(".eff", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("eff.eff", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("eff.", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("...", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++
++        assert_se(valid_user_group_name("some5", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("5some", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("INNER5NUMBER", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++
++        assert_se(valid_user_group_name("piff.paff@ad.domain.example", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
++        assert_se(valid_user_group_name("Dāvis", VALID_USER_ALLOW_NUMERIC|VALID_USER_RELAX));
+ }
+ 
+-static void test_valid_user_group_name_or_id(void) {
++static void test_valid_user_group_name_or_numeric(void) {
+         log_info("/* %s */", __func__);
+ 
+-        assert_se(!valid_user_group_name_or_id(NULL));
+-        assert_se(!valid_user_group_name_or_id(""));
+-        assert_se(valid_user_group_name_or_id("0"));
+-        assert_se(valid_user_group_name_or_id("1"));
+-        assert_se(valid_user_group_name_or_id("65534"));
+-        assert_se(!valid_user_group_name_or_id("65535"));
+-        assert_se(valid_user_group_name_or_id("65536"));
+-        assert_se(!valid_user_group_name_or_id("-1"));
+-        assert_se(!valid_user_group_name_or_id("-kkk"));
+-        assert_se(!valid_user_group_name_or_id("rööt"));
+-        assert_se(!valid_user_group_name_or_id("."));
+-        assert_se(!valid_user_group_name_or_id(".eff"));
+-        assert_se(!valid_user_group_name_or_id("eff.eff"));
+-        assert_se(!valid_user_group_name_or_id("eff."));
+-        assert_se(!valid_user_group_name_or_id("foo\nbar"));
+-        assert_se(!valid_user_group_name_or_id("0123456789012345678901234567890123456789"));
+-        assert_se(!valid_user_group_name_or_id("aaa:bbb"));
+-
+-        assert_se(valid_user_group_name_or_id("root"));
+-        assert_se(valid_user_group_name_or_id("lennart"));
+-        assert_se(valid_user_group_name_or_id("LENNART"));
+-        assert_se(valid_user_group_name_or_id("_kkk"));
+-        assert_se(valid_user_group_name_or_id("kkk-"));
+-        assert_se(valid_user_group_name_or_id("kk-k"));
+-
+-        assert_se(valid_user_group_name_or_id("some5"));
+-        assert_se(!valid_user_group_name_or_id("5some"));
+-        assert_se(valid_user_group_name_or_id("INNER5NUMBER"));
++        assert_se(!valid_user_group_name(NULL, VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("0", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("1", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("65534", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("65535", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("65536", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("-1", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("-kkk", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("rööt", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name(".", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("..", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("...", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name(".eff", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("eff.eff", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("eff.", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("foo\nbar", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("0123456789012345678901234567890123456789", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("aaa:bbb", VALID_USER_ALLOW_NUMERIC));
++
++        assert_se(valid_user_group_name("root", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("lennart", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("LENNART", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("_kkk", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("kkk-", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("kk-k", VALID_USER_ALLOW_NUMERIC));
++
++        assert_se(valid_user_group_name("some5", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("5some", VALID_USER_ALLOW_NUMERIC));
++        assert_se(valid_user_group_name("INNER5NUMBER", VALID_USER_ALLOW_NUMERIC));
++
++        assert_se(!valid_user_group_name("piff.paff@ad.domain.example", VALID_USER_ALLOW_NUMERIC));
++        assert_se(!valid_user_group_name("Dāvis", VALID_USER_ALLOW_NUMERIC));
+ }
+ 
+ static void test_valid_gecos(void) {
+@@ -367,10 +386,10 @@ int main(int argc, char*argv[]) {
+         test_parse_uid();
+         test_uid_ptr();
+ 
+-        test_valid_user_group_name_compat();
++        test_valid_user_group_name_relaxed();
+         test_valid_user_group_name();
+-        test_valid_user_group_name_or_id_compat();
+-        test_valid_user_group_name_or_id();
++        test_valid_user_group_name_or_numeric_relaxed();
++        test_valid_user_group_name_or_numeric();
+         test_valid_gecos();
+         test_valid_home();
+ 

@@ -1,0 +1,40 @@
+From 31aa21a13f9b91486b1a95c5b73fa088af77fcb4 Mon Sep 17 00:00:00 2001
+From: Lennart Poettering <lennart@poettering.net>
+Date: Mon, 6 Aug 2018 19:35:44 +0200
+Subject: [PATCH] logind: propagate session stop errors
+
+Let's propagate errors from stopping sessions via seat_stop(). This is
+similar to how we propagate such errors in user_stop() for all sessions
+associated with a user.
+
+Note that we propagate these errors, but we don't abort the function.
+
+(cherry picked from commit e6958b7ea33813b085966ac25817a957c0dad7f9)
+
+Related: #1642460
+---
+ src/login/logind-seat.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/login/logind-seat.c b/src/login/logind-seat.c
+index 9e4f009643..96c34a6c9e 100644
+--- a/src/login/logind-seat.c
++++ b/src/login/logind-seat.c
+@@ -431,7 +431,7 @@ int seat_start(Seat *s) {
+ }
+ 
+ int seat_stop(Seat *s, bool force) {
+-        int r = 0;
++        int r;
+ 
+         assert(s);
+ 
+@@ -441,7 +441,7 @@ int seat_stop(Seat *s, bool force) {
+                            "SEAT_ID=%s", s->id,
+                            LOG_MESSAGE("Removed seat %s.", s->id));
+ 
+-        seat_stop_sessions(s, force);
++        r = seat_stop_sessions(s, force);
+ 
+         unlink(s->state_file);
+         seat_add_to_gc_queue(s);

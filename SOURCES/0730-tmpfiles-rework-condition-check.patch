@@ -1,0 +1,45 @@
+From 520ff5394187a0d6cb0cb40251f6e8e997ccdd0e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Wed, 7 Apr 2021 17:54:49 +0200
+Subject: [PATCH] tmpfiles: rework condition check
+
+(!a && b) || (a && c) is replaced by (a ? c : b).
+
+path_startswith() != NULL is need to avoid type warning.
+
+(cherry picked from commit 875e7b25d84a111755dab79241c9e64e44836910)
+
+Related: #1944468
+---
+ src/tmpfiles/tmpfiles.c | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/tmpfiles/tmpfiles.c b/src/tmpfiles/tmpfiles.c
+index 1aeeed0d2e..50fada99dd 100644
+--- a/src/tmpfiles/tmpfiles.c
++++ b/src/tmpfiles/tmpfiles.c
+@@ -2705,7 +2705,11 @@ static int read_config_file(char **config_dirs, const char *fn, bool ignore_enoe
+                                 for (size_t nj = 0; nj < ja->count; nj++) {
+                                         Item *j = ja->items + nj;
+ 
+-                                        if (!IN_SET(j->type, CREATE_DIRECTORY, TRUNCATE_DIRECTORY, CREATE_SUBVOLUME, CREATE_SUBVOLUME_INHERIT_QUOTA, CREATE_SUBVOLUME_NEW_QUOTA))
++                                        if (!IN_SET(j->type, CREATE_DIRECTORY,
++                                                             TRUNCATE_DIRECTORY,
++                                                             CREATE_SUBVOLUME,
++                                                             CREATE_SUBVOLUME_INHERIT_QUOTA,
++                                                             CREATE_SUBVOLUME_NEW_QUOTA))
+                                                 continue;
+ 
+                                         if (path_equal(j->path, i->path)) {
+@@ -2713,8 +2717,9 @@ static int read_config_file(char **config_dirs, const char *fn, bool ignore_enoe
+                                                 break;
+                                         }
+ 
+-                                        if ((!candidate_item && path_startswith(i->path, j->path)) ||
+-                                            (candidate_item && path_startswith(j->path, candidate_item->path) && (fnmatch(i->path, j->path, FNM_PATHNAME | FNM_PERIOD) == 0)))
++                                        if (candidate_item
++                                            ? (path_startswith(j->path, candidate_item->path) && fnmatch(i->path, j->path, FNM_PATHNAME | FNM_PERIOD) == 0)
++                                            : path_startswith(i->path, j->path) != NULL)
+                                                 candidate_item = j;
+                                 }
+ 

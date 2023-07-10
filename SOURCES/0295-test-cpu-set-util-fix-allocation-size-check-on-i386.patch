@@ -1,0 +1,30 @@
+From 3cf9361996b796eae0bda12aec8c92ddae1d5d48 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 4 Jun 2019 09:40:38 +0200
+Subject: [PATCH] test-cpu-set-util: fix allocation size check on i386
+
+We get just 28 bytes not 32 as on 64-bit architectures (__cpu_set_t is 4 bytes,
+we need at least 26, so 28 satisfies the constraints).
+
+(cherry picked from commit 64412970ac0d4b6f5c4bbd8816edc9bff9eab2de)
+
+Related: #1734787
+---
+ src/test/test-cpu-set-util.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/test/test-cpu-set-util.c b/src/test/test-cpu-set-util.c
+index 3456add989..136eaca82d 100644
+--- a/src/test/test-cpu-set-util.c
++++ b/src/test/test-cpu-set-util.c
+@@ -256,7 +256,9 @@ static void test_cpu_set_to_from_dbus(void) {
+         assert_se(array);
+         assert_se(allocated == c.allocated);
+ 
+-        assert(memcmp(array, expected, sizeof expected) == 0);
++        assert_se(allocated <= sizeof expected);
++        assert_se(allocated >= DIV_ROUND_UP(201u, 8u)); /* We need at least 201 bits for our mask */
++        assert(memcmp(array, expected, allocated) == 0);
+ 
+         assert_se(cpu_set_from_dbus(array, allocated, &c2) == 0);
+         assert_se(c2.set);

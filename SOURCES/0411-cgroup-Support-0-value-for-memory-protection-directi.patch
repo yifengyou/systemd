@@ -1,0 +1,86 @@
+From 614b43fcad3a16dfde5ad606b43c3aa1adacc30a Mon Sep 17 00:00:00 2001
+From: Chris Down <chris@chrisdown.name>
+Date: Fri, 3 May 2019 08:32:41 -0400
+Subject: [PATCH] cgroup: Support 0-value for memory protection directives
+
+These make sense to be explicitly set at 0 (which has a different effect
+than the default, since it can affect processing of `DefaultMemoryXXX`).
+
+Without this, it's not easily possible to relinquish memory protection
+for a subtree, which is not great.
+
+(cherry picked from commit 22bf131be278b95a4a204514d37a4344cf6365c6)
+
+Related: #1763435
+---
+ src/core/dbus-cgroup.c   | 17 +++++++++--------
+ src/core/load-fragment.c |  2 +-
+ 2 files changed, 10 insertions(+), 9 deletions(-)
+
+diff --git a/src/core/dbus-cgroup.c b/src/core/dbus-cgroup.c
+index e34ff3a016..39778a8dd4 100644
+--- a/src/core/dbus-cgroup.c
++++ b/src/core/dbus-cgroup.c
+@@ -606,6 +606,7 @@ BUS_DEFINE_SET_CGROUP_WEIGHT(cpu_shares, CGROUP_MASK_CPU, CGROUP_CPU_SHARES_IS_O
+ BUS_DEFINE_SET_CGROUP_WEIGHT(io_weight, CGROUP_MASK_IO, CGROUP_WEIGHT_IS_OK, CGROUP_WEIGHT_INVALID);
+ BUS_DEFINE_SET_CGROUP_WEIGHT(blockio_weight, CGROUP_MASK_BLKIO, CGROUP_BLKIO_WEIGHT_IS_OK, CGROUP_BLKIO_WEIGHT_INVALID);
+ BUS_DEFINE_SET_CGROUP_LIMIT(memory, CGROUP_MASK_MEMORY, physical_memory_scale, 1);
++BUS_DEFINE_SET_CGROUP_LIMIT(memory_protection, CGROUP_MASK_MEMORY, physical_memory_scale, 0);
+ BUS_DEFINE_SET_CGROUP_LIMIT(swap, CGROUP_MASK_MEMORY, physical_memory_scale, 0);
+ BUS_DEFINE_SET_CGROUP_LIMIT(tasks_max, CGROUP_MASK_PIDS, system_tasks_max_scale, 1);
+ #pragma GCC diagnostic pop
+@@ -665,16 +666,16 @@ int bus_cgroup_set_property(
+                 return bus_cgroup_set_boolean(u, name, &c->memory_accounting, CGROUP_MASK_MEMORY, message, flags, error);
+ 
+         if (streq(name, "MemoryMin"))
+-                return bus_cgroup_set_memory(u, name, &c->memory_min, message, flags, error);
++                return bus_cgroup_set_memory_protection(u, name, &c->memory_min, message, flags, error);
+ 
+         if (streq(name, "MemoryLow"))
+-                return bus_cgroup_set_memory(u, name, &c->memory_low, message, flags, error);
++                return bus_cgroup_set_memory_protection(u, name, &c->memory_low, message, flags, error);
+ 
+         if (streq(name, "DefaultMemoryMin"))
+-                return bus_cgroup_set_memory(u, name, &c->default_memory_min, message, flags, error);
++                return bus_cgroup_set_memory_protection(u, name, &c->default_memory_min, message, flags, error);
+ 
+         if (streq(name, "DefaultMemoryLow"))
+-                return bus_cgroup_set_memory(u, name, &c->default_memory_low, message, flags, error);
++                return bus_cgroup_set_memory_protection(u, name, &c->default_memory_low, message, flags, error);
+ 
+         if (streq(name, "MemoryHigh"))
+                 return bus_cgroup_set_memory(u, name, &c->memory_high, message, flags, error);
+@@ -689,16 +690,16 @@ int bus_cgroup_set_property(
+                 return bus_cgroup_set_memory(u, name, &c->memory_limit, message, flags, error);
+ 
+         if (streq(name, "MemoryMinScale"))
+-                return bus_cgroup_set_memory_scale(u, name, &c->memory_min, message, flags, error);
++                return bus_cgroup_set_memory_protection_scale(u, name, &c->memory_min, message, flags, error);
+ 
+         if (streq(name, "MemoryLowScale"))
+-                return bus_cgroup_set_memory_scale(u, name, &c->memory_low, message, flags, error);
++                return bus_cgroup_set_memory_protection_scale(u, name, &c->memory_low, message, flags, error);
+ 
+         if (streq(name, "DefaultMemoryMinScale"))
+-                return bus_cgroup_set_memory_scale(u, name, &c->default_memory_min, message, flags, error);
++                return bus_cgroup_set_memory_protection_scale(u, name, &c->default_memory_min, message, flags, error);
+ 
+         if (streq(name, "DefaultMemoryLowScale"))
+-                return bus_cgroup_set_memory_scale(u, name, &c->default_memory_low, message, flags, error);
++                return bus_cgroup_set_memory_protection_scale(u, name, &c->default_memory_low, message, flags, error);
+ 
+         if (streq(name, "MemoryHighScale"))
+                 return bus_cgroup_set_memory_scale(u, name, &c->memory_high, message, flags, error);
+diff --git a/src/core/load-fragment.c b/src/core/load-fragment.c
+index 3b8ee6b124..33fdb82754 100644
+--- a/src/core/load-fragment.c
++++ b/src/core/load-fragment.c
+@@ -3090,7 +3090,7 @@ int config_parse_memory_limit(
+                         bytes = physical_memory_scale(r, 100U);
+ 
+                 if (bytes >= UINT64_MAX ||
+-                    (bytes <= 0 && !streq(lvalue, "MemorySwapMax"))) {
++                    (bytes <= 0 && !STR_IN_SET(lvalue, "MemorySwapMax", "MemoryLow", "MemoryMin", "DefaultMemoryLow", "DefaultMemoryMin"))) {
+                         log_syntax(unit, LOG_ERR, filename, line, 0, "Memory limit '%s' out of range, ignoring.", rvalue);
+                         return 0;
+                 }

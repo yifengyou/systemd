@@ -1,0 +1,42 @@
+From 42123e9614ea73c7f64c684c90e4dbb049ef67ef Mon Sep 17 00:00:00 2001
+From: Frantisek Sumsal <frantisek@sumsal.cz>
+Date: Sun, 5 Dec 2021 10:25:28 +0100
+Subject: [PATCH] lgtm: ignore certain cleanup functions
+
+as they don't do any illegal stuff even when used with an uninitialized
+variable.
+
+(cherry picked from commit af1868213657b38b8d4008608976eb81546cfb8e)
+
+Related: #2017033
+---
+ .lgtm/cpp-queries/UninitializedVariableWithCleanup.ql | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/.lgtm/cpp-queries/UninitializedVariableWithCleanup.ql b/.lgtm/cpp-queries/UninitializedVariableWithCleanup.ql
+index 6bf0ae01eb..8c24b6d8f1 100644
+--- a/.lgtm/cpp-queries/UninitializedVariableWithCleanup.ql
++++ b/.lgtm/cpp-queries/UninitializedVariableWithCleanup.ql
+@@ -34,6 +34,13 @@ predicate allocatedType(Type t) {
+   allocatedType(t.getUnspecifiedType())
+ }
+ 
++/** Auxiliary predicate: List cleanup functions we want to explicitly ignore
++  * since they don't do anything illegal even when the variable is uninitialized
++  */
++predicate cleanupFunctionDenyList(string fun) {
++  fun = "erase_char"
++}
++
+ /**
+  * A declaration of a local variable using __attribute__((__cleanup__(x)))
+  * that leaves the variable uninitialized.
+@@ -43,6 +50,8 @@ DeclStmt declWithNoInit(LocalVariable v) {
+   not exists(v.getInitializer()) and
+   /* The variable has __attribute__((__cleanup__(...))) set */
+   v.getAnAttribute().hasName("cleanup") and
++  /* Check if the cleanup function is not on a deny list */
++  not exists(Attribute a | a = v.getAnAttribute() and a.getName() = "cleanup" | cleanupFunctionDenyList(a.getAnArgument().getValueText())) and
+   /* The type of the variable is not stack-allocated. */
+   exists(Type t | t = v.getType() | not allocatedType(t))
+ }

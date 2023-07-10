@@ -1,0 +1,25 @@
+From 8d596fa931a32e517323379dde6a73ee2a72506c Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Tue, 27 Nov 2018 16:33:28 +0900
+Subject: [PATCH] util: define free_func_t
+
+(cherry picked from commit e30f9c972b789152d67ff34fd3bda294d20d1f51)
+
+Resolves: #2037807
+---
+ src/basic/alloc-util.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/basic/alloc-util.h b/src/basic/alloc-util.h
+index ebe42889ea..f8294da68f 100644
+--- a/src/basic/alloc-util.h
++++ b/src/basic/alloc-util.h
+@@ -8,6 +8,8 @@
+ 
+ #include "macro.h"
+ 
++typedef void (*free_func_t)(void *p);
++
+ #define new(t, n) ((t*) malloc_multiply(sizeof(t), (n)))
+ 
+ #define new0(t, n) ((t*) calloc((n), sizeof(t)))

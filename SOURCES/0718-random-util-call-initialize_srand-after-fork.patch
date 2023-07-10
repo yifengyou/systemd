@@ -1,0 +1,59 @@
+From 58cdc09af08e065c85b2f8834ee9848c010f5afe Mon Sep 17 00:00:00 2001
+From: Yu Watanabe <watanabe.yu+github@gmail.com>
+Date: Mon, 16 Dec 2019 19:47:48 +0900
+Subject: [PATCH] random-util: call initialize_srand() after fork()
+
+(cherry picked from commit a0f11d1d11a546f791855ec9c47c2ff830e6a5aa)
+
+Related: #2005008
+---
+ src/basic/random-util.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/src/basic/random-util.c b/src/basic/random-util.c
+index 91481559db..801f6ad131 100644
+--- a/src/basic/random-util.c
++++ b/src/basic/random-util.c
+@@ -4,6 +4,7 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <linux/random.h>
++#include <pthread.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <stdlib.h>
+@@ -26,6 +27,8 @@
+ #include "random-util.h"
+ #include "time-util.h"
+ 
++static bool srand_called = false;
++
+ int acquire_random_bytes(void *p, size_t n, bool high_quality_required) {
+         static int have_syscall = -1;
+ 
+@@ -81,8 +84,12 @@ int acquire_random_bytes(void *p, size_t n, bool high_quality_required) {
+         return loop_read_exact(fd, (uint8_t*) p + already_done, n - already_done, true);
+ }
+ 
++static void clear_srand_initialization(void) {
++        srand_called = false;
++}
++
+ void initialize_srand(void) {
+-        static bool srand_called = false;
++        static bool pthread_atfork_registered = false;
+         unsigned x;
+ #if HAVE_SYS_AUXV_H
+         void *auxv;
+@@ -109,6 +116,11 @@ void initialize_srand(void) {
+ 
+         srand(x);
+         srand_called = true;
++
++        if (!pthread_atfork_registered) {
++                (void) pthread_atfork(NULL, NULL, clear_srand_initialization);
++                pthread_atfork_registered = true;
++        }
+ }
+ 
+ /* INT_MAX gives us only 31 bits, so use 24 out of that. */

@@ -1,0 +1,83 @@
+From 0e0b90ffcf0731865846bfa2754a809cc2b8c53e Mon Sep 17 00:00:00 2001
+From: Martin Wilck <mwilck@suse.com>
+Date: Tue, 24 Apr 2018 17:57:47 +0200
+Subject: [PATCH] test/udev-test.pl: fix wrong test descriptions
+
+udev hasn't supported renaming device nodes for some time.
+
+(cherry picked from commit 46bc71b2b73f8a1e27dc5e142730e9877dd05e3e)
+
+Related: #1642728
+---
+ test/udev-test.pl | 15 ++++++++-------
+ 1 file changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/test/udev-test.pl b/test/udev-test.pl
+index f5edecefd0..d5d0e130e3 100755
+--- a/test/udev-test.pl
++++ b/test/udev-test.pl
+@@ -212,7 +212,7 @@ KERNEL=="ttyACM[0-9]*", SYMLINK+="modem/%n"
+ EOF
+         },
+         {
+-                desc            => "replace kernel name",
++                desc            => "don't replace kernel name",
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1d.7/usb5/5-2/5-2:1.0/tty/ttyACM0",
+@@ -223,7 +223,7 @@ KERNEL=="ttyACM0", SYMLINK+="modem"
+ EOF
+         },
+         {
+-                desc            => "Handle comment lines in config file (and replace kernel name)",
++                desc            => "Handle comment lines in config file (and don't replace kernel name)",
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1d.7/usb5/5-2/5-2:1.0/tty/ttyACM0",
+@@ -236,7 +236,7 @@ KERNEL=="ttyACM0", SYMLINK+="modem"
+ EOF
+         },
+         {
+-                desc            => "Handle comment lines in config file with whitespace (and replace kernel name)",
++                desc            => "Handle comment lines in config file with whitespace (and don't replace kernel name)",
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1d.7/usb5/5-2/5-2:1.0/tty/ttyACM0",
+@@ -249,7 +249,7 @@ KERNEL=="ttyACM0", SYMLINK+="modem"
+ EOF
+         },
+         {
+-                desc            => "Handle whitespace only lines (and replace kernel name)",
++                desc            => "Handle whitespace only lines (and don't replace kernel name)",
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1d.7/usb5/5-2/5-2:1.0/tty/ttyACM0",
+@@ -267,7 +267,7 @@ KERNEL=="ttyACM0", SYMLINK+="whitespace"
+ EOF
+         },
+         {
+-                desc            => "Handle empty lines in config file (and replace kernel name)",
++                desc            => "Handle empty lines in config file (and don't replace kernel name)",
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1d.7/usb5/5-2/5-2:1.0/tty/ttyACM0",
+@@ -280,7 +280,7 @@ KERNEL=="ttyACM0", SYMLINK+="modem"
+ EOF
+         },
+         {
+-                desc            => "Handle backslashed multi lines in config file (and replace kernel name)",
++                desc            => "Handle backslashed multi lines in config file (and don't replace kernel name)",
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1d.7/usb5/5-2/5-2:1.0/tty/ttyACM0",
+@@ -303,8 +303,9 @@ EOF
+ KERNEL=="ttyACM0", PROGRAM=="/bin/echo -e \\101", RESULT=="A", SYMLINK+="aaa"
+ EOF
+         },
++        # 20
+         {
+-                desc            => "Handle stupid backslashed multi lines in config file (and replace kernel name)",
++                desc            => "Handle stupid backslashed multi lines in config file (and don't replace kernel name)",
+                 devices => [
+                         {
+                                 devpath         => "/devices/pci0000:00/0000:00:1d.7/usb5/5-2/5-2:1.0/tty/ttyACM0",

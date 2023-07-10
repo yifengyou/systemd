@@ -1,0 +1,51 @@
+From f531c34dd8ead33b9972bcd06017ac80ccedb757 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Tue, 16 Oct 2018 15:30:53 +0200
+Subject: [PATCH] units: use SuccessAction=reboot-force in
+ systemd-reboot.service
+
+(cherry picked from commit d85515edcf9700dc068201ab9f7103f04f3b25b2)
+
+Related: #1860899
+---
+ units/meson.build                                           | 2 +-
+ units/{systemd-reboot.service.in => systemd-reboot.service} | 5 +----
+ 2 files changed, 2 insertions(+), 5 deletions(-)
+ rename units/{systemd-reboot.service.in => systemd-reboot.service} (89%)
+
+diff --git a/units/meson.build b/units/meson.build
+index a1cd2524dc..b482431a10 100644
+--- a/units/meson.build
++++ b/units/meson.build
+@@ -97,6 +97,7 @@ units = [
+          'sockets.target.wants/'],
+         ['systemd-networkd.socket',             'ENABLE_NETWORKD',
+          join_paths(pkgsysconfdir, 'system/sockets.target.wants/')],
++        ['systemd-reboot.service',               ''],
+         ['systemd-rfkill.socket',               'ENABLE_RFKILL'],
+         ['systemd-tmpfiles-clean.timer',        '',
+          'timers.target.wants/'],
+@@ -182,7 +183,6 @@ in_units = [
+         ['systemd-quotacheck.service',           'ENABLE_QUOTACHECK'],
+         ['systemd-random-seed.service',          'ENABLE_RANDOMSEED',
+          'sysinit.target.wants/'],
+-        ['systemd-reboot.service',               ''],
+         ['systemd-remount-fs.service',           '',
+          'local-fs.target.wants/'],
+         ['systemd-resolved.service',             'ENABLE_RESOLVE',
+diff --git a/units/systemd-reboot.service.in b/units/systemd-reboot.service
+similarity index 89%
+rename from units/systemd-reboot.service.in
+rename to units/systemd-reboot.service
+index 4763ccfdca..505f60aabf 100644
+--- a/units/systemd-reboot.service.in
++++ b/units/systemd-reboot.service
+@@ -13,7 +13,4 @@ Documentation=man:systemd-halt.service(8)
+ DefaultDependencies=no
+ Requires=shutdown.target umount.target final.target
+ After=shutdown.target umount.target final.target
+-
+-[Service]
+-Type=oneshot
+-ExecStart=@SYSTEMCTL@ --force reboot
++SuccessAction=reboot-force

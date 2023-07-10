@@ -1,0 +1,180 @@
+From 696d56fc75e72f47e4d3232a2140fac10b6b44de Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Zbigniew=20J=C4=99drzejewski-Szmek?= <zbyszek@in.waw.pl>
+Date: Mon, 29 Oct 2018 14:55:33 +0100
+Subject: [PATCH] journal: adapt for new improved LZ4_decompress_safe_partial()
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+With lz4 1.8.3, this function can now decompress partial results into a smaller
+buffer. The release news don't say anything interesting, but the test case that
+was previously failing now works OK.
+
+Fixes #10259.
+
+A test is added. It shows that with *older* lz4, a partial decompression can
+occur with the returned size smaller then the requested number of bytes _and_
+smaller then the size of the compressed data:
+
+(lz4-libs-1.8.2-1.fc29.x86_64)
+Compressed 4194304 → 16464
+Decompressed → 4194304
+Decompressed partial 12/4194304 → 4194304
+Decompressed partial 1/1 → -2 (bad)
+Decompressed partial 2/2 → -2 (bad)
+Decompressed partial 3/3 → -2 (bad)
+Decompressed partial 4/4 → -2 (bad)
+Decompressed partial 5/5 → -2 (bad)
+Decompressed partial 6/6 → 6 (good)
+Decompressed partial 7/7 → 6 (good)
+Decompressed partial 8/8 → 6 (good)
+Decompressed partial 9/9 → 6 (good)
+Decompressed partial 10/10 → 6 (good)
+Decompressed partial 11/11 → 6 (good)
+Decompressed partial 12/12 → 6 (good)
+Decompressed partial 13/13 → 6 (good)
+Decompressed partial 14/14 → 6 (good)
+Decompressed partial 15/15 → 6 (good)
+Decompressed partial 16/16 → 6 (good)
+Decompressed partial 17/17 → 6 (good)
+Decompressed partial 18/18 → -16459 (bad)
+
+(lz4-libs-1.8.3-1.fc29.x86_64)
+Compressed 4194304 → 16464
+Decompressed → 4194304
+Decompressed partial 12/4194304 → 12
+Decompressed partial 1/1 → 1 (good)
+Decompressed partial 2/2 → 2 (good)
+Decompressed partial 3/3 → 3 (good)
+Decompressed partial 4/4 → 4 (good)
+...
+
+If we got such a short "successful" decompression in decompress_startswith() as
+implemented before this patch, we could be confused and return a false negative
+result. But it turns out that this only occurs with small output buffer
+sizes. We use greedy_realloc() to manager the buffer, so it is always at least
+64 bytes. I couldn't hit a case where decompress_startswith() would actually
+return a bogus result. But since the lack of proof is not conclusive, the code
+for *older* lz4 is changed too, just to be safe. We cannot rule out that on a
+different architecture or with some unlucky compressed string we could hit this
+corner case.
+
+The fallback code is guarded by a version check. The check uses a function not
+the compile-time define, because there was no soversion bump in lz4 or new
+symbols, and we could be compiled against a newer lz4 and linked at runtime
+with an older one. (This happens routinely e.g. when somebody upgrades a subset
+of distro packages.)
+
+(cherry picked from commit e41ef6fd0027d3619dc1cf062100b2d224d0ee7e)
+Resolves: #1843871
+---
+ src/journal/compress.c      | 39 ++++++++++++++++++++++++-------------
+ src/journal/test-compress.c | 21 ++++++++++----------
+ 2 files changed, 37 insertions(+), 23 deletions(-)
+
+diff --git a/src/journal/compress.c b/src/journal/compress.c
+index a4a5e63840..e95ce2bcaa 100644
+--- a/src/journal/compress.c
++++ b/src/journal/compress.c
+@@ -290,7 +290,6 @@ int decompress_startswith_lz4(const void *src, uint64_t src_size,
+          * prefix */
+ 
+         int r;
+-        size_t size;
+ 
+         assert(src);
+         assert(src_size > 0);
+@@ -307,23 +306,37 @@ int decompress_startswith_lz4(const void *src, uint64_t src_size,
+ 
+         r = LZ4_decompress_safe_partial((char*)src + 8, *buffer, src_size - 8,
+                                         prefix_len + 1, *buffer_size);
+-        if (r >= 0)
+-                size = (unsigned) r;
+-        else {
+-                /* lz4 always tries to decode full "sequence", so in
+-                 * pathological cases might need to decompress the
+-                 * full field. */
++        /* One lz4 < 1.8.3, we might get "failure" (r < 0), or "success" where
++         * just a part of the buffer is decompressed. But if we get a smaller
++         * amount of bytes than requested, we don't know whether there isn't enough
++         * data to fill the requested size or whether we just got a partial answer.
++         */
++        if (r < 0 || (size_t) r < prefix_len + 1) {
++                size_t size;
++
++                if (LZ4_versionNumber() >= 10803)
++                        /* We trust that the newer lz4 decompresses the number of bytes we
++                         * requested if available in the compressed string. */
++                        return 0;
++
++                if (r > 0)
++                        /* Compare what we have first, in case of mismatch we can
++                         * shortcut the full comparison. */
++                        if (memcmp(*buffer, prefix, r) != 0)
++                                return 0;
++
++                /* Before version 1.8.3, lz4 always tries to decode full a "sequence",
++                 * so in pathological cases might need to decompress the full field. */
+                 r = decompress_blob_lz4(src, src_size, buffer, buffer_size, &size, 0);
+                 if (r < 0)
+                         return r;
+-        }
+ 
+-        if (size >= prefix_len + 1)
+-                return memcmp(*buffer, prefix, prefix_len) == 0 &&
+-                        ((const uint8_t*) *buffer)[prefix_len] == extra;
+-        else
+-                return 0;
++                if (size < prefix_len + 1)
++                        return 0;
++        }
+ 
++        return memcmp(*buffer, prefix, prefix_len) == 0 &&
++                ((const uint8_t*) *buffer)[prefix_len] == extra;
+ #else
+         return -EPROTONOSUPPORT;
+ #endif
+diff --git a/src/journal/test-compress.c b/src/journal/test-compress.c
+index 65cd3fbfeb..f60c4ae3d7 100644
+--- a/src/journal/test-compress.c
++++ b/src/journal/test-compress.c
+@@ -223,13 +223,13 @@ static void test_compress_stream(int compression,
+ 
+ #if HAVE_LZ4
+ static void test_lz4_decompress_partial(void) {
+-        char buf[20000];
++        char buf[20000], buf2[100];
+         size_t buf_size = sizeof(buf), compressed;
+         int r;
+         _cleanup_free_ char *huge = NULL;
+ 
+ #define HUGE_SIZE (4096*1024)
+-        huge = malloc(HUGE_SIZE);
++        assert_se(huge = malloc(HUGE_SIZE));
+         memset(huge, 'x', HUGE_SIZE);
+         memcpy(huge, "HUGE=", 5);
+ 
+@@ -248,14 +248,15 @@ static void test_lz4_decompress_partial(void) {
+         assert_se(r >= 0);
+         log_info("Decompressed partial %i/%i → %i", 12, HUGE_SIZE, r);
+ 
+-        /* We expect this to fail, because that's how current lz4 works. If this
+-         * call succeeds, then lz4 has been fixed, and we need to change our code.
+-         */
+-        r = LZ4_decompress_safe_partial(buf, huge,
+-                                        compressed,
+-                                        12, HUGE_SIZE-1);
+-        assert_se(r < 0);
+-        log_info("Decompressed partial %i/%i → %i", 12, HUGE_SIZE-1, r);
++        for (size_t size = 1; size < sizeof(buf2); size++) {
++                /* This failed in older lz4s but works in newer ones. */
++                r = LZ4_decompress_safe_partial(buf, buf2, compressed, size, size);
++                log_info("Decompressed partial %zu/%zu → %i (%s)", size, size, r,
++                                                                   r < 0 ? "bad" : "good");
++                if (r >= 0 && LZ4_versionNumber() >= 10803)
++                        /* lz4 <= 1.8.2 should fail that test, let's only check for newer ones */
++                        assert_se(memcmp(buf2, huge, r) == 0);
++        }
+ }
+ #endif
+ 

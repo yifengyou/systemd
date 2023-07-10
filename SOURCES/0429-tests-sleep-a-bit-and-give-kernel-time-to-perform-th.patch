@@ -1,0 +1,36 @@
+From 9028873ee3bffe37b50fa7ada123fcf270de4658 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20Sekleta=CC=81r?= <msekleta@redhat.com>
+Date: Fri, 5 Jun 2020 11:35:01 +0200
+Subject: [PATCH] tests: sleep a bit and give kernel time to perform the action
+ after manual freeze/thaw
+
+Fixes: #16050
+(cherry picked from commit a0d79df8e59c6bb6dc0382d71e835dec869a7df4)
+
+Related: #1848421
+---
+ test/TEST-38-FREEZER/testsuite.sh | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/test/TEST-38-FREEZER/testsuite.sh b/test/TEST-38-FREEZER/testsuite.sh
+index 6fcadb8f8e..18b7bd6dce 100755
+--- a/test/TEST-38-FREEZER/testsuite.sh
++++ b/test/TEST-38-FREEZER/testsuite.sh
+@@ -246,6 +246,8 @@ test_preserve_state() {
+ 
+     echo -n "  - freeze from outside: "
+     echo 1 > /sys/fs/cgroup/"${slice}"/cgroup.freeze
++    # Give kernel some time to freeze the slice
++    sleep 1
+ 
+     # Our state should not be affected
+     check_freezer_state "${slice}" "running"
+@@ -258,6 +260,8 @@ test_preserve_state() {
+ 
+     echo -n "  - thaw from outside: "
+     echo 0 > /sys/fs/cgroup/"${slice}"/cgroup.freeze
++    sleep 1
++
+     check_freezer_state "${unit}" "running"
+     check_freezer_state "${slice}" "running"
+     grep -q "frozen 0" /sys/fs/cgroup/"${slice}"/cgroup.events
