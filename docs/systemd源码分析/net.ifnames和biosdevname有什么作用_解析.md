@@ -52,6 +52,11 @@ test/fuzz/fuzz-unit-file/directives.service:275:net.ifnames=
 * 实际上，biosdevname是独立的rpm包，我的rocky，至少我没有刻意安装，默认就带了
 * 它是基于udev配置和一个sbin目录下的二进制构成
 
+![20230711_111147_16](image/20230711_111147_16.png)
+
+![20230711_121920_01](image/20230711_121920_01.png)
+
+
 
 ```
 [root@rocky8 /data/systemd.git/BUILD/systemd-239]# rpm -qa|grep biosdevname
@@ -168,6 +173,41 @@ package: biosdevname-0.7.3-2.el8.x86_64
    provider: glibc-2.28-225.el8.x86_64
 ```
 
+## 内核启动过程有renamed日志，是谁的动作？
+
+```
+# dmesg |grep renamed -A 3 -B 5
+[    4.011184]  vda: vda1 vda2
+[    4.249790] e1000 0000:00:03.0 eth0: (PCI:33MHz:32-bit) 52:54:00:d4:6e:87
+[    4.249802] e1000 0000:00:03.0 eth0: Intel(R) PRO/1000 Network Connection
+[    4.253423] ata4: SATA link down (SStatus 0 SControl 300)
+[    4.253624] ata8: SATA link down (SStatus 0 SControl 300)
+[    4.253885] e1000 0000:00:03.0 ens3: renamed from eth0
+[    4.254702] ata5: SATA link down (SStatus 0 SControl 300)
+[    4.255122] ata6: SATA link down (SStatus 0 SControl 300)
+[    4.255423] ata3: SATA link down (SStatus 0 SControl 300)
+````
+
+![20230711_134112_83](image/20230711_134112_83.png)
+
+1. 驱动程序可以在初始化或探测阶段直接调用 dev_change_name() 函数来修改网络设备的名称。但是根据Linux驱动模型，驱动不该去做这个动作，不符合规范。
+2. 用户空间可以通过 ioctl() 系统调用来修改网络设备的名称，例如 ```ip link set name eth0 dev enp0s3``` 命令。这个系统调用会触发内核中的 dev_ifsioc() 函数，它会根据请求类型调用相应的函数，其中之一就是 dev_change_name() 函数。
+
+```
+ip link set down ens9
+ip addr flush ens9
+ip link set name ens3 dev ens9
+ip link set up enp3
+mv ifcfg-ens9 ifcfg-ens3
+sed -i 's/ens9/ens3/g' ifcfg-ens3
+systemctl restart NetworkManager
+```
+
+需要先将网卡down掉，去掉ip，然后修改名称，否则会报错 ```RTNETLINK answers: Device or resource busy```
+
+![20230711_135011_61](image/20230711_135011_61.png)
+
+![20230711_135028_72](image/20230711_135028_72.png)
 
 
 
