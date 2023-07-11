@@ -1,5 +1,8 @@
 # net.ifnames和biosdevname有什么作用？谁去解析的？
 
+## 引用
+
+* <https://www.man7.org/linux/man-pages/man8/systemd-udevd.8.html>
 
 ## 什么作用？
 
